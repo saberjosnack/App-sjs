@@ -311,6 +311,11 @@ main{padding:14px;max-width:1500px;width:100%;margin:0 auto}
 
     <!-- ===== الطلبات ===== -->
     <section id="v-day" class="hidden">
+      <div class="search-bar hidden" id="invSearchBar">
+        <input id="invSearch" placeholder="🔍 بحث عن فاتورة: رقم الطلب / رقم الهاتف / اسم العميل" onkeydown="if(event.key==='Enter')searchInvoices()">
+        <button class="mini ok" style="padding:10px 20px" onclick="searchInvoices()">بحث</button>
+        <button class="mini tog" style="padding:10px 16px" onclick="document.getElementById('invSearch').value='';loadDay()">✗</button>
+      </div>
       <div class="day-head" id="dayStats"></div>
       <div class="tbl-wrap" id="dayList"></div>
     </section>
@@ -576,6 +581,8 @@ function applyRoles(){
   if (salesBtn) salesBtn.style.display = adm ? '' : 'none';
   const dashBtn = document.querySelector('[data-v="dash"]');
   if (dashBtn) dashBtn.style.display = adm ? '' : 'none';
+  const invBar = document.getElementById('invSearchBar');
+  if (invBar) invBar.classList.toggle('hidden', !adm);
   // التوصيل حسب الصلاحية
   const delBtn = document.querySelector('#otypeBar [data-t="delivery"]');
   if (delBtn) delBtn.style.display = perm('order_delivery') ? '' : 'none';
@@ -1105,7 +1112,7 @@ function getReceiptTemplate(ord, lines, t, cust){
         <div style="padding:8px 0">
           <p><strong>#${ord.order_number}</strong> - ${new Date(ord.created_at).toLocaleString('ar-JO')}</p>
           <p>${TYPE_AR[ord.order_type]} | ${PAY_AR[ord.payment_method]}</p>
-          ${cust && cust.name ? `<p>👤 ${esc(cust.name)}</p>` : ''}
+          ${cust && (cust.name||cust.phone) ? `<p>👤 ${esc(cust.name||'')}${cust.phone?` — 📞 ${esc(cust.phone)}`:''}</p>${cust.addr?`<p>📍 ${esc(cust.addr)}</p>`:''}` : ''}
         </div>
         <hr style="border-top:1px dashed #ccc">
         ${lines.map(l => {
@@ -1141,7 +1148,7 @@ function getReceiptTemplate(ord, lines, t, cust){
         <table style="width:100%;font-size:12px">
           <tr><td>طلب #${ord.order_number}</td><td style="text-align:right">${new Date(ord.created_at).toLocaleString('ar-JO')}</td></tr>
           <tr><td>${TYPE_AR[ord.order_type]}</td><td style="text-align:right">${PAY_AR[ord.payment_method]}</td></tr>
-          ${cust && cust.name ? `<tr><td colspan="2">👤 ${esc(cust.name)}</td></tr>` : ''}
+          ${cust && (cust.name||cust.phone) ? `<tr><td colspan="2">👤 ${esc(cust.name||'')}${cust.phone?` — 📞 ${esc(cust.phone)}`:''}</td></tr>${cust.addr?`<tr><td colspan="2">📍 ${esc(cust.addr)}</td></tr>`:''}` : ''}
         </table>
         <hr style="border-top:1px dashed #000">
         ${lines.map(l => {
@@ -1174,7 +1181,7 @@ function getReceiptTemplate(ord, lines, t, cust){
         <div style="font-size:11px;padding:4px 0;border-bottom:1px solid #ddd">
           #${ord.order_number} | ${new Date(ord.created_at).toLocaleString('ar-JO')}
         </div>
-        ${cust && cust.name ? `<div style="font-size:10px;color:#666">👤 ${esc(cust.name)}</div>` : ''}
+        ${cust && (cust.name||cust.phone) ? `<div style="font-size:10px;color:#666">👤 ${esc(cust.name||'')}${cust.phone?` — 📞 ${esc(cust.phone)}`:''}</div>${cust.addr?`<div style="font-size:10px;color:#666">📍 ${esc(cust.addr)}</div>`:''}` : ''}
         ${lines.map(l => {
           const qty = l.qty ?? l.quantity;
           const nm = l.item ? l.item.name_ar : l.item_name;
@@ -1206,7 +1213,12 @@ function generateReceiptText(ord, lines, t, cust) {
   text += `${new Date(ord.created_at).toLocaleString('ar-JO')}\n`;
   text += `نوع: ${TYPE_AR[ord.order_type]}\n`;
   text += `دفع: ${PAY_AR[ord.payment_method]}\n`;
-  if (cust && cust.name) text += `عميل: ${cust.name}\n`;
+  if (cust && (cust.name || cust.phone)) {
+    text += '─'.repeat(32) + '\n';
+    if (cust.name)  text += `عميل: ${cust.name}\n`;
+    if (cust.phone) text += `هاتف: ${cust.phone}\n`;
+    if (cust.addr)  text += `عنوان: ${cust.addr}\n`;
+  }
   text += '─'.repeat(32) + '\n';
   lines.forEach(l => {
     const qty = l.qty ?? l.quantity;
@@ -1503,6 +1515,78 @@ async function saveOrder(print){
 
 /* ================= الطلبات ================= */
 let DAY = [];
+/* ---- بحث الفواتير (مدير) ---- */
+async function searchInvoices(){
+  if(!isAdmin()){ toast('⛔ صلاحية المدير فقط'); return; }
+  const q = document.getElementById('invSearch').value.trim();
+  if(!q){ loadDay(); return; }
+  const L = document.getElementById('dayList');
+  L.innerHTML = '<div class="empty-note">... جاري البحث</div>';
+  document.getElementById('dayStats').innerHTML = '';
+  try{
+    let orders = [];
+    const sel = '*, order_items(*), branches(name_ar), customers(name, phone, address)';
+    if(/^\d{1,6}$/.test(q)){
+      // رقم طلب
+      const r = await db.from('orders').select(sel).eq('order_number', parseInt(q)).limit(20);
+      orders = r.data||[];
+    }
+    if(!orders.length){
+      // هاتف أو اسم عميل
+      const c = await db.from('customers').select('id').or(`phone.ilike.%${q}%,name.ilike.%${q}%`).limit(30);
+      const ids = (c.data||[]).map(x=>x.id);
+      if(ids.length){
+        const r = await db.from('orders').select(sel).in('customer_id', ids).order('created_at',{ascending:false}).limit(50);
+        orders = r.data||[];
+      }
+    }
+    DAY = orders;
+    if(!orders.length){ L.innerHTML = '<div class="empty-note">ما في نتائج لـ"'+esc(q)+'"</div>'; return; }
+    L.innerHTML = `<div style="font-weight:800;color:var(--muted);margin-bottom:8px">نتائج البحث: ${orders.length} فاتورة — اضغط على أي سطر للتفاصيل</div>
+      <table class="tbl"><tr><th>#</th><th>التاريخ</th><th>الفرع</th><th>العميل</th><th>الهاتف</th><th>النوع</th><th>الإجمالي</th><th>الحالة</th><th></th></tr>
+      ${orders.map(o=>`<tr class="${o.status==='cancelled'?'off':''}" style="cursor:pointer" onclick="showInvoice('${o.id}')">
+        <td><b>${o.order_number}</b></td>
+        <td>${new Date(o.created_at).toLocaleString('ar-JO')}</td>
+        <td>${esc(o.branches?.name_ar||'—')}</td>
+        <td>${esc(o.customers?.name||'—')}</td>
+        <td dir="ltr" style="text-align:right">${esc(o.customers?.phone||'—')}</td>
+        <td>${TYPE_AR[o.order_type]||''}</td>
+        <td><b>${fmt(o.total)}</b></td>
+        <td>${o.status==='cancelled'?'❌':'✅'}</td>
+        <td><button class="mini tog" onclick="event.stopPropagation();reprintDay('${o.id}')">🖨️</button></td>
+      </tr>`).join('')}</table>`;
+  }catch(e){ console.error(e); L.innerHTML = '<div class="alert-red">⚠️ '+esc(e.message||'خطأ بالبحث')+'</div>'; }
+}
+
+/* ---- تفاصيل الفاتورة الكاملة (مدير) ---- */
+function showInvoice(id){
+  if(!isAdmin()) return;
+  const o = DAY.find(x=>x.id===id); if(!o) return;
+  modal(`<h3>🧾 فاتورة #${o.order_number}</h3>
+    <table class="tbl" style="margin-bottom:12px">
+      <tr><td><b>التاريخ</b></td><td>${new Date(o.created_at).toLocaleString('ar-JO')}</td></tr>
+      <tr><td><b>الفرع</b></td><td>${esc(o.branches?.name_ar||'—')}</td></tr>
+      <tr><td><b>الموظف</b></td><td>${esc(o.created_by_name||'—')}</td></tr>
+      <tr><td><b>النوع / الدفع</b></td><td>${TYPE_AR[o.order_type]||''} / ${PAY_AR[o.payment_method]||''}</td></tr>
+      <tr><td><b>العميل</b></td><td>${esc(o.customers?.name||'—')}${o.customers?.phone?` — <span dir="ltr">${esc(o.customers.phone)}</span>`:''}</td></tr>
+      ${o.customers?.address?`<tr><td><b>العنوان</b></td><td>${esc(o.customers.address)}</td></tr>`:''}
+      ${o.notes?`<tr><td><b>ملاحظة</b></td><td>${esc(o.notes)}</td></tr>`:''}
+      ${o.status==='cancelled'?`<tr><td><b style="color:var(--red)">ملغي — السبب</b></td><td>${esc(o.cancel_reason||'—')}</td></tr>`:''}
+    </table>
+    <table class="tbl" style="margin-bottom:12px">
+      <tr><th>الصنف</th><th>الكمية</th><th>السعر</th><th>المجموع</th></tr>
+      ${(o.order_items||[]).map(l=>`<tr><td>${esc(l.item_name)}${l.notes?`<br><small style="color:var(--muted)">📝 ${esc(l.notes)}</small>`:''}</td><td>×${l.quantity}</td><td>${fmt(l.unit_price)}</td><td><b>${fmt(l.unit_price*l.quantity)}</b></td></tr>`).join('')}
+    </table>
+    <div class="trow"><span>المجموع</span><span>${fmt(o.subtotal)}</span></div>
+    ${+o.discount>0?`<div class="trow"><span>خصم ${o.discount_code?'('+esc(o.discount_code)+')':''}</span><span>− ${fmt(o.discount)}</span></div>`:''}
+    ${+o.delivery_fee>0?`<div class="trow"><span>توصيل</span><span>${fmt(o.delivery_fee)}</span></div>`:''}
+    <div class="trow total"><span>الإجمالي</span><span>${fmt(o.total)} ${CURRENCY}</span></div>
+    <div class="m-act">
+      <button class="save" onclick="reprintDay('${o.id}');closeModal()">🖨️ طباعة</button>
+      <button class="cancel" onclick="closeModal()">إغلاق</button>
+    </div>`);
+}
+
 async function loadDay(){
   try {
     const adm = isAdmin();
