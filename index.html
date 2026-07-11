@@ -372,8 +372,10 @@ input, textarea, select { -webkit-user-select:text !important }
             <button class="big-btn" id="btnSave" disabled onclick="saveOrder(true)">🖨️ طخ الطلب</button>
             <div class="two">
               <button class="ghost-btn" style="flex:1" onclick="saveOrder(false)">حفظ بدون طباعة</button>
+              <button class="ghost-btn" style="flex:1;background:var(--yellow);color:var(--ink)" onclick="holdTicket()">🧾 تذكرة معلّقة</button>
               <button class="ghost-btn danger" onclick="clearCart()">إفراغ</button>
             </div>
+            <button class="ghost-btn" style="width:100%;margin-top:6px" onclick="showHeldTickets()">📋 التذاكر المعلّقة <span id="heldCount" style="background:var(--red);color:#fff;border-radius:999px;padding:1px 8px;font-size:.78rem;margin-right:6px"></span></button>
           </div>
         </div>
       </div>
@@ -839,6 +841,7 @@ function enterApp(){
   setInterval(checkReadyAlerts, 30000);
   setTimeout(checkOverdue, 2000);
   setTimeout(checkReadyAlerts, 3000);
+  setTimeout(updateHeldCount, 1500);
   checkShift();
   if (shiftCheckInterval) clearInterval(shiftCheckInterval);
   shiftCheckInterval = setInterval(checkShift, 30000);
@@ -1168,9 +1171,101 @@ function addToCart(id){
 }
 function changeQty(idx,d){ cart[idx].qty+=d; if(cart[idx].qty<1) cart.splice(idx,1); renderCart(); }
 function lineNote(idx){
-  const n = prompt('ملاحظة الصنف:', cart[idx].note||'');
-  if(n!==null){ cart[idx].note = n.trim(); renderCart(); }
+  const n = prompt('ملاحظة الصنف (بدون خس، زيادة صوص...):', cart[idx].note||'');
+  if(n!==null){ cart[idx].note = n.trim(); cart[idx].noteBy = n.trim() ? ME.full_name : null; renderCart(); }
 }
+/* ================= التذاكر المعلّقة (Hold Order) ================= */
+async function holdTicket(){
+  if(!cart.length){ toast('⚠️ السلة فاضية'); return; }
+  const custPhone = document.getElementById('custPhone')?.value.trim()||'';
+  const custName = document.getElementById('custName')?.value.trim()||'';
+  const custAddr = document.getElementById('custAddr')?.value.trim()||'';
+  const delFee = document.getElementById('delFee')?.value||'';
+  const orderNote = document.getElementById('orderNote')?.value.trim()||'';
+  const branchId = ME.branch_id || document.getElementById('branchSel')?.value || BRANCHES[0]?.id;
+  const ticketData = {
+    cart: cart.map(l=>({ itemId:l.item.id, name:l.item.name_ar, price:l.item.price, qty:l.qty, note:l.note||'', noteBy:l.noteBy||null })),
+    orderType, payMethod, custPhone, custName, custAddr, delFee, orderNote,
+    discount: document.getElementById('discInput')?.value||'', code: appliedCode?.code||''
+  };
+  try{
+    await db.from('held_tickets').insert({
+      branch_id: branchId, staff_id: ME.id, staff_name: ME.full_name,
+      ticket_data: ticketData, label: custName || (TYPE_AR[orderType]||'')
+    });
+    toast('✅ اتحفظت التذكرة');
+    clearCart();
+    updateHeldCount();
+  }catch(e){ console.error(e); toast('✗ فشل حفظ التذكرة: '+e.message); }
+}
+async function updateHeldCount(){
+  try{
+    let q = db.from('held_tickets').select('id', {count:'exact', head:true});
+    if(ME.branch_id) q = q.eq('branch_id', ME.branch_id);
+    const {count} = await q;
+    const el = document.getElementById('heldCount');
+    if(el) el.textContent = count>0 ? count : '';
+  }catch(e){}
+}
+async function showHeldTickets(){
+  let q = db.from('held_tickets').select('*').order('created_at',{ascending:false});
+  if(ME.branch_id) q = q.eq('branch_id', ME.branch_id);
+  const {data} = await q;
+  const tickets = data||[];
+  window.__heldTickets = tickets;
+  modal(`<h3>📋 التذاكر المعلّقة</h3>
+    <div style="max-height:400px;overflow-y:auto">
+      ${tickets.map(t=>{
+        const td = t.ticket_data||{};
+        const total = (td.cart||[]).reduce((a,l)=>a+l.price*l.qty,0);
+        const mins = Math.floor((Date.now()-new Date(t.created_at))/60000);
+        return `<div style="background:var(--cream);border:1px solid var(--line);border-radius:12px;padding:10px;margin-bottom:8px">
+          <div style="display:flex;justify-content:space-between;font-weight:900">
+            <span>${esc(t.label||'تذكرة')} <small style="color:var(--muted)">(${esc(t.staff_name||'')})</small></span>
+            <span>${fmt(total)} ${CURRENCY}</span>
+          </div>
+          <div style="font-size:.82rem;color:var(--muted);margin:4px 0">${(td.cart||[]).map(l=>l.qty+'×'+esc(l.name)).join('، ')}</div>
+          <div style="font-size:.78rem;color:var(--muted)">منذ ${mins} دقيقة</div>
+          <div class="two" style="margin-top:8px">
+            <button class="mini ok" style="flex:1" onclick="resumeTicket('${t.id}')">▶️ استكمال</button>
+            <button class="mini del" onclick="deleteHeldTicket('${t.id}')">🗑️ حذف</button>
+          </div>
+        </div>`;
+      }).join('')||'<div class="empty-note">ما في تذاكر معلّقة</div>'}
+    </div>
+    <div class="m-act"><button class="cancel" onclick="closeModal()">إغلاق</button></div>`);
+}
+async function resumeTicket(id){
+  const t = (window.__heldTickets||[]).find(x=>x.id===id); if(!t) return;
+  const td = t.ticket_data||{};
+  clearCart();
+  cart = (td.cart||[]).map(l=>({ item: { id:l.itemId, name_ar:l.name, price:l.price }, qty:l.qty, note:l.note||'', noteBy:l.noteBy||null }));
+  orderType = td.orderType||'takeaway';
+  document.querySelectorAll('#otypeBar button').forEach(x=>x.classList.toggle('on', x.dataset.t===orderType));
+  const delFieldsShow = orderType==='delivery';
+  document.getElementById('custAddr')?.classList.toggle('hidden', !delFieldsShow);
+  document.getElementById('delFee')?.classList.toggle('hidden', !delFieldsShow);
+  if(document.getElementById('custPhone')) document.getElementById('custPhone').value = td.custPhone||'';
+  if(document.getElementById('custName')) document.getElementById('custName').value = td.custName||'';
+  if(document.getElementById('custAddr')) document.getElementById('custAddr').value = td.custAddr||'';
+  if(document.getElementById('delFee')) document.getElementById('delFee').value = td.delFee||'';
+  if(document.getElementById('orderNote')) document.getElementById('orderNote').value = td.orderNote||'';
+  if(document.getElementById('discInput')) document.getElementById('discInput').value = td.discount||'';
+  payMethod = td.payMethod||'cash';
+  document.querySelectorAll('#payBar button').forEach(x=>x.classList.toggle('on', x.dataset.p===payMethod));
+  await db.from('held_tickets').delete().eq('id', id);
+  closeModal();
+  renderCart();
+  updateHeldCount();
+  toast('▶️ رجّعت التذكرة للسلة');
+}
+async function deleteHeldTicket(id){
+  if(!confirm('حذف هاي التذكرة نهائيًا؟')) return;
+  await db.from('held_tickets').delete().eq('id', id);
+  showHeldTickets();
+  updateHeldCount();
+}
+
 function clearCart(){
   cart=[]; matchedCustomer=null; appliedCode=null; editingOrder=null;
   ['discInput','orderNote','custPhone','custName','custAddr','delFee','codeInput'].forEach(id=>{
@@ -1728,6 +1823,29 @@ function waSend(id){
 }
 
 /* ================= حفظ الطلب ================= */
+async function deductInventoryForSale(branchId, cartItems){
+  if(!branchId || !cartItems?.length) return;
+  const itemIds = cartItems.map(l=>l.item.id).filter(Boolean);
+  if(!itemIds.length) return;
+  const {data: recipes} = await db.from('recipes')
+    .select('menu_item_id, recipe_items(ingredient_id, quantity)')
+    .in('menu_item_id', itemIds);
+  if(!recipes || !recipes.length) return; // ما في وصفات معبّاة بعد
+  const consumption = {}; // ingredient_id -> total qty consumed
+  cartItems.forEach(line=>{
+    const recipe = recipes.find(r=>r.menu_item_id===line.item.id);
+    if(!recipe) return;
+    (recipe.recipe_items||[]).forEach(ri=>{
+      const amt = (ri.quantity||0) * (line.qty||1);
+      consumption[ri.ingredient_id] = (consumption[ri.ingredient_id]||0) + amt;
+    });
+  });
+  for(const [ingId, qty] of Object.entries(consumption)){
+    const {data:bi} = await db.from('branch_inventory').select('id,stock').eq('branch_id',branchId).eq('ingredient_id',ingId).maybeSingle();
+    if(bi) await db.from('branch_inventory').update({stock: Math.max(0,(bi.stock||0)-qty)}).eq('id',bi.id);
+  }
+}
+
 async function saveOrder(print){
   if(!cart.length){ toast('⚠️ السلة فاضية'); return; }
   if(!currentShift && !isAdmin()){ toast('⚠️ يجب فتح شيفت أولاً'); return; }
@@ -1804,11 +1922,15 @@ async function saveOrder(print){
       item_name: l.item.name_ar, 
       unit_price: l.item.price, 
       quantity: l.qty, 
-      notes: l.note||null 
+      notes: l.note ? (l.note + (l.noteBy ? ' — ' + l.noteBy : '')) : null
     }));
     
     const { error: e2 } = await db.from('order_items').insert(lines);
     if(e2) throw e2;
+    
+    if(!editingOrder){
+      try{ await deductInventoryForSale(branch_id, cartCopy); }catch(e){ console.error('deduct inventory failed:', e); }
+    }
     
     toast(editingOrder ? `✓ تعدّل طلب #${ord.order_number}` : `✓ طلب #${ord.order_number}`);
     if(print) {
@@ -3345,8 +3467,129 @@ async function renderInventory(){
       <button class="add-btn" style="margin:0" onclick="initBranchStock()">⚡ تهيئة مخزون الفروع</button>
       <button class="mini ok" style="padding:9px 18px" onclick="admTab('transfers')">🔄 نقل بضاعة بين الفروع</button>
       <button class="mini edit" style="padding:9px 18px" onclick="showAuditHistory()">📜 سجل عمليات الجرد</button>
+      <button class="mini ok" style="padding:9px 18px;background:var(--warn)" onclick="showConsumptionReport()">📉 تقرير الاستهلاك والطلب اليومي</button>
     </div>
     ${branchHtml}`;
+}
+
+/* ================= تقرير الاستهلاك الذكي + قائمة إعادة الطلب ================= */
+async function showConsumptionReport(){
+  await loadIngredients();
+  const branchOptions = BRANCHES.map(b=>`<option value="${b.id}">${esc(b.name_ar)}</option>`).join('');
+  modal(`<h3>📉 تقرير الاستهلاك والطلب</h3>
+    <div class="fld"><label>الفرع</label><select id="cr_branch">${branchOptions}</select></div>
+    <div class="two">
+      <div style="flex:1"><label style="font-weight:700;font-size:.82rem;color:var(--muted)">من تاريخ</label><input type="date" id="cr_from" style="border:1.5px solid var(--line);border-radius:10px;padding:8px 10px;width:100%"></div>
+      <div style="flex:1"><label style="font-weight:700;font-size:.82rem;color:var(--muted)">إلى تاريخ</label><input type="date" id="cr_to" style="border:1.5px solid var(--line);border-radius:10px;padding:8px 10px;width:100%"></div>
+    </div>
+    <button class="mini ok" style="margin:8px 0" onclick="runConsumptionReport()">📊 احسب التقرير</button>
+    <div id="cr_result"></div>
+    <div class="m-act"><button class="cancel" onclick="closeModal()">إغلاق</button></div>`);
+  const today = new Date().toISOString().split('T')[0];
+  document.getElementById('cr_from').value = today;
+  document.getElementById('cr_to').value = today;
+}
+window.__lastConsumptionData = null;
+async function runConsumptionReport(){
+  const branchId = document.getElementById('cr_branch').value;
+  const from = document.getElementById('cr_from').value;
+  const to = document.getElementById('cr_to').value;
+  const R = document.getElementById('cr_result');
+  R.innerHTML = '<div class="empty-note">... جاري الحساب</div>';
+  try{
+    // 1) طلبات الفترة غير الملغاة لهاد الفرع
+    const {data: orders} = await db.from('orders')
+      .select('id, order_items(item_name, quantity, menu_item_id)')
+      .eq('branch_id', branchId).eq('status','delivered')
+      .gte('created_at', from+'T00:00:00').lte('created_at', to+'T23:59:59');
+    const allItems = (orders||[]).flatMap(o=>o.order_items||[]);
+    const itemIds = [...new Set(allItems.map(l=>l.menu_item_id).filter(Boolean))];
+    // 2) الوصفات
+    const {data: recipes} = itemIds.length ? await db.from('recipes')
+      .select('menu_item_id, recipe_items(ingredient_id, quantity)').in('menu_item_id', itemIds) : {data:[]};
+    // 3) حساب الاستهلاك
+    const consumption = {};
+    allItems.forEach(line=>{
+      const recipe = (recipes||[]).find(r=>r.menu_item_id===line.menu_item_id);
+      if(!recipe) return;
+      (recipe.recipe_items||[]).forEach(ri=>{
+        consumption[ri.ingredient_id] = (consumption[ri.ingredient_id]||0) + (ri.quantity||0)*(line.quantity||1);
+      });
+    });
+    // 4) المخزون الحالي بالفرع
+    const {data: inv} = await db.from('branch_inventory').select('*, ingredients(name,unit)').eq('branch_id', branchId);
+    const invMap = {}; (inv||[]).forEach(i=>invMap[i.ingredient_id]=i);
+    // 5) آخر جرد بهاي الفترة (لو موجود) لعرض الهدر/السرقة
+    const {data: lastAudit} = await db.from('inventory_audits').select('*')
+      .eq('branch_id', branchId).gte('created_at', from+'T00:00:00').lte('created_at', to+'T23:59:59')
+      .order('created_at',{ascending:false}).limit(1);
+    const auditDetails = lastAudit?.[0]?.details || [];
+
+    const itemsCoveredByRecipe = new Set([...(recipes||[]).map(r=>r.menu_item_id)]);
+    const uncoveredCount = itemIds.length - itemsCoveredByRecipe.size;
+
+    const ingredientIds = [...new Set([...Object.keys(consumption), ...Object.keys(invMap)])];
+    const rows = ingredientIds.map(ingId=>{
+      const ing = INGR.find(x=>x.id===ingId) || invMap[ingId]?.ingredients;
+      const consumed = consumption[ingId]||0;
+      const current = invMap[ingId]?.stock||0;
+      const minStock = invMap[ingId]?.min_stock||0;
+      const auditRow = auditDetails.find(a=>a.ingredient_id===ingId);
+      const needsOrder = current <= minStock;
+      return { name: ing?.name||'—', unit: ing?.unit||'', consumed, current, minStock, needsOrder, variance: auditRow?.variance };
+    }).sort((a,b)=> (b.needsOrder - a.needsOrder) || (b.consumed - a.consumed));
+
+    window.__lastConsumptionData = { branchId, from, to, rows, branchName: BRANCHES.find(b=>b.id===branchId)?.name_ar||'' };
+
+    const reorderList = rows.filter(r=>r.needsOrder);
+    R.innerHTML = `
+      ${uncoveredCount>0?`<div class="alert-red" style="margin-bottom:10px">⚠️ ${uncoveredCount} صنف مباع بدون وصفة معبّاة — استهلاكه مش محسوب. أكمل تعبئة الوصفات لدقة أعلى.</div>`:''}
+      <table class="tbl" style="margin-bottom:10px">
+        <tr><th>المادة</th><th>المستهلك بالفترة</th><th>المخزون الحالي</th><th>الحد الأدنى</th>${auditDetails.length?'<th>فرق آخر جرد</th>':''}<th>الحالة</th></tr>
+        ${rows.map(r=>`<tr class="${r.needsOrder?'late':''}">
+          <td><b>${esc(r.name)}</b></td>
+          <td>${fmt(r.consumed)} ${esc(r.unit)}</td>
+          <td><b style="color:${r.needsOrder?'var(--red)':'var(--ok)'}">${fmt(r.current)}</b></td>
+          <td>${fmt(r.minStock)}</td>
+          ${auditDetails.length?`<td>${r.variance!==undefined?(Math.abs(r.variance)<0.01?'<span style="color:var(--ok)">✓ مطابق</span>':(r.variance<0?`<span style="color:var(--red)">🔻 هدر/سرقة ${Math.abs(r.variance).toFixed(2)}</span>`:`<span style="color:var(--warn)">🔺 +${r.variance.toFixed(2)}</span>`)):'—'}</td>`:''}
+          <td>${r.needsOrder?'⚠️ اطلب':'✅ كافي'}</td>
+        </tr>`).join('')||'<tr><td colspan="6" class="empty-note">ما في بيانات لهاي الفترة</td></tr>'}
+      </table>
+      ${reorderList.length?`<div class="alert-red" style="margin-bottom:10px">📦 مواد تحتاج طلب فوري: ${reorderList.map(r=>esc(r.name)).join('، ')}</div>`:'<div class="alert-ok" style="margin-bottom:10px">✅ كل المواد بمستوى آمن</div>'}
+      <div class="two">
+        <button class="mini ok" style="flex:1" onclick="sendConsumptionWhatsapp()">📲 إرسال قائمة الطلب واتساب</button>
+        <button class="mini edit" style="flex:1" onclick="printConsumptionReport()">🖨️ طباعة التقرير</button>
+      </div>`;
+  }catch(e){ console.error(e); R.innerHTML = '<div class="alert-red">⚠️ '+esc(e.message||'خطأ بالحساب')+'</div>'; }
+}
+function sendConsumptionWhatsapp(){
+  const d = window.__lastConsumptionData; if(!d) return;
+  const reorderList = d.rows.filter(r=>r.needsOrder);
+  if(!reorderList.length){ toast('✅ ما في مواد تحتاج طلب حاليًا'); return; }
+  const msg = '📦 *قائمة طلب مواد — '+d.branchName+'*\n'+
+    'الفترة: '+d.from+' إلى '+d.to+'\n'+
+    '——————\n'+
+    reorderList.map(r=>'• '+r.name+' — المتاح: '+fmt(r.current)+' '+r.unit).join('\n');
+  const waNum = (SETTINGS.delivery_whatsapp||'').replace(/\D/g,'');
+  const url = waNum ? `https://wa.me/${waNum}?text=${encodeURIComponent(msg)}` : `https://wa.me/?text=${encodeURIComponent(msg)}`;
+  window.open(url, '_blank');
+}
+function printConsumptionReport(){
+  const d = window.__lastConsumptionData; if(!d) return;
+  const reorderList = d.rows.filter(r=>r.needsOrder);
+  const text = 'تقرير الاستهلاك والطلب\n'+
+    '— '+d.branchName+' —\n'+
+    'الفترة: '+d.from+' → '+d.to+'\n'+
+    '════════════════\n'+
+    d.rows.map(r=>r.name+': استهلاك '+fmt(r.consumed)+' '+r.unit+' | متاح '+fmt(r.current)+(r.needsOrder?' ⚠️ اطلب':'')).join('\n')+'\n'+
+    '════════════════\n'+
+    (reorderList.length?'يجب الطلب:\n'+reorderList.map(r=>'• '+r.name).join('\n'):'لا حاجة لطلب حاليًا')+'\n';
+  const html = `<html dir="rtl"><head><meta charset="UTF-8"><style>body{font-family:Cairo,Arial;padding:16px}table{width:100%;border-collapse:collapse}td,th{padding:6px;border:1px solid #ccc;text-align:right}</style></head><body>
+    <h2>تقرير الاستهلاك والطلب — ${esc(d.branchName)}</h2><div>الفترة: ${d.from} إلى ${d.to}</div>
+    <table><tr><th>المادة</th><th>المستهلك</th><th>المتاح</th><th>الحالة</th></tr>
+    ${d.rows.map(r=>`<tr><td>${esc(r.name)}</td><td>${fmt(r.consumed)} ${esc(r.unit)}</td><td>${fmt(r.current)}</td><td>${r.needsOrder?'⚠️ اطلب':'✅'}</td></tr>`).join('')}
+    </table></body></html>`;
+  printRaw(text, html);
 }
 async function showAuditHistory(){
   const {data} = await db.from('inventory_audits')
@@ -3433,19 +3676,22 @@ async function renderTransfers(){
       </tr>`).join('')||'<tr><td colspan="7" class="empty-note">ما في نقل بضاعة مسجل</td></tr>'}
     </table></div>`;
 }
+let trItemCount = 0;
 function transferForm(){
+  trItemCount = 0;
   modal(`<h3>🔄 نقل بضاعة بين الفروع</h3>
-    <div class="fld"><label>المادة</label><select id="tr_ing" style="border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;width:100%;background:#fff">
-      <option value="">اختر المادة...</option>
-      ${INGR.map(i=>`<option value="${i.id}">${esc(i.name)} (${esc(i.unit)})</option>`).join('')}</select></div>
-    <div class="fld"><label>الكمية</label>
-      <input id="tr_qty" type="number" step="0.01" placeholder="0" style="border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;width:100%;background:#fff"></div>
     <div class="fld"><label>من فرع</label><select id="tr_from" style="border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;width:100%;background:#fff">
       <option value="">اختر الفرع...</option>
       ${BRANCHES.map(b=>`<option value="${b.id}">${esc(b.name_ar)}</option>`).join('')}</select></div>
     <div class="fld"><label>إلى فرع</label><select id="tr_to" style="border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;width:100%;background:#fff">
       <option value="">اختر الفرع...</option>
       ${BRANCHES.map(b=>`<option value="${b.id}">${esc(b.name_ar)}</option>`).join('')}</select></div>
+    <div class="fld"><label>أجرة النقل (${CURRENCY}) — ثابتة على كل النقلة، اختياري</label>
+      <input id="tr_fee" type="number" step="0.01" placeholder="مثال: 2.5" style="border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;width:100%;background:#fff"></div>
+    <div class="fld"><label>المواد المنقولة (حتى 20 صنف)</label>
+      <div id="tr_items_list">${trItemRow(0)}</div>
+      <button type="button" class="mini ok" style="margin-top:6px" onclick="addTrItemRow()">＋ إضافة مادة</button>
+    </div>
     <div class="fld"><label>ملاحظة</label>
       <input id="tr_note" placeholder="اختياري" style="border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;width:100%;background:#fff"></div>
     <div class="m-act">
@@ -3453,40 +3699,122 @@ function transferForm(){
       <button class="cancel" onclick="closeModal()">إلغاء</button>
     </div>`);
 }
+function trItemRow(idx){
+  return `<div class="two" style="margin-bottom:6px" id="tr_row_${idx}">
+    <select class="tr_ing" style="flex:2;border:1.5px solid var(--line);border-radius:10px;padding:7px 10px">
+      <option value="">المادة...</option>
+      ${INGR.map(i=>`<option value="${i.id}">${esc(i.name)} (${esc(i.unit)})</option>`).join('')}
+    </select>
+    <input class="tr_qty" type="number" step="0.01" placeholder="الكمية" style="flex:1;border:1.5px solid var(--line);border-radius:10px;padding:7px 10px">
+    <button type="button" class="mini del" onclick="document.getElementById('tr_row_${idx}').remove()">✗</button>
+  </div>`;
+}
+function addTrItemRow(){
+  trItemCount++;
+  if(trItemCount>=20){ toast('⚠️ الحد الأقصى 20 صنف بالنقلة الواحدة'); return; }
+  document.getElementById('tr_items_list').insertAdjacentHTML('beforeend', trItemRow(trItemCount));
+}
 async function saveTransfer(){
-  const ingId = document.getElementById('tr_ing').value;
-  const qty = parseFloat(document.getElementById('tr_qty').value)||0;
   const fromId = document.getElementById('tr_from').value;
   const toId = document.getElementById('tr_to').value;
+  const fee = parseFloat(document.getElementById('tr_fee').value)||0;
   const notes = document.getElementById('tr_note').value.trim();
-  if(!ingId||!qty||!fromId||!toId){ toast('⚠️ كل الحقول مطلوبة'); return; }
+  if(!fromId||!toId){ toast('⚠️ اختر الفرعين'); return; }
   if(fromId===toId){ toast('⚠️ الفرع المصدر والوجهة نفس الشي'); return; }
+  const rows = [...document.querySelectorAll('#tr_items_list .two')];
+  const items = rows.map(row=>({
+    ingredient_id: row.querySelector('.tr_ing').value,
+    quantity: parseFloat(row.querySelector('.tr_qty').value)||0
+  })).filter(x=>x.ingredient_id && x.quantity>0);
+  if(!items.length){ toast('⚠️ أضف مادة واحدة على الأقل'); return; }
+
   try{
-    // فحص المخزون بالفرع المصدر
-    const {data:src} = await db.from('branch_inventory')
-      .select('id,stock').eq('branch_id',fromId).eq('ingredient_id',ingId).single();
-    if(!src || (src.stock||0) < qty){
-      toast(`⚠️ المخزون غير كافي — المتاح: ${src?.stock||0}`); return;
+    const fromBranch = BRANCHES.find(b=>b.id===fromId);
+    const toBranch = BRANCHES.find(b=>b.id===toId);
+    const transferredItems = [];
+
+    for(const it of items){
+      const {data:src} = await db.from('branch_inventory')
+        .select('id,stock').eq('branch_id',fromId).eq('ingredient_id',it.ingredient_id).maybeSingle();
+      if(!src || (src.stock||0) < it.quantity){
+        const ingName = INGR.find(x=>x.id===it.ingredient_id)?.name||'مادة';
+        toast(`⚠️ المخزون غير كافي لـ${ingName} — المتاح: ${src?.stock||0}`);
+        return;
+      }
     }
-    // خصم من المصدر + إضافة للوجهة
-    await db.from('branch_inventory').update({stock: src.stock - qty}).eq('id',src.id);
-    const {data:dst} = await db.from('branch_inventory')
-      .select('id,stock').eq('branch_id',toId).eq('ingredient_id',ingId).single();
-    if(dst){
-      await db.from('branch_inventory').update({stock:(dst.stock||0)+qty}).eq('id',dst.id);
-    } else {
-      await db.from('branch_inventory').insert({branch_id:toId, ingredient_id:ingId, stock:qty, min_stock:0});
+    // كل شي كافي — ننفذ النقل
+    for(const it of items){
+      const {data:src} = await db.from('branch_inventory')
+        .select('id,stock').eq('branch_id',fromId).eq('ingredient_id',it.ingredient_id).single();
+      await db.from('branch_inventory').update({stock: src.stock - it.quantity}).eq('id',src.id);
+      const {data:dst} = await db.from('branch_inventory')
+        .select('id,stock').eq('branch_id',toId).eq('ingredient_id',it.ingredient_id).maybeSingle();
+      if(dst){
+        await db.from('branch_inventory').update({stock:(dst.stock||0)+it.quantity}).eq('id',dst.id);
+      } else {
+        await db.from('branch_inventory').insert({branch_id:toId, ingredient_id:it.ingredient_id, stock:it.quantity, min_stock:0});
+      }
+      transferredItems.push({ name: INGR.find(x=>x.id===it.ingredient_id)?.name||'—', unit: INGR.find(x=>x.id===it.ingredient_id)?.unit||'', quantity: it.quantity });
     }
-    // تسجيل العملية
+    // تسجيل عملية النقل (بأول مادة كمرجع + تفاصيل الكل بالملاحظة)
+    const itemsSummary = transferredItems.map(x=>x.quantity+' '+x.unit+' '+x.name).join('، ');
     await db.from('stock_transfers').insert({
-      ingredient_id:ingId, quantity:qty,
-      from_branch_id:fromId, to_branch_id:toId,
-      notes, status:'done', created_by:ME.full_name
+      ingredient_id: items[0].ingredient_id, quantity: items[0].quantity,
+      from_branch_id: fromId, to_branch_id: toId,
+      notes: (notes?notes+' — ':'')+'الكل: '+itemsSummary,
+      status:'done', created_by: ME.full_name
     });
+    // مصروف تلقائي بأجرة النقل على الفرع المرسل
+    if(fee > 0){
+      await db.from('expenses').insert({
+        expense_date: new Date().toISOString().split('T')[0],
+        category: 'نقل بضاعة', description: 'نقل من '+(fromBranch?.name_ar||'')+' إلى '+(toBranch?.name_ar||''),
+        amount: fee, branch_id: fromId
+      });
+    }
+    await logActivity('stock_transfer', 'نقل '+transferredItems.length+' مادة من '+(fromBranch?.name_ar||'')+' إلى '+(toBranch?.name_ar||''));
     closeModal();
-    toast('✅ تم النقل بنجاح');
+    toast('✅ تم النقل بنجاح'+(fee>0?' — أجرة '+fmt(fee)+' انسجلت مصروف':''));
+    printTransferReceipt(fromBranch, toBranch, transferredItems, fee, notes);
     renderTransfers();
   }catch(e){ console.error(e); toast('✗ خطأ: '+e.message); }
+}
+function printTransferReceipt(fromBranch, toBranch, items, fee, notes){
+  const text = 'سند نقل بضاعة\n'+
+    '— Saber Jo Snack —\n'+
+    '════════════════\n'+
+    'من: '+(fromBranch?.name_ar||'—')+'\n'+
+    'إلى: '+(toBranch?.name_ar||'—')+'\n'+
+    'الموظف: '+ME.full_name+'\n'+
+    'التاريخ: '+new Date().toLocaleString('ar-JO')+'\n'+
+    '────────────────\n'+
+    items.map(x=>x.quantity+' '+x.unit+' × '+x.name).join('\n')+'\n'+
+    '────────────────\n'+
+    (fee>0?'أجرة النقل: '+fmt(fee)+' '+CURRENCY+'\n':'')+
+    (notes?'ملاحظة: '+notes+'\n':'')+
+    '════════════════\n'+
+    'توقيع المستلم: ______________\n';
+  const html = `<html dir="rtl"><head><meta charset="UTF-8"><style>
+    @page{size:72mm auto;margin:0} body{font-family:Cairo,Arial;width:72mm;padding:4mm;font-size:12px}
+    h2{text-align:center;margin:2px 0;font-size:15px} .c{text-align:center}
+    hr{border:none;border-top:1px dashed #000;margin:5px 0}
+    table{width:100%;border-collapse:collapse} td{padding:2px 0} .tl{text-align:left}
+    </style></head><body>
+    <h2>سند نقل بضاعة</h2>
+    <div class="c">Saber Jo Snack</div><hr>
+    <table>
+      <tr><td>من</td><td class="tl">${esc(fromBranch?.name_ar||'—')}</td></tr>
+      <tr><td>إلى</td><td class="tl">${esc(toBranch?.name_ar||'—')}</td></tr>
+      <tr><td>الموظف</td><td class="tl">${esc(ME.full_name)}</td></tr>
+      <tr><td>التاريخ</td><td class="tl">${new Date().toLocaleString('ar-JO')}</td></tr>
+    </table><hr>
+    <table>${items.map(x=>`<tr><td>${x.name}</td><td class="tl">${x.quantity} ${x.unit}</td></tr>`).join('')}</table>
+    <hr>
+    ${fee>0?`<table><tr><td><b>أجرة النقل</b></td><td class="tl"><b>${fmt(fee)} ${CURRENCY}</b></td></tr></table><hr>`:''}
+    ${notes?`<div>ملاحظة: ${esc(notes)}</div><hr>`:''}
+    <div class="c">توقيع المستلم: ______________</div>
+    </body></html>`;
+  printRaw(text, html);
 }
 
 /* ================= نماذج الإدارة ================= */
