@@ -59,6 +59,14 @@ main{padding:14px;max-width:1500px;width:100%;margin:0 auto}
 
 /* تلفون صغير (< 600px) — عمودي أو أفقي */
 @media(max-width:599px){
+  .mbox{padding:16px;border-radius:16px;width:96vw}
+  .mbox h3{font-size:1.05rem}
+  .two{flex-wrap:wrap}
+  .two select, .two input{min-width:120px}
+  #quickFilters button, #dayQuickFilters button, #dashQuickFilters button{font-size:.78rem;padding:6px 10px}
+  .adm-tabs button{font-size:.8rem;padding:7px 12px}
+  .tbl th, .tbl td{font-size:.82rem;padding:6px}
+
   :root{ --r:10px }
   header{ padding:7px 10px }
   header .brand{ font-size:1rem }
@@ -3014,7 +3022,12 @@ async function saveRecipe(id){
 /* ---- المصاريف ---- */
 const EXP_CATS=['إيجار','كهرباء وماء','رواتب','إعلانات وتسويق','صيانة','توصيل','تغليف','نظافة','مشتريات متنوعة','أخرى'];
 async function renderExpenses(){
-  const {data}=await db.from('expenses').select('*').order('expense_date',{ascending:false}).limit(200);
+  const {data, error}=await db.from('expenses').select('*').order('expense_date',{ascending:false}).limit(200);
+  if(error){
+    document.getElementById('admContent').innerHTML = `<div class="alert-red">⚠️ خطأ بجلب المصاريف: ${esc(error.message||'غير معروف')}</div>`;
+    console.error('renderExpenses error:', error);
+    return;
+  }
   EXPENSES_DATA=data||[];
   const total=EXPENSES_DATA.reduce((a,x)=>a+parseFloat(x.amount||0),0);
   const C=document.getElementById('admContent');
@@ -3475,9 +3488,15 @@ async function renderInventory(){
 /* ================= تقرير الاستهلاك الذكي + قائمة إعادة الطلب ================= */
 async function showConsumptionReport(){
   await loadIngredients();
-  const branchOptions = BRANCHES.map(b=>`<option value="${b.id}">${esc(b.name_ar)}</option>`).join('');
+  // فحص سريع: أي فروع فيها نقص الآن (لتوضيح الفرع المقصود)
+  const {data: lowStockAll} = await db.from('branch_inventory').select('branch_id, stock, min_stock');
+  const lowBranchIds = [...new Set((lowStockAll||[]).filter(x=>(x.stock||0)<=(x.min_stock||0)).map(x=>x.branch_id))];
+  const lowBranchNames = lowBranchIds.map(id=>BRANCHES.find(b=>b.id===id)?.name_ar).filter(Boolean);
+  const defaultBranch = lowBranchIds[0] || BRANCHES[0]?.id || '';
+  const branchOptions = BRANCHES.map(b=>`<option value="${b.id}" ${b.id===defaultBranch?'selected':''}>${esc(b.name_ar)}${lowBranchIds.includes(b.id)?' ⚠️':''}</option>`).join('');
   modal(`<h3>📉 تقرير الاستهلاك والطلب</h3>
-    <div class="fld"><label>الفرع</label><select id="cr_branch">${branchOptions}</select></div>
+    ${lowBranchNames.length?`<div class="alert-red" style="margin-bottom:10px">⚠️ فروع فيها نقص حاليًا: ${esc(lowBranchNames.join('، '))} — اخترنا لك الفرع المتأثر تلقائيًا</div>`:'<div class="alert-ok" style="margin-bottom:10px">✅ كل الفروع بمستوى آمن حاليًا</div>'}
+    <div class="fld"><label>الفرع (⚠️ = فيه نقص حاليًا)</label><select id="cr_branch">${branchOptions}</select></div>
     <div class="two">
       <div style="flex:1"><label style="font-weight:700;font-size:.82rem;color:var(--muted)">من تاريخ</label><input type="date" id="cr_from" style="border:1.5px solid var(--line);border-radius:10px;padding:8px 10px;width:100%"></div>
       <div style="flex:1"><label style="font-weight:700;font-size:.82rem;color:var(--muted)">إلى تاريخ</label><input type="date" id="cr_to" style="border:1.5px solid var(--line);border-radius:10px;padding:8px 10px;width:100%"></div>
@@ -3592,8 +3611,15 @@ function printConsumptionReport(){
   printRaw(text, html);
 }
 async function showAuditHistory(){
-  const {data} = await db.from('inventory_audits')
+  const {data, error} = await db.from('inventory_audits')
     .select('*, branches(name_ar)').order('created_at',{ascending:false}).limit(50);
+  if(error){
+    modal(`<h3>📜 سجل عمليات الجرد</h3>
+      <div class="alert-red">⚠️ خطأ: ${esc(error.message||'الجدول inventory_audits غير موجود — نفّذ SQL الجرد أولاً')}</div>
+      <div class="m-act"><button class="cancel" onclick="closeModal()">إغلاق</button></div>`);
+    console.error('showAuditHistory error:', error);
+    return;
+  }
   const audits = data||[];
   modal(`<h3>📜 سجل عمليات الجرد</h3>
     <div style="max-height:420px;overflow-y:auto">
@@ -3656,11 +3682,22 @@ async function initBranchStock(){
 let TRANSFERS_DATA = [];
 async function renderTransfers(){
   await loadIngredients();
-  const {data} = await db.from('stock_transfers')
-    .select('*, ingredients(name,unit), from_branch:branches!from_branch_id(name_ar), to_branch:branches!to_branch_id(name_ar)')
-    .order('created_at',{ascending:false}).limit(100);
-  TRANSFERS_DATA = data||[];
   const C = document.getElementById('admContent');
+  C.innerHTML = '<div class="empty-note">... جاري التحميل</div>';
+  const {data, error} = await db.from('stock_transfers')
+    .select('*, ingredients(name,unit)')
+    .order('created_at',{ascending:false}).limit(100);
+  if(error){
+    C.innerHTML = `<div class="alert-red">⚠️ خطأ بجلب سجل النقل: ${esc(error.message||'غير معروف')}</div>
+      <button class="add-btn" style="margin-top:10px" onclick="transferForm()">🔄 طلب نقل بضاعة</button>`;
+    console.error('renderTransfers error:', error);
+    return;
+  }
+  TRANSFERS_DATA = (data||[]).map(t=>({
+    ...t,
+    from_branch_name: BRANCHES.find(b=>b.id===t.from_branch_id)?.name_ar || '—',
+    to_branch_name: BRANCHES.find(b=>b.id===t.to_branch_id)?.name_ar || '—',
+  }));
   C.innerHTML = `
     <button class="add-btn" onclick="transferForm()">🔄 طلب نقل بضاعة</button>
     <div class="tbl-wrap"><table class="tbl">
@@ -3669,8 +3706,8 @@ async function renderTransfers(){
         <td>${new Date(t.created_at).toLocaleDateString('ar-JO')}</td>
         <td><b>${esc(t.ingredients?.name||'—')}</b> <small style="color:var(--muted)">(${esc(t.ingredients?.unit||'')})</small></td>
         <td><b>${t.quantity}</b></td>
-        <td>🏪 ${esc(t.from_branch?.name_ar||'—')}</td>
-        <td>🏪 ${esc(t.to_branch?.name_ar||'—')}</td>
+        <td>🏪 ${esc(t.from_branch_name)}</td>
+        <td>🏪 ${esc(t.to_branch_name)}</td>
         <td>${t.status==='done'?'<span style="color:var(--ok);font-weight:900">✅ مكتمل</span>':'<span style="color:var(--warn);font-weight:900">⏳ معلق</span>'}</td>
         <td style="font-size:.85rem;color:var(--muted)">${esc(t.notes||'—')}</td>
       </tr>`).join('')||'<tr><td colspan="7" class="empty-note">ما في نقل بضاعة مسجل</td></tr>'}
@@ -3728,57 +3765,79 @@ async function saveTransfer(){
   })).filter(x=>x.ingredient_id && x.quantity>0);
   if(!items.length){ toast('⚠️ أضف مادة واحدة على الأقل'); return; }
 
-  try{
-    const fromBranch = BRANCHES.find(b=>b.id===fromId);
-    const toBranch = BRANCHES.find(b=>b.id===toId);
-    const transferredItems = [];
+  const fromBranch = BRANCHES.find(b=>b.id===fromId);
+  const toBranch = BRANCHES.find(b=>b.id===toId);
+  const transferredItems = [];
 
-    for(const it of items){
-      const {data:src} = await db.from('branch_inventory')
-        .select('id,stock').eq('branch_id',fromId).eq('ingredient_id',it.ingredient_id).maybeSingle();
-      if(!src || (src.stock||0) < it.quantity){
-        const ingName = INGR.find(x=>x.id===it.ingredient_id)?.name||'مادة';
-        toast(`⚠️ المخزون غير كافي لـ${ingName} — المتاح: ${src?.stock||0}`);
-        return;
-      }
+  // 1) فحص المخزون الكافي بكل المواد قبل أي تعديل
+  for(const it of items){
+    const {data:src, error} = await db.from('branch_inventory')
+      .select('id,stock').eq('branch_id',fromId).eq('ingredient_id',it.ingredient_id).maybeSingle();
+    if(error){ toast('✗ خطأ بفحص المخزون: '+error.message); console.error(error); return; }
+    if(!src || (src.stock||0) < it.quantity){
+      const ingName = INGR.find(x=>x.id===it.ingredient_id)?.name||'مادة';
+      toast(`⚠️ المخزون غير كافي لـ${ingName} — المتاح: ${src?.stock||0}`);
+      return;
     }
-    // كل شي كافي — ننفذ النقل
-    for(const it of items){
-      const {data:src} = await db.from('branch_inventory')
-        .select('id,stock').eq('branch_id',fromId).eq('ingredient_id',it.ingredient_id).single();
-      await db.from('branch_inventory').update({stock: src.stock - it.quantity}).eq('id',src.id);
-      const {data:dst} = await db.from('branch_inventory')
-        .select('id,stock').eq('branch_id',toId).eq('ingredient_id',it.ingredient_id).maybeSingle();
-      if(dst){
-        await db.from('branch_inventory').update({stock:(dst.stock||0)+it.quantity}).eq('id',dst.id);
-      } else {
-        await db.from('branch_inventory').insert({branch_id:toId, ingredient_id:it.ingredient_id, stock:it.quantity, min_stock:0});
-      }
-      transferredItems.push({ name: INGR.find(x=>x.id===it.ingredient_id)?.name||'—', unit: INGR.find(x=>x.id===it.ingredient_id)?.unit||'', quantity: it.quantity });
+  }
+
+  // 2) تنفيذ النقل فعليًا — مع فحص خطأ بكل خطوة
+  for(const it of items){
+    const {data:src, error:e1} = await db.from('branch_inventory')
+      .select('id,stock').eq('branch_id',fromId).eq('ingredient_id',it.ingredient_id).single();
+    if(e1){ toast('✗ خطأ: '+e1.message); console.error(e1); return; }
+
+    const {error:e2} = await db.from('branch_inventory').update({stock: src.stock - it.quantity}).eq('id',src.id);
+    if(e2){ toast('✗ فشل الخصم من المصدر: '+e2.message); console.error(e2); return; }
+
+    const {data:dst, error:e3} = await db.from('branch_inventory')
+      .select('id,stock').eq('branch_id',toId).eq('ingredient_id',it.ingredient_id).maybeSingle();
+    if(e3){ toast('✗ خطأ: '+e3.message); console.error(e3); return; }
+
+    if(dst){
+      const {error:e4} = await db.from('branch_inventory').update({stock:(dst.stock||0)+it.quantity}).eq('id',dst.id);
+      if(e4){ toast('✗ فشل الإضافة للوجهة: '+e4.message); console.error(e4); return; }
+    } else {
+      const {error:e5} = await db.from('branch_inventory').insert({branch_id:toId, ingredient_id:it.ingredient_id, stock:it.quantity, min_stock:0});
+      if(e5){ toast('✗ فشل إنشاء مخزون الوجهة: '+e5.message); console.error(e5); return; }
     }
-    // تسجيل عملية النقل (بأول مادة كمرجع + تفاصيل الكل بالملاحظة)
-    const itemsSummary = transferredItems.map(x=>x.quantity+' '+x.unit+' '+x.name).join('، ');
-    await db.from('stock_transfers').insert({
-      ingredient_id: items[0].ingredient_id, quantity: items[0].quantity,
-      from_branch_id: fromId, to_branch_id: toId,
-      notes: (notes?notes+' — ':'')+'الكل: '+itemsSummary,
-      status:'done', created_by: ME.full_name
+    transferredItems.push({ name: INGR.find(x=>x.id===it.ingredient_id)?.name||'—', unit: INGR.find(x=>x.id===it.ingredient_id)?.unit||'', quantity: it.quantity });
+  }
+
+  // 3) تسجيل عملية النقل بسجل مستقل
+  const itemsSummary = transferredItems.map(x=>x.quantity+' '+x.unit+' '+x.name).join('، ');
+  const { error: eTransfer } = await db.from('stock_transfers').insert({
+    ingredient_id: items[0].ingredient_id, quantity: items[0].quantity,
+    from_branch_id: fromId, to_branch_id: toId,
+    notes: (notes?notes+' — ':'')+'الكل: '+itemsSummary,
+    status:'done', created_by: ME.full_name
+  });
+  if(eTransfer){
+    toast('⚠️ المخزون اتنقل لكن فشل تسجيل السند: '+eTransfer.message);
+    console.error('stock_transfers insert error:', eTransfer);
+  }
+
+  // 4) مصروف تلقائي بأجرة النقل على الفرع المرسل
+  if(fee > 0){
+    const { error: eExp } = await db.from('expenses').insert({
+      expense_date: new Date().toISOString().split('T')[0],
+      category: 'نقل بضاعة', description: 'نقل من '+(fromBranch?.name_ar||'')+' إلى '+(toBranch?.name_ar||''),
+      amount: fee, branch_id: fromId
     });
-    // مصروف تلقائي بأجرة النقل على الفرع المرسل
-    if(fee > 0){
-      await db.from('expenses').insert({
-        expense_date: new Date().toISOString().split('T')[0],
-        category: 'نقل بضاعة', description: 'نقل من '+(fromBranch?.name_ar||'')+' إلى '+(toBranch?.name_ar||''),
-        amount: fee, branch_id: fromId
-      });
+    if(eExp){
+      toast('⚠️ النقل تم لكن فشل تسجيل مصروف الأجرة: '+eExp.message);
+      console.error('expense insert error:', eExp);
     }
-    await logActivity('stock_transfer', 'نقل '+transferredItems.length+' مادة من '+(fromBranch?.name_ar||'')+' إلى '+(toBranch?.name_ar||''));
-    closeModal();
-    toast('✅ تم النقل بنجاح'+(fee>0?' — أجرة '+fmt(fee)+' انسجلت مصروف':''));
-    printTransferReceipt(fromBranch, toBranch, transferredItems, fee, notes);
-    renderTransfers();
-  }catch(e){ console.error(e); toast('✗ خطأ: '+e.message); }
+  }
+
+  await logActivity('stock_transfer', 'نقل '+transferredItems.length+' مادة من '+(fromBranch?.name_ar||'')+' إلى '+(toBranch?.name_ar||''));
+  closeModal();
+  toast('✅ تم النقل بنجاح'+(fee>0?' — أجرة '+fmt(fee)+' انسجلت مصروف':''));
+  printTransferReceipt(fromBranch, toBranch, transferredItems, fee, notes);
+  renderTransfers();
 }
+
+
 function printTransferReceipt(fromBranch, toBranch, items, fee, notes){
   const text = 'سند نقل بضاعة\n'+
     '— Saber Jo Snack —\n'+
