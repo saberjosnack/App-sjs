@@ -944,7 +944,30 @@ function printZReport(shift, r){
     </table>
     <hr><div class="c">توقيع الموظف: ______________</div>
     </body></html>`;
-  fallbackPrint(html);
+  const text = 'تقرير إغلاق شيفت\n'+
+    '— Saber Jo Snack — '+(br?br.name_ar:'')+'\n'+
+    '════════════════\n'+
+    'الموظف: '+ME.full_name+'\n'+
+    'من: '+started+'\n'+
+    'إلى: '+ended+'\n'+
+    '────────────────\n'+
+    'عدد الطلبات: '+r.count+'\n'+
+    'استلام/توصيل: '+r.takeCount+' / '+r.delCount+'\n'+
+    'الخصومات: '+fmt(r.discount)+'\n'+
+    'أجور التوصيل: '+fmt(r.delivery)+'\n'+
+    'طلبات ملغية: '+r.cancelled+'\n'+
+    '────────────────\n'+
+    Object.entries(r.byPay).map(([k,v])=>(PAY_AR[k]||k)+': '+fmt(v)).join('\n')+'\n'+
+    'إجمالي المبيعات: '+fmt(r.total)+' '+CURRENCY+'\n'+
+    '────────────────\n'+
+    'افتتاحي الدرج: '+fmt(r.opening)+'\n'+
+    'مبيعات كاش: '+fmt(r.cashSales)+'\n'+
+    'المتوقع بالدرج: '+fmt(r.expected)+'\n'+
+    'المعدود فعليًا: '+fmt(r.counted)+'\n'+
+    (r.diff<-0.005?'⚠️ عجز: ':r.diff>0.005?'⚠️ زيادة: ':'✓ مطابق: ')+fmt(Math.abs(r.diff))+' '+CURRENCY+'\n'+
+    '════════════════\n'+
+    'توقيع الموظف: ______________\n';
+  printRaw(text, html);
 }
 
 
@@ -1467,6 +1490,31 @@ async function printViaAgent(textContent){
     body: JSON.stringify({ ip: SETTINGS.printer_ip, port: parseInt(SETTINGS.printer_port||'9100'), data: b64 })
   });
   if(!res.ok) throw new Error('agent error');
+}
+
+async function printRaw(text, htmlFallback){
+  // موجّه طباعة عام: يستخدم نفس آلية الفواتير (RawBT / وكيل الشبكة) لأي نص أو تقرير
+  const method = SETTINGS.printer_method || 'auto';
+  const isAndroid = /Android/i.test(navigator.userAgent);
+  if (method === 'rawbt' || (method === 'auto' && isAndroid)) {
+    try {
+      window.location.href = 'intent:' + encodeURIComponent(text) + '#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;';
+      toast('📲 انبعت التقرير للطابعة');
+      return;
+    } catch(e) { console.error('RawBT failed:', e); }
+  }
+  if (method === 'network' || (method === 'auto' && SETTINGS.printer_ip)) {
+    try {
+      if(!SETTINGS.printer_ip) throw new Error('no ip');
+      await printViaAgent(text);
+      toast('📡 التقرير انطبع عبر الشبكة');
+      return;
+    } catch(e) {
+      console.error('Agent print failed:', e);
+      toast('⚠️ وكيل الطباعة مش شغال — شغّل SJS-Print-Agent.bat');
+    }
+  }
+  fallbackPrint(htmlFallback);
 }
 
 async function printSmart(ord, lines, t, cust) {
@@ -2044,7 +2092,41 @@ function getRepRange(){
   return getFinancialDay();
 }
 
-function printSalesReport(){ window.print(); }
+function printSalesReport(){
+  const orders = (REP_ORDERS||[]);
+  const ok = orders.filter(o=>o.status!=='cancelled');
+  const cancelled = orders.filter(o=>o.status==='cancelled');
+  const gross = ok.reduce((a,o)=>a+parseFloat(o.subtotal||0),0);
+  const discounts = ok.reduce((a,o)=>a+parseFloat(o.discount||0),0);
+  const net = ok.reduce((a,o)=>a+parseFloat(o.total||0),0);
+  const delivery = ok.filter(o=>o.order_type==='delivery');
+  const takeaway = ok.filter(o=>o.order_type==='takeaway');
+  const avgOrder = ok.length?net/ok.length:0;
+  const label = document.getElementById('repDateLabel')?.textContent || '';
+
+  const text = 'تقرير المبيعات\n'+
+    '— Saber Jo Snack —\n'+
+    (label?label+'\n':'')+
+    '════════════════\n'+
+    'إجمالي المبيعات: '+fmt(gross)+' '+CURRENCY+'\n'+
+    'صافي المبيعات: '+fmt(net)+' '+CURRENCY+'\n'+
+    'الخصومات: '+fmt(discounts)+' '+CURRENCY+'\n'+
+    'عدد الطلبات: '+ok.length+'\n'+
+    'متوسط الفاتورة: '+fmt(avgOrder)+' '+CURRENCY+'\n'+
+    'طلبات ملغاة: '+cancelled.length+'\n'+
+    'توصيل: '+delivery.length+' ('+fmt(delivery.reduce((a,o)=>a+parseFloat(o.total||0),0))+')\n'+
+    'استلام: '+takeaway.length+' ('+fmt(takeaway.reduce((a,o)=>a+parseFloat(o.total||0),0))+')\n'+
+    '════════════════\n';
+
+  const htmlFallback = document.getElementById('salesKPI')?.outerHTML
+    ? '<html dir="rtl"><head><meta charset="UTF-8"><style>body{font-family:Cairo,Arial;padding:20px}table{width:100%;border-collapse:collapse}td,th{padding:6px;border:1px solid #ccc;text-align:right}</style></head><body>'
+      + '<h2>تقرير المبيعات — Saber Jo Snack</h2><div>'+label+'</div>'
+      + (document.getElementById('salesKPI').innerHTML||'')
+      + '</body></html>'
+    : '<html><body>ما في بيانات</body></html>';
+
+  printRaw(text, htmlFallback);
+}
 
 /* ================= مخطط المبيعات ================= */
 function renderKPICards(orders){
@@ -3136,7 +3218,7 @@ async function saveCode(id){
     closeModal(); toast('✓ انحفظ'); renderAdmin(); 
   } catch(e) { console.error(e); }
 }
-async function toggleCode(id,v){ try { await db.from('discount_codes').update({is_active:v}).eq('id',id); renderAdmin(); } catch(e) { console.error(e); } }
+async function toggleCode(id,v){ try { const r=await db.from('discount_codes').update({is_active:v}).eq('id',id); if(r.error){toast('✗ '+r.error.message);console.error(r.error);return;} toast(v?'✓ فعال':'✓ موقوف'); renderAdmin(); } catch(e) { toast('✗ '+e.message); console.error(e); } }
 function itemForm(id){ const it=ITEMS.find(x=>x.id===id)||{}; modal(`<h3>${id?'تعديل صنف':'صنف جديد'}</h3><div class="fld"><label>اسم الصنف</label><input id="f_nm" value="${esc(it.name_ar||'')}"></div><div class="fld"><label>السعر</label><input id="f_pr" inputmode="decimal" value="${it.price??''}"></div><div class="fld"><label>التكلفة (اختياري — لحساب الأرباح)</label><input id="f_cost" inputmode="decimal" value="${it.cost??''}"></div><div class="fld"><label>صورة الصنف (اختياري)</label><input type="file" id="f_img" accept="image/*" onchange="resizeItemImage(this)"><div id="f_imgPrev" style="margin-top:6px">${it.image_url?`<img src="${it.image_url}" style="width:76px;height:76px;object-fit:cover;border-radius:10px;border:1px solid var(--line)"> <button type="button" class="mini del" onclick="window.__itemImg='';document.getElementById('f_imgPrev').innerHTML='(انحذفت)'">حذف</button>`:''}</div></div><div class="fld"><label>التصنيف</label><select id="f_cat"><option value="">— بدون —</option>${CATS.map(c=>`<option ${c.name_ar===it.category?'selected':''}>${esc(c.name_ar)}</option>`).join('')}</select></div><div class="fld"><label>الترتيب</label><input id="f_so" inputmode="numeric" value="${it.sort_order??0}"></div><div class="m-act"><button class="save" onclick="saveItem('${id||''}')">حفظ</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`); }
 window.__itemImg = undefined;
 window.resizeItemImage = function(input){
@@ -3168,7 +3250,7 @@ async function saveItem(id){
     closeModal(); toast('✓ انحفظ'); renderAdmin(); bootData(); 
   } catch(e) { console.error(e); }
 }
-async function toggleItem(id,v){ try { await db.from('menu_items').update({is_available:v}).eq('id',id); renderAdmin(); bootData(); } catch(e) { console.error(e); } }
+async function toggleItem(id,v){ try { const r=await db.from('menu_items').update({is_available:v}).eq('id',id); if(r.error){toast('✗ '+r.error.message);console.error(r.error);return;} toast(v?'✓ ظاهر':'✓ مخفي'); renderAdmin(); bootData(); } catch(e) { toast('✗ '+e.message); console.error(e); } }
 function catForm(id){ const list=window.__ALLCATS||CATS; const c=list.find(x=>x.id===id)||{}; modal(`<h3>${id?'تعديل تصنيف':'تصنيف جديد'}</h3><div class="fld"><label>اسم التصنيف</label><input id="f_cn" value="${esc(c.name_ar||'')}"></div><div class="fld"><label>الترتيب</label><input id="f_cs" inputmode="numeric" value="${c.sort_order??0}"></div><div class="m-act"><button class="save" onclick="saveCat('${id||''}')">حفظ</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`); }
 async function saveCat(id){ 
   const f_cn = document.getElementById('f_cn');
@@ -3183,7 +3265,7 @@ async function saveCat(id){
     closeModal(); toast('✓ انحفظ'); renderAdmin(); bootData(); 
   } catch(e) { console.error(e); }
 }
-async function toggleCat(id,v){ try { await db.from('categories').update({is_active:v}).eq('id',id); renderAdmin(); bootData(); } catch(e) { console.error(e); } }
+async function toggleCat(id,v){ try { const r=await db.from('categories').update({is_active:v}).eq('id',id); if(r.error){toast('✗ '+r.error.message);console.error(r.error);return;} toast(v?'✓ ظاهر':'✓ مخفي'); renderAdmin(); bootData(); } catch(e) { toast('✗ '+e.message); console.error(e); } }
 function staffForm(id){
   const st = STAFF.find(x=>x.id===id)||{};
   const effPerm = k => {
@@ -3242,7 +3324,7 @@ async function saveStaff(id){
     closeModal(); toast('✓ انحفظ'); renderAdmin(); 
   } catch(e) { console.error(e); }
 }
-async function toggleStaff(id,v){ try { await db.from('staff').update({is_active:v}).eq('id',id); renderAdmin(); } catch(e) { console.error(e); } }
+async function toggleStaff(id,v){ try { const r=await db.from('staff').update({is_active:v}).eq('id',id); if(r.error){toast('✗ '+r.error.message);console.error(r.error);return;} toast(v?'✓ مفعّل':'✓ معطّل'); renderAdmin(); } catch(e) { toast('✗ '+e.message); console.error(e); } }
 function branchForm(id){ const list=window.__ALLBR||BRANCHES; const b=list.find(x=>x.id===id)||{}; modal(`<h3>${id?'تعديل فرع':'فرع جديد'}</h3><div class="fld"><label>الاسم (عربي)</label><input id="f_bn" value="${esc(b.name_ar||'')}"></div><div class="fld"><label>العنوان</label><input id="f_be" value="${esc(b.address||'')}"></div><div class="m-act"><button class="save" onclick="saveBranch('${id||''}')">حفظ</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`); }
 async function saveBranch(id){ 
   const f_bn = document.getElementById('f_bn');
@@ -3255,7 +3337,14 @@ async function saveBranch(id){
     closeModal(); toast('✓ انحفظ'); renderAdmin(); bootData(); 
   } catch(e) { toast('✗ خطأ: '+e.message); console.error(e); }
 }
-async function toggleBranch(id,v){ try { await db.from('branches').update({is_active:v}).eq('id',id); renderAdmin(); bootData(); } catch(e) { console.error(e); } }
+async function toggleBranch(id,v){ 
+  try { 
+    const r = await db.from('branches').update({is_active:v}).eq('id',id); 
+    if(r.error){ toast('✗ '+(r.error.message||'فشل التفعيل')); console.error('toggleBranch:', r.error); return; }
+    toast(v?'✓ تم التفعيل':'✓ تم التعطيل');
+    renderAdmin(); bootData(); 
+  } catch(e) { toast('✗ خطأ: '+e.message); console.error(e); } 
+}
 
 /* ================= التنقل ================= */
 let dashTimer = null;
