@@ -848,6 +848,7 @@ function enterApp(){
   bootData();
   setInterval(checkOverdue, 30000);
   setInterval(checkReadyAlerts, 30000);
+  setInterval(checkAutoPrintQueue, 8000);
   setTimeout(checkOverdue, 2000);
   setTimeout(checkReadyAlerts, 3000);
   setTimeout(updateHeldCount, 1500);
@@ -865,6 +866,26 @@ window.logout = function(){
 const saved = sessionStorage.getItem('sjs_me');
 if(saved){ try{ ME = JSON.parse(saved); enterApp(); }catch(e){ sessionStorage.removeItem('sjs_me'); } }
 
+/* ================= إعدادات الطابعة (محلية لهاد الجهاز فقط — مو مشتركة) ================= */
+const LOCAL_PRINTER_KEYS = ['printer_method','printer_ip','printer_port','printer_bt_address','auto_print_branch'];
+function applyLocalPrinterSettings(){
+  LOCAL_PRINTER_KEYS.forEach(k=>{
+    try{
+      const v = localStorage.getItem('sjs_'+k);
+      if(v !== null) SETTINGS[k] = (k==='auto_print_branch') ? (v==='1') : v;
+    }catch(e){}
+  });
+}
+function saveLocalPrinterSettings(obj){
+  LOCAL_PRINTER_KEYS.forEach(k=>{
+    if(obj[k] === undefined) return;
+    try{
+      localStorage.setItem('sjs_'+k, k==='auto_print_branch' ? (obj[k]?'1':'0') : obj[k]);
+    }catch(e){}
+    SETTINGS[k] = obj[k];
+  });
+}
+
 /* ================= تحميل البيانات ================= */
 async function bootData(){
   try {
@@ -876,6 +897,7 @@ async function bootData(){
     ]);
     BRANCHES = b.data||[]; CATS = c.data||[]; ITEMS = i.data||[];
     SETTINGS = {}; (s.data||[]).forEach(x=>SETTINGS[x.key]=x.value);
+    applyLocalPrinterSettings();
     FIN_START_H = parseInt(SETTINGS.fin_start_hour) ?? 10; if(isNaN(FIN_START_H)) FIN_START_H = 10;
     FIN_END_H = parseInt(SETTINGS.fin_end_hour) ?? 3; if(isNaN(FIN_END_H)) FIN_END_H = 3;
     if(ME && ME.role==='custom') await loadCustomRoles();
@@ -1116,6 +1138,34 @@ async function checkOverdue(){
       }
     } else if(overdueRingInterval){
       clearInterval(overdueRingInterval); overdueRingInterval = null;
+    }
+  } catch(e) { console.error(e); }
+}
+
+/* ================= طباعة تلقائية لطلبات الكول سنتر بجهاز الفرع ================= */
+const _autoPrintBusy = new Set();
+async function checkAutoPrintQueue(){
+  try {
+    if(!ME || !ME.branch_id) return;               // بس أجهزة مرتبطة بفرع معيّن
+    if(!SETTINGS.auto_print_branch) return;         // لازم تكون مفعّلة من الإعدادات بهاد الجهاز
+    const { data, error } = await db.from('orders')
+      .select('*, order_items(*), customers(name, phone, address)')
+      .eq('branch_id', ME.branch_id)
+      .eq('auto_printed', false)
+      .eq('status', 'new')
+      .order('created_at', { ascending: true })
+      .limit(5);
+    if(error || !data || !data.length) return;
+    for(const o of data){
+      if(_autoPrintBusy.has(o.id)) continue;
+      _autoPrintBusy.add(o.id);
+      try{
+        const cust = o.customers ? { name:o.customers.name, phone:o.customers.phone, addr:o.customers.address||'' } : null;
+        beep(6);
+        await printSmart(o, o.order_items||[], { sub:+o.subtotal, disc:+o.discount, del:+o.delivery_fee, total:+o.total }, cust);
+        await db.from('orders').update({ auto_printed: true }).eq('id', o.id);
+      } catch(e){ console.error('auto print failed:', e); }
+      finally { _autoPrintBusy.delete(o.id); }
     }
   } catch(e) { console.error(e); }
 }
@@ -1751,18 +1801,47 @@ function canvasToEscPos(cv){
   bytes.push(0x1b,0x64,0x04, 0x1d,0x56,0x00);
   return new Uint8Array(bytes);
 }
-async function printViaAgent(textContent){
+function textToEscPosBase64(textContent){
   const cv = receiptToCanvas(textContent);
   const data = canvasToEscPos(cv);
   let b64=''; const chunk=8192;
   for(let i=0;i<data.length;i+=chunk) b64 += String.fromCharCode.apply(null, data.subarray(i,i+chunk));
-  b64 = btoa(b64);
+  return btoa(b64);
+}
+
+async function printViaAgent(textContent){
+  const b64 = textToEscPosBase64(textContent);
   const res = await fetch('http://127.0.0.1:9123/print', {
     method:'POST',
     headers:{'Content-Type':'application/json'},
     body: JSON.stringify({ ip: SETTINGS.printer_ip, port: parseInt(SETTINGS.printer_port||'9100'), data: b64 })
   });
   if(!res.ok) throw new Error('agent error');
+}
+
+/* ====== طباعة عبر تطبيق أندرويد (جسر أصلي — بدون وكيل/RawBT) ====== */
+window.__onNativePrintResult = function(ok, message){
+  toast(ok ? '✅ '+message : '⚠️ '+message);
+};
+window.__loadBtDevices = function(){
+  const sel = document.getElementById('f_printerBT');
+  if(!sel || !window.SJSPrinter) return;
+  try{
+    const list = JSON.parse(window.SJSPrinter.listPairedDevices()||'[]');
+    sel.innerHTML = list.length
+      ? list.map(d=>`<option value="${d.address}" ${SETTINGS.printer_bt_address===d.address?'selected':''}>${esc(d.name||'جهاز')} (${d.address})</option>`).join('')
+      : '<option value="">— ما في أجهزة مقرونة —</option>';
+  }catch(e){ console.error(e); }
+};
+async function printViaAppNetwork(textContent){
+  if(!SETTINGS.printer_ip) throw new Error('no ip');
+  const b64 = textToEscPosBase64(textContent);
+  window.SJSPrinter.printNetwork(SETTINGS.printer_ip, parseInt(SETTINGS.printer_port||'9100'), b64);
+}
+async function printViaAppBluetooth(textContent){
+  if(!SETTINGS.printer_bt_address) throw new Error('no bt address');
+  const b64 = textToEscPosBase64(textContent);
+  window.SJSPrinter.printBluetooth(SETTINGS.printer_bt_address, b64);
 }
 
 async function printRaw(text, htmlFallback){
@@ -1775,6 +1854,14 @@ async function printRaw(text, htmlFallback){
       toast('📲 انبعت التقرير للطابعة');
       return;
     } catch(e) { console.error('RawBT failed:', e); }
+  }
+  if (method === 'app_network' && window.SJSPrinter) {
+    try { await printViaAppNetwork(text); return; }
+    catch(e) { console.error('App network print failed:', e); toast('⚠️ تأكد من IP الطابعة'); }
+  }
+  if (method === 'app_bluetooth' && window.SJSPrinter) {
+    try { await printViaAppBluetooth(text); return; }
+    catch(e) { console.error('App bluetooth print failed:', e); toast('⚠️ اختر طابعة بلوتوث من الإعدادات'); }
   }
   if (method === 'network' || (method === 'auto' && SETTINGS.printer_ip)) {
     try {
@@ -1801,6 +1888,15 @@ async function printSmart(ord, lines, t, cust) {
       toast('📲 انبعتت للطابعة');
       return;
     } catch(e) { console.error('RawBT failed:', e); }
+  }
+  // تطبيق أندرويد: طباعة مباشرة عبر شبكة أو بلوتوث بدون أي برنامج وسيط
+  if (method === 'app_network' && window.SJSPrinter) {
+    try { await printViaAppNetwork(generateReceiptText(ord, lines, t, cust)); return; }
+    catch(e) { console.error('App network print failed:', e); toast('⚠️ تأكد من IP الطابعة'); }
+  }
+  if (method === 'app_bluetooth' && window.SJSPrinter) {
+    try { await printViaAppBluetooth(generateReceiptText(ord, lines, t, cust)); return; }
+    catch(e) { console.error('App bluetooth print failed:', e); toast('⚠️ اختر طابعة بلوتوث من الإعدادات'); }
   }
   // شبكة: عبر وكيل الطباعة المحلي (SJS-Print-Agent) — فوري وبدون أي نافذة، عربي مثالي
   if (method === 'network' || (method === 'auto' && SETTINGS.printer_ip)) {
@@ -1913,7 +2009,10 @@ async function saveOrder(print){
       status: 'new',
       shift_id: currentShift ? currentShift.id : null,
       created_by: ME.id,
-      created_by_name: ME.full_name
+      created_by_name: ME.full_name,
+      // طلبات الكول سنتر لازم تنطبع تلقائيًا بجهاز الفرع (auto_printed=false)
+      // طلبات الفرع نفسه (كاشير) بتنطبع محليًا فورًا، فما في داعي جهاز تاني يطبعها كمان
+      auto_printed: !isCallCenter()
     };
     
     console.log('البيانات المرسلة:', rec);
@@ -1957,8 +2056,10 @@ async function saveOrder(print){
     }
     
     toast(editingOrder ? `✓ تعدّل طلب #${ord.order_number}` : `✓ طلب #${ord.order_number}`);
-    if(print) {
+    if(print && !isCallCenter()) {
       await printSmart(ord, cartCopy, t, custInfo);
+    } else if(isCallCenter()) {
+      toast('📨 الطلب انبعت لفرع ' + (BRANCHES.find(b=>b.id===branch_id)?.name_ar||'') + ' وبيطبع تلقائيًا هناك');
     }
     
     clearCart();
@@ -2741,14 +2842,30 @@ async function renderAdmin(){
           <option value="windows" ${SETTINGS.printer_method==='windows'?'selected':''}>ويندوز — تعريف الطابعة</option>
           <option value="rawbt" ${SETTINGS.printer_method==='rawbt'?'selected':''}>أندرويد — RawBT (بلوتوث)</option>
           <option value="network" ${SETTINGS.printer_method==='network'?'selected':''}>شبكة — IP مباشر (تجريبي)</option>
+          ${window.SJSPrinter?`
+          <option value="app_network" ${SETTINGS.printer_method==='app_network'?'selected':''}>📱 تطبيق أندرويد — شبكة/واي فاي (مباشر)</option>
+          <option value="app_bluetooth" ${SETTINGS.printer_method==='app_bluetooth'?'selected':''}>📱 تطبيق أندرويد — بلوتوث (مباشر)</option>
+          `:''}
         </select>
       </div>
       <div class="fld"><label>🌐 IP الطابعة (لوضع الشبكة)</label><input id="f_printerIP" value="${esc(SETTINGS.printer_ip||'192.168.1.100')}"></div>
       <div class="fld"><label>🔌 المنفذ</label><input id="f_printerPort" inputmode="numeric" value="${esc(SETTINGS.printer_port||'9100')}"></div>
+      <div class="fld" style="background:#fff8e1;border-radius:10px;padding:10px 12px">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="checkbox" id="f_autoPrintBranch" ${SETTINGS.auto_print_branch?'checked':''} style="width:18px;height:18px">
+          🔔 طباعة تلقائية لطلبات الكول سنتر بهاد الفرع (فعّلها بس بجهاز الكاشير المتصل بالطابعة)
+        </label>
+      </div>
+      ${window.SJSPrinter?`
+      <div class="fld"><label>🔵 طابعة البلوتوث (لوضع تطبيق أندرويد — بلوتوث)</label>
+        <select id="f_printerBT"></select>
+        <button type="button" onclick="window.__loadBtDevices()" style="margin-top:6px;background:var(--maroon);color:var(--yellow);border-radius:10px;padding:6px 14px;font-weight:800;font-size:.8rem">🔄 تحديث القائمة</button>
+        <div style="font-size:.75rem;color:var(--muted);margin-top:4px">لازم تقرن (Pair) الطابعة أول شي من إعدادات بلوتوث بالجهاز</div>
+      </div>`:''}
       <div style="font-size:.82rem;color:var(--muted);font-weight:600;margin-bottom:10px;line-height:1.7">
-      📡 <b>شبكة (الموصى به إلك):</b> حط IP الطابعة فوق ⬆️ وشغّل ملف <b>SJS-Print-Agent.bat</b> المرفق على جهاز الكاشير وخليه فاتح — الفواتير بتنطبع <b>فورًا بدون أي نافذة</b> وبعربي مثالي. (حط اختصار للملف بمجلد Startup ليشتغل تلقائيًا مع الويندوز)<br>
+      📡 <b>شبكة (ويندوز):</b> حط IP الطابعة فوق ⬆️ وشغّل ملف <b>SJS-Print-Agent.bat</b> المرفق على جهاز الكاشير وخليه فاتح.<br>
       💻 <b>ويندوز:</b> بديل — ثبّت الطابعة بويندوز وشغّل من SJS-POS.bat.<br>
-      📱 <b>أندرويد:</b> تطبيق RawBT المجاني + طابعة بلوتوث.</div>
+      📱 <b>تطبيق أندرويد:</b> اختر "شبكة/واي فاي" أو "بلوتوث" فوق ⬆️ — بيطبع مباشرة من غير أي برنامج إضافي.</div>
       <div class="fld">
         <button type="button" onclick="window.checkAgent()" style="background:var(--maroon);color:var(--yellow);border-radius:10px;padding:8px 16px;font-weight:800;margin-left:8px">🔍 فحص وكيل الطباعة</button>
         <button class="printer-test-btn" onclick="window.testPrinter()">🖨️ اختبار الطابعة</button>
@@ -2793,6 +2910,7 @@ async function renderAdmin(){
       <div class="m-act"><button class="save" style="background:var(--red)" onclick="doFullReset()">🗑️ تصفير النظام بالكامل</button></div>
     </div>` : ''}
   `; 
+    if(window.SJSPrinter) window.__loadBtDevices();
   }
   if(admView==='shifts'){
     C.innerHTML = `
@@ -3955,16 +4073,23 @@ async function saveSettings(){
   const f_printMethod = document.getElementById('f_printMethod');
   const f_printerIP = document.getElementById('f_printerIP');
   const f_printerPort = document.getElementById('f_printerPort');
+  const f_printerBT = document.getElementById('f_printerBT');
+  const f_autoPrintBranch = document.getElementById('f_autoPrintBranch');
   const f_extraInfo = document.getElementById('f_extraInfo');
   const f_alertTone = document.getElementById('f_alertTone');
   const f_alertVolume = document.getElementById('f_alertVolume');
   const f_finStart = document.getElementById('f_finStart');
   const f_finEnd = document.getElementById('f_finEnd');
-  const settings = {
-    delivery_whatsapp: f_wanum ? f_wanum.value.trim() : '',
+  // إعدادات الطابعة محلية بهاد الجهاز بس — ما بتنحفظ بقاعدة البيانات المشتركة
+  saveLocalPrinterSettings({
     printer_method: f_printMethod ? f_printMethod.value : 'auto',
     printer_ip: f_printerIP ? f_printerIP.value.trim() : '',
     printer_port: f_printerPort ? f_printerPort.value.trim() : '9100',
+    printer_bt_address: f_printerBT ? f_printerBT.value : '',
+    auto_print_branch: f_autoPrintBranch ? f_autoPrintBranch.checked : false,
+  });
+  const settings = {
+    delivery_whatsapp: f_wanum ? f_wanum.value.trim() : '',
     receipt_template: f_receiptTemplate ? f_receiptTemplate.value : 'modern',
     invoice_extra_info: f_extraInfo ? f_extraInfo.value.trim() : '',
     fin_start_hour: f_finStart ? f_finStart.value : '10',
@@ -4139,7 +4264,7 @@ async function saveStaff(id){
   if(dup){ toast('⚠️ PIN مستخدم'); return; } 
   try {
     const r=id?await db.from('staff').update(rec).eq('id',id):await db.from('staff').insert(rec); 
-    if(r.error){ toast(r.error.code==='23505'?'⚠️ اسم المستخدم مكرر':'✗ فشل'); return; } 
+    if(r.error){ console.error('saveStaff error:', r.error); toast(r.error.code==='23505'?'⚠️ اسم المستخدم مكرر':'✗ فشل الحفظ: '+(r.error.message||r.error.code||'خطأ غير معروف')); return; } 
     if(id&&id===ME.id){ ME={...ME,...rec}; sessionStorage.setItem('sjs_me',JSON.stringify(ME)); } 
     closeModal(); toast('✓ انحفظ'); renderAdmin(); 
   } catch(e) { console.error(e); }
