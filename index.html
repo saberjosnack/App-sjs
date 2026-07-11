@@ -304,6 +304,7 @@ input, textarea, select { -webkit-user-select:text !important }
     <div class="brand">S<em>J</em>S <span style="font-weight:600;font-size:.85rem">POS</span></div>
     <div id="shiftBadge" class="hidden" onclick="if(!currentShift)startShift()">🔴 لا يوجد شيفت مفتوح - اضغط لفتح</div>
     <div id="overdueBadge" class="hidden">⏰ طلبات متأخرة!</div>
+    <div id="readyBadge" class="hidden" style="background:var(--warn);color:#fff;border-radius:999px;padding:4px 12px;font-weight:900;font-size:.85rem;animation:blink 1s infinite">📦 طلبات جاهزة!</div>
     <div class="who"><span id="whoName"></span><br><span id="whoBranch"></span></div>
     <button id="btnLogout" onclick="window.logout()">خروج</button>
   </header>
@@ -492,6 +493,7 @@ input, textarea, select { -webkit-user-select:text !important }
         <button data-a="cats" onclick="admTab('cats')">📂 التصنيفات</button>
         <button data-a="codes" onclick="admTab('codes')">🎟️ أكواد الخصم</button>
         <button data-a="staff" onclick="admTab('staff')">👥 الموظفين</button>
+        <button data-a="roles" onclick="admTab('roles')">🛡️ الأدوار</button>
         <button data-a="branches" onclick="admTab('branches')">🏪 الفروع</button>
         <button data-a="inventory" onclick="admTab('inventory')" style="background:var(--yellow);border-color:#d9c400">📋 جرد المخزون</button>
         <button data-a="ingredients" onclick="admTab('ingredients')">🥩 المكونات</button>
@@ -518,6 +520,8 @@ const SB_URL = "https://hwucmlixvqouvwvqeshh.supabase.co";
 const SB_KEY = "sb_publishable_jkJOc57GfQXVN1HHwI_2cA_lziCOInd";
 const CURRENCY = "د.أ";
 const LATE_MIN = 20;
+const READY_WAIT_MIN = 7;
+let _readyAlertsSent = new Set();
 const db = supabase.createClient(SB_URL, SB_KEY);
 
 let ME = null;
@@ -539,24 +543,46 @@ const isCallCenter = () => ME && ME.role==='callcenter';
 
 /* ================= صوت التنبيه ================= */
 let audioCtx = null;
-function beep(times=5, frequency=1200){
+const TONE_PRESETS = {
+  classic: { wave:'sawtooth', freq:1200 },
+  soft:    { wave:'sine',     freq:800  },
+  urgent:  { wave:'square',   freq:1500 },
+  bell:    { wave:'triangle', freq:1000 },
+};
+function beep(times=5, frequency=null){
   try{
     audioCtx = audioCtx || new (window.AudioContext||window.webkitAudioContext)();
+    const toneKey = (typeof SETTINGS!=='undefined' && SETTINGS.alert_tone) || 'classic';
+    const preset = TONE_PRESETS[toneKey] || TONE_PRESETS.classic;
+    const vol = (typeof SETTINGS!=='undefined' && parseFloat(SETTINGS.alert_volume)) || 0.5;
+    const baseFreq = frequency || preset.freq;
     for(let i=0;i<times;i++){
       const o = audioCtx.createOscillator();
       const g = audioCtx.createGain();
       o.connect(g); g.connect(audioCtx.destination);
-      o.type='sawtooth';
-      o.frequency.value = frequency + Math.random()*300 - 150;
+      o.type = preset.wave;
+      o.frequency.value = baseFreq + Math.random()*300 - 150;
       const t0 = audioCtx.currentTime + i*0.25;
-      g.gain.setValueAtTime(0.5,t0);
+      g.gain.setValueAtTime(vol,t0);
       g.gain.exponentialRampToValueAtTime(0.001,t0+0.2);
       o.start(t0); o.stop(t0+0.25);
     }
     if(times>3){
-      setTimeout(() => beep(3, 1300), 2000);
-      setTimeout(() => beep(3, 1400), 4000);
+      setTimeout(() => beep(3, baseFreq+100), 2000);
+      setTimeout(() => beep(3, baseFreq+200), 4000);
     }
+  }catch(e){}
+}
+function testTone(toneKey){
+  const preset = TONE_PRESETS[toneKey] || TONE_PRESETS.classic;
+  try{
+    audioCtx = audioCtx || new (window.AudioContext||window.webkitAudioContext)();
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.connect(g); g.connect(audioCtx.destination);
+    o.type = preset.wave; o.frequency.value = preset.freq;
+    const t0 = audioCtx.currentTime;
+    g.gain.setValueAtTime(0.5,t0); g.gain.exponentialRampToValueAtTime(0.001,t0+0.3);
+    o.start(t0); o.stop(t0+0.3);
   }catch(e){}
 }
 
@@ -680,11 +706,95 @@ const ROLE_DEFAULT_PERMS = {
   callcenter: ['shift_open','shift_close','shift_report','order_create','order_delivery','order_edit','order_reprint','discount_code','customers_view','customers_edit'],
   admin:      Object.values(PERMS).flatMap(g=>Object.keys(g)),
 };
+/* ================= الأدوار المخصصة (يعملها المالك) ================= */
+let CUSTOM_ROLES = [];
+async function loadCustomRoles(){
+  const {data} = await db.from('roles').select('*').order('created_at');
+  CUSTOM_ROLES = data||[];
+  return CUSTOM_ROLES;
+}
+async function renderRolesTab(){
+  await loadCustomRoles();
+  const C = document.getElementById('admContent');
+  const allPermKeys = Object.values(PERMS).flatMap(g=>Object.keys(g));
+  const countPerms = (permsObj) => Object.values(permsObj||{}).filter(Boolean).length;
+  C.innerHTML = `
+    <div style="color:var(--muted);font-weight:700;font-size:.85rem;margin-bottom:10px">أنشئ أدوار بأي اسم (محاسب، مدير فرع...) وحدد صلاحياتها. الأدوار الجاهزة (مالك/كاشير/كول سنتر) بتقدر تزيدلها صلاحيات بس مش تحذفها.</div>
+    <button class="add-btn" onclick="roleForm()">＋ دور جديد</button>
+    <div class="tbl-wrap"><table class="tbl">
+      <tr><th>الدور</th><th>عدد الصلاحيات</th><th>النوع</th><th></th></tr>
+      <tr><td><b>👑 مالك</b></td><td>الكل (${allPermKeys.length})</td><td>أساسي — ثابت</td><td>—</td></tr>
+      <tr><td><b>🧾 كاشير</b></td><td>${(ROLE_DEFAULT_PERMS.cashier||[]).length}</td><td>أساسي</td>
+        <td><button class="mini edit" onclick="roleForm(null,'cashier')">تعديل الصلاحيات</button></td></tr>
+      <tr><td><b>📞 كول سنتر</b></td><td>${(ROLE_DEFAULT_PERMS.callcenter||[]).length}</td><td>أساسي</td>
+        <td><button class="mini edit" onclick="roleForm(null,'callcenter')">تعديل الصلاحيات</button></td></tr>
+      ${CUSTOM_ROLES.map(r=>`<tr>
+        <td><b>${esc(r.name)}</b></td><td>${countPerms(r.permissions)}</td><td>مخصص</td>
+        <td><button class="mini edit" onclick="roleForm('${r.id}')">تعديل</button>
+            <button class="mini del" onclick="deleteRole('${r.id}','${esc(r.name)}')">حذف</button></td>
+      </tr>`).join('')}
+    </table></div>`;
+}
+function roleForm(id, legacyRole){
+  // id = دور مخصص من جدول roles | legacyRole = 'cashier' أو 'callcenter' لتعديل الافتراضي
+  const isLegacy = !!legacyRole;
+  const role = isLegacy ? null : CUSTOM_ROLES.find(x=>x.id===id);
+  const currentPerms = isLegacy
+    ? Object.fromEntries((ROLE_DEFAULT_PERMS[legacyRole]||[]).map(k=>[k,true]))
+    : (role?.permissions || {});
+  const permHtml = Object.entries(PERMS).map(([grp, keys])=>`
+    <div style="font-weight:900;color:var(--maroon);margin:10px 0 4px">${grp}</div>
+    ${Object.entries(keys).map(([k,label])=>`
+      <label style="display:flex;align-items:center;gap:8px;font-weight:700;padding:3px 0;font-size:.92rem">
+        <input type="checkbox" class="rolePermChk" data-perm="${k}" ${currentPerms[k]?'checked':''} style="width:19px;height:19px"> ${label}
+      </label>`).join('')}`).join('');
+  modal(`<h3>${isLegacy ? 'تعديل صلاحيات: '+(legacyRole==='cashier'?'كاشير':'كول سنتر') : (id?'تعديل دور':'دور جديد')}</h3>
+    ${isLegacy?'':`<div class="fld"><label>اسم الدور</label><input id="rf_name" value="${esc(role?.name||'')}" placeholder="مثال: محاسب، مدير فرع"></div>`}
+    <div style="display:flex;gap:8px;margin:6px 0">
+      <button type="button" class="mini ok" onclick="document.querySelectorAll('.rolePermChk').forEach(c=>c.checked=true)">تحديد الكل</button>
+      <button type="button" class="mini del" onclick="document.querySelectorAll('.rolePermChk').forEach(c=>c.checked=false)">إلغاء الكل</button>
+    </div>
+    <div style="background:#fff;border:1.5px solid var(--line);border-radius:12px;padding:10px 14px;max-height:320px;overflow-y:auto">${permHtml}</div>
+    <div class="m-act">
+      <button class="save" onclick="saveRole('${id||''}','${legacyRole||''}')">حفظ ✓</button>
+      <button class="cancel" onclick="closeModal()">إلغاء</button>
+    </div>`);
+}
+async function saveRole(id, legacyRole){
+  const perms = {};
+  document.querySelectorAll('.rolePermChk').forEach(c=>{ perms[c.dataset.perm]=c.checked; });
+  if(legacyRole){
+    // تحديث الصلاحيات الافتراضية بالذاكرة (تُحفظ بجدول roles كنسخة مرجعية لو أردنا لاحقًا)
+    ROLE_DEFAULT_PERMS[legacyRole] = Object.entries(perms).filter(([k,v])=>v).map(([k])=>k);
+    await db.from('roles').upsert({ name: legacyRole==='cashier'?'كاشير':'كول سنتر', permissions: perms, is_system:true }, {onConflict:'name'});
+    await logActivity('edit_role','تعديل صلاحيات دور: '+(legacyRole==='cashier'?'كاشير':'كول سنتر'));
+    closeModal(); toast('✓ اتحدثت الصلاحيات'); renderRolesTab();
+    return;
+  }
+  const name = document.getElementById('rf_name')?.value.trim();
+  if(!name){ toast('⚠️ اسم الدور مطلوب'); return; }
+  const rec = { name, permissions: perms, is_system:false };
+  const r = id ? await db.from('roles').update(rec).eq('id',id) : await db.from('roles').insert(rec);
+  if(r.error){ toast('✗ '+r.error.message); return; }
+  await logActivity(id?'edit_role':'add_role','دور: '+name);
+  closeModal(); toast('✓ انحفظ الدور'); renderRolesTab();
+}
+async function deleteRole(id, name){
+  if(!confirm('حذف دور "'+name+'"؟ الموظفين المرتبطين فيه رح يحتاجوا دور جديد.')) return;
+  await db.from('roles').delete().eq('id',id);
+  await logActivity('delete_role','حذف دور: '+name);
+  toast('✓ انحذف الدور'); renderRolesTab();
+}
+
 function perm(key){
   if(!ME) return false;
-  if(ME.role==='admin') return true;                       // المدير: كل شي دائمًا
+  if(ME.role==='admin') return true;                       // المالك: كل شي دائمًا
   const p = ME.permissions;
-  if(p && typeof p === 'object' && key in p) return !!p[key];  // مخصص من المدير
+  if(p && typeof p === 'object' && key in p) return !!p[key];  // مخصص لهاد الموظف تحديدًا
+  if(ME.role==='custom' && ME.role_id){
+    const cr = (window.CUSTOM_ROLES||CUSTOM_ROLES||[]).find(r=>r.id===ME.role_id);
+    return !!(cr?.permissions||{})[key];
+  }
   return (ROLE_DEFAULT_PERMS[ME.role]||[]).includes(key);      // افتراضي الدور
 }
 
@@ -709,7 +819,7 @@ function applyRoles(){
     document.querySelectorAll('#otypeBar button').forEach(x=>x.classList.toggle('on', x.dataset.t==='takeaway'));
   }
   const branchSel = document.getElementById('branchSel');
-  if (branchSel) branchSel.classList.toggle('hidden', !(adm||cc));
+  if (branchSel) branchSel.classList.toggle('hidden', !(adm||cc||!ME.branch_id));
   const discInput = document.getElementById('discInput');
   if (discInput) discInput.classList.toggle('hidden', !adm);
 }
@@ -726,7 +836,9 @@ function enterApp(){
   applyRoles();
   bootData();
   setInterval(checkOverdue, 30000);
+  setInterval(checkReadyAlerts, 30000);
   setTimeout(checkOverdue, 2000);
+  setTimeout(checkReadyAlerts, 3000);
   checkShift();
   if (shiftCheckInterval) clearInterval(shiftCheckInterval);
   shiftCheckInterval = setInterval(checkShift, 30000);
@@ -752,6 +864,7 @@ async function bootData(){
     ]);
     BRANCHES = b.data||[]; CATS = c.data||[]; ITEMS = i.data||[];
     SETTINGS = {}; (s.data||[]).forEach(x=>SETTINGS[x.key]=x.value);
+    if(ME && ME.role==='custom') await loadCustomRoles();
     const branchSel = document.getElementById('branchSel');
     if (branchSel) branchSel.innerHTML = BRANCHES.map(x=>`<option value="${x.id}">🏪 ${esc(x.name_ar)}</option>`).join('');
     const salesBranch = document.getElementById('salesBranch');
@@ -982,9 +1095,41 @@ async function checkOverdue(){
     const badge = document.getElementById('overdueBadge');
     if (badge) {
       badge.classList.toggle('hidden', !has);
-      if(has){ badge.textContent = `⏰ ${count} طلب متأخر +${LATE_MIN} د!`; beep(6,1500); }
+      if(has){ badge.textContent = `⏰ ${count} طلب تجهيزه متأخر +${LATE_MIN} د!`; beep(6,1500); }
     }
   } catch(e) { console.error(e); }
+}
+
+/* ---- تنبيه انتظار الاستلام/التوصيل بعد الجاهزية (+7 دقايق) ---- */
+async function checkReadyAlerts(){
+  try {
+    if(!ME || ME.role==='kitchen') return;
+    const limit = new Date(Date.now() - READY_WAIT_MIN*60000).toISOString();
+    let q = db.from('orders').select('id,order_number,order_type,total,customers(name,phone),branches(name_ar)')
+      .eq('status','ready').lt('updated_at', limit);
+    if(ME.branch_id) q = q.eq('branch_id', ME.branch_id);
+    const { data } = await q;
+    const pendingOrders = data||[];
+    const readyBadge = document.getElementById('readyBadge');
+    const has = pendingOrders.length > 0;
+    if(readyBadge){
+      readyBadge.classList.toggle('hidden', !has);
+      if(has) readyBadge.textContent = `📦 ${pendingOrders.length} طلب لسا ما استلم +${READY_WAIT_MIN} د!`;
+    }
+    pendingOrders.forEach(o=>{
+      if(_readyAlertsSent.has(o.id)) return;
+      _readyAlertsSent.add(o.id);
+      beep(4);
+      const nm = o.customers?.name||'—';
+      const ph = o.customers?.phone||'';
+      const typeLabel = o.order_type==='delivery' ? 'المندوب' : 'العميل';
+      const div=document.createElement('div');
+      div.style.cssText='position:fixed;top:70px;left:50%;transform:translateX(-50%);background:#e8890c;color:#fff;padding:14px 24px;border-radius:14px;font-weight:900;font-size:1rem;z-index:300;box-shadow:0 8px 26px rgba(0,0,0,.35);text-align:center';
+      div.innerHTML='⏰ '+typeLabel+' متأخر على طلب #'+o.order_number+' (+'+READY_WAIT_MIN+' د)<br><small>'+esc(nm)+(ph?' — '+esc(ph):'')+'</small>';
+      document.body.appendChild(div);
+      setTimeout(()=>div.remove(), 8000);
+    });
+  } catch(e) { console.error('checkReadyAlerts:', e); }
 }
 
 /* ================= الكاشير ================= */
@@ -1344,7 +1489,16 @@ function getReceiptTemplate(ord, lines, t, cust){
   return templates[template] || templates.modern;
 }
 
-function generateReceiptHTML(ord, lines, t, cust) { return getReceiptTemplate(ord, lines, t, cust); }
+function generateReceiptHTML(ord, lines, t, cust) {
+  let html = getReceiptTemplate(ord, lines, t, cust);
+  if(SETTINGS.invoice_logo){
+    html = html.replace(/(<h2[^>]*>)/, '<div style="text-align:center;margin-bottom:6px"><img src="'+SETTINGS.invoice_logo+'" style="max-width:70px;max-height:70px;object-fit:contain"></div>$1');
+  }
+  if(SETTINGS.invoice_extra_info){
+    html = html.replace(/(<\/div>\s*)$/, '<div style="text-align:center;font-size:10px;color:#888;margin-top:6px;border-top:1px dashed #ccc;padding-top:6px">'+esc(SETTINGS.invoice_extra_info)+'</div>$1');
+  }
+  return html;
+}
 function generateReceiptText(ord, lines, t, cust) {
   const br = BRANCHES.find(b => b.id === ord.branch_id);
   let text = '';
@@ -1661,17 +1815,6 @@ async function saveOrder(print){
       await printSmart(ord, cartCopy, t, custInfo);
     }
     
-    // تحويل الطلب تلقائياً إلى delivered بعد 30 ثانية
-    setTimeout(async () => {
-      try {
-        await db.from('orders').update({ 
-          status: 'delivered', 
-          updated_at: new Date().toISOString() 
-        }).eq('id', ord.id);
-        console.log('✅ تم تحويل الطلب #' + ord.order_number + ' إلى delivered تلقائياً');
-      } catch(e) { console.error('فشل التحويل التلقائي:', e); }
-    }, 30000);
-    
     clearCart();
     
   } catch(err){ 
@@ -1856,10 +1999,15 @@ async function loadDay(){
       dayList.innerHTML = `<table class="tbl"><tr><th>#</th><th>الوقت</th><th>⏱️</th><th>النوع</th>${adm?'<th>الفرع</th>':''}<th>العميل</th><th>الكاشير</th><th>الأصناف</th><th>الإجمالي</th><th>الحالة</th><th></th></tr>
         ${DAY.map(o=>{
           const mins = Math.floor((Date.now()-new Date(o.created_at))/60000);
+          const readyMins = o.status==='ready' ? Math.floor((Date.now()-new Date(o.updated_at||o.created_at))/60000) : 0;
           const pending = o.status==='new';
+          const isReady = o.status==='ready';
           const late = pending && mins>=LATE_MIN;
-          const timer = pending ? `<span class="timer-chip ${late?'late':''}">${mins} د</span>` : (o.status==='cancelled'?'—':'✓');
-          return `<tr class="${o.status==='cancelled'?'off':''} ${late?'late':''}">
+          const readyLate = isReady && readyMins>=READY_WAIT_MIN;
+          const timer = pending ? `<span class="timer-chip ${late?'late':''}">${mins} د تجهيز</span>`
+            : isReady ? `<span class="timer-chip ${readyLate?'late':''}">${readyMins} د انتظار</span>`
+            : (o.status==='cancelled'?'—':'✓');
+          return `<tr class="${o.status==='cancelled'?'off':''} ${(late||readyLate)?'late':''}">
           <td><b>${o.order_number}</b></td>
           <td>${new Date(o.created_at).toLocaleTimeString('ar-JO',{hour:'2-digit',minute:'2-digit'})}</td>
           <td>${timer}</td>
@@ -1869,9 +2017,10 @@ async function loadDay(){
           <td>${esc(o.created_by_name||'—')}</td>
           <td>${(o.order_items||[]).map(l=>l.quantity+'× '+esc(l.item_name)).join('، ')}</td>
           <td><b>${fmt(o.total)}</b></td>
-          <td>${o.status==='new' ? '🔄 جديد' : (o.status==='delivered' ? '✅ منجز' : '❌ ملغي')}</td>
+          <td>${o.status==='new' ? '🔄 قيد التجهيز' : o.status==='ready' ? '📦 جاهز' : (o.status==='delivered' ? '✅ منجز' : '❌ ملغي')}</td>
           <td style="white-space:nowrap">
-            ${pending?`<button class="mini ok" onclick="finishOrder('${o.id}')">تم ✓</button>`:''}
+            ${pending?`<button class="mini ok" onclick="markReady('${o.id}')">✅ جاهز</button>`:''}
+            ${isReady?`<button class="mini ok" onclick="finishOrder('${o.id}')">📦 تم الاستلام</button>`:''}
             <button class="mini tog" onclick="reprintDay('${o.id}')">🖨️</button>
             ${o.order_type==='delivery' && o.status!=='cancelled' && (ME.role==='callcenter'||adm) ? `<button class="mini wa" onclick="waSend('${o.id}')">📲</button>` : ''}
             ${adm && o.status!=='cancelled' ? `<button class="mini edit" onclick="editOrder('${o.id}')">✏️</button>`:''}
@@ -1884,10 +2033,18 @@ async function loadDay(){
   }
 }
 
+async function markReady(id){
+  try {
+    await db.from('orders').update({ status:'ready', updated_at: new Date().toISOString() }).eq('id', id);
+    toast('✅ الطلب صار جاهز');
+    loadDay(); checkOverdue();
+  } catch(e) { console.error(e); }
+}
 async function finishOrder(id){ 
   try {
     await db.from('orders').update({ status:'delivered', updated_at: new Date().toISOString() }).eq('id', id); 
-    loadDay(); checkOverdue(); 
+    _readyAlertsSent.delete(id);
+    loadDay(); checkOverdue(); checkReadyAlerts();
   } catch(e) { console.error(e); }
 }
 
@@ -2415,6 +2572,7 @@ async function renderAdmin(){
       window.__ALLBR=allBr; 
     } catch(e) { console.error(e); }
   }
+  if(admView==='roles'){ renderRolesTab(); return; }
   if(admView==='ingredients'){ renderIngredients(); return; }
   if(admView==='recipes'){ renderRecipes(); return; }
   if(admView==='expenses'){ renderExpenses(); return; }
@@ -2453,8 +2611,37 @@ async function renderAdmin(){
           <option value="minimal" ${SETTINGS.receipt_template==='minimal'?'selected':''}>ميني</option>
         </select>
       </div>
+      <div class="fld"><label>🖼️ شعار/صورة رأس الفاتورة</label>
+        <input type="file" id="f_logoFile" accept="image/*" onchange="resizeLogoImage(this)">
+        <div id="f_logoPrev" style="margin-top:6px">${SETTINGS.invoice_logo?`<img src="${SETTINGS.invoice_logo}" style="width:80px;height:80px;object-fit:contain;border:1px solid var(--line);border-radius:8px"> <button type="button" class="mini del" onclick="window.__logoImg='';document.getElementById('f_logoPrev').innerHTML='(انحذفت)'">حذف</button>`:''}</div>
+      </div>
+      <div class="fld"><label>✍️ معلومات إضافية على الفاتورة (اختياري)</label>
+        <input id="f_extraInfo" value="${esc(SETTINGS.invoice_extra_info||'')}" placeholder="مثال: الرقم الضريبي، سياسة الاستبدال..."></div>
+
+      <hr style="margin:16px 0"><h4 style="color:var(--maroon)">🔔 نغمة التنبيه</h4>
+      <div class="fld"><label>اختر النغمة</label>
+        <select id="f_alertTone">
+          <option value="classic" ${(SETTINGS.alert_tone||'classic')==='classic'?'selected':''}>كلاسيكية (حادة)</option>
+          <option value="soft" ${SETTINGS.alert_tone==='soft'?'selected':''}>هادئة</option>
+          <option value="urgent" ${SETTINGS.alert_tone==='urgent'?'selected':''}>طارئة (عالية)</option>
+          <option value="bell" ${SETTINGS.alert_tone==='bell'?'selected':''}>جرس</option>
+        </select>
+        <button type="button" class="mini ok" style="margin-right:8px" onclick="testTone(document.getElementById('f_alertTone').value)">▶️ تجربة</button>
+      </div>
+      <div class="fld"><label>مستوى الصوت</label>
+        <input type="range" id="f_alertVolume" min="0.1" max="1" step="0.1" value="${SETTINGS.alert_volume||0.5}" style="width:100%"></div>
+
       <div class="m-act"><button class="save" onclick="saveSettings()">💾 حفظ الإعدادات</button></div>
-    </div>`; 
+    </div>
+
+    ${isAdmin() ? `
+    <div class="mbox" style="max-width:480px;margin-top:16px;border:2px solid var(--red)">
+      <h3 style="color:var(--red)">⚠️ منطقة الخطر — للمالك فقط</h3>
+      <div style="color:var(--muted);font-weight:700;font-size:.85rem;margin-bottom:12px">تصفير النظام بالكامل: بيمسح كل الطلبات، المشتريات، المصاريف، الشيفتات، والعملاء نهائيًا، ويرجّع المخزون لصفر. الفروع والموظفين والأصناف والأدوار بتبقى موجودة.</div>
+      <div class="fld"><label>اكتب <b>تصفير</b> للتأكيد</label><input id="f_resetConfirm" placeholder="اكتب: تصفير"></div>
+      <div class="m-act"><button class="save" style="background:var(--red)" onclick="doFullReset()">🗑️ تصفير النظام بالكامل</button></div>
+    </div>` : ''}
+  `; 
   }
   if(admView==='shifts'){
     C.innerHTML = `
@@ -2567,6 +2754,16 @@ async function reprintShift(id){
   const realName = ME.full_name; ME.full_name = sh.staff?.full_name || realName;
   printZReport(sh, rep);
   ME.full_name = realName;
+}
+
+/* ================= سجل النشاط (Activity Log) ================= */
+async function logActivity(action, details){
+  try {
+    await db.from('activity_log').insert({
+      staff_id: ME.id, staff_name: ME.full_name, action, details,
+      branch_id: ME.branch_id||null
+    });
+  } catch(e){ console.error('logActivity failed:', e); }
 }
 
 /* ================= المكونات والوصفات والمصاريف والمشتريات ================= */
@@ -2710,30 +2907,32 @@ async function renderExpenses(){
         <td>${esc(e.description||'—')}</td>
         <td><b style="color:var(--red)">${fmt(e.amount)} ${CURRENCY}</b></td>
         <td>${esc(BRANCHES.find(b=>b.id===e.branch_id)?.name_ar||'كل الفروع')}</td>
-        <td><button class="mini del" onclick="deleteExpense('${e.id}')">حذف</button></td>
+        <td><button class="mini edit" onclick="expenseForm('${e.id}')">تعديل</button> <button class="mini del" onclick="deleteExpense('${e.id}')">حذف</button></td>
       </tr>`).join('')||'<tr><td colspan="6" class="empty-note">ما في مصاريف</td></tr>'}
     </table></div>`;
 }
-function expenseForm(){
-  const today=new Date().toISOString().split('T')[0];
-  modal(`<h3>مصروف جديد</h3>
+function expenseForm(id){
+  const e = id ? (EXPENSES_DATA.find(x=>x.id===id)||{}) : {};
+  const today = e.expense_date || new Date().toISOString().split('T')[0];
+  modal(`<h3>${id?'تعديل مصروف':'مصروف جديد'}</h3>
     <div class="fld"><label>التاريخ</label><input type="date" id="fe_dt" value="${today}"></div>
-    <div class="fld"><label>النوع</label><select id="fe_cat">${EXP_CATS.map(c=>`<option>${c}</option>`).join('')}</select></div>
-    <div class="fld"><label>البيان</label><input id="fe_desc" placeholder="وصف المصروف"></div>
-    <div class="fld"><label>المبلغ (${CURRENCY})</label><input id="fe_amt" inputmode="decimal"></div>
+    <div class="fld"><label>النوع</label><select id="fe_cat">${EXP_CATS.map(c=>`<option ${c===e.category?'selected':''}>${c}</option>`).join('')}</select></div>
+    <div class="fld"><label>البيان</label><input id="fe_desc" placeholder="وصف المصروف" value="${esc(e.description||'')}"></div>
+    <div class="fld"><label>المبلغ (${CURRENCY})</label><input id="fe_amt" inputmode="decimal" value="${e.amount||''}"></div>
     <div class="fld"><label>الفرع</label><select id="fe_br"><option value="">كل الفروع</option>
-      ${BRANCHES.map(b=>`<option value="${b.id}">${esc(b.name_ar)}</option>`).join('')}</select></div>
-    <div class="m-act"><button class="save" onclick="saveExpense()">حفظ ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
+      ${BRANCHES.map(b=>`<option value="${b.id}" ${e.branch_id===b.id?'selected':''}>${esc(b.name_ar)}</option>`).join('')}</select></div>
+    <div class="m-act"><button class="save" onclick="saveExpense('${id||''}')">حفظ ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
 }
-async function saveExpense(){
+async function saveExpense(id){
   const rec={expense_date:document.getElementById('fe_dt').value,
     category:document.getElementById('fe_cat').value,
     description:document.getElementById('fe_desc').value.trim(),
     amount:parseFloat(document.getElementById('fe_amt').value)||0,
     branch_id:document.getElementById('fe_br').value||null};
   if(!rec.amount){toast('⚠️ المبلغ مطلوب');return;}
-  const r=await db.from('expenses').insert(rec);
+  const r = id ? await db.from('expenses').update(rec).eq('id',id) : await db.from('expenses').insert(rec);
   if(r.error){toast('✗ '+r.error.message);return;}
+  await logActivity(id?'edit_expense':'add_expense', 'مصروف: '+rec.category+' - '+fmt(rec.amount));
   closeModal();toast('✓ انحفظ');renderExpenses();
 }
 async function deleteExpense(id){
@@ -2759,9 +2958,49 @@ async function renderPurchases(){
         <td><b>${esc(p.supplier||'—')}</b></td>
         <td>${(p.purchase_items||[]).map(i=>esc(i.ingredients?.name||'—')).join('، ')}</td>
         <td><b style="color:var(--red)">${fmt(p.total)} ${CURRENCY}</b></td>
-        <td><button class="mini tog" onclick="showPurchaseDetail('${p.id}')">👁️</button></td>
+        <td style="white-space:nowrap">
+          <button class="mini tog" onclick="showPurchaseDetail('${p.id}')">👁️</button>
+          <button class="mini edit" onclick="editPurchaseInfo('${p.id}')">تعديل</button>
+          <button class="mini del" onclick="deletePurchase('${p.id}')">حذف</button>
+        </td>
       </tr>`).join('')||'<tr><td colspan="5" class="empty-note">ما في مشتريات</td></tr>'}
     </table></div>`;
+}
+function editPurchaseInfo(id){
+  const p = PURCHASES_DATA.find(x=>x.id===id); if(!p) return;
+  modal(`<h3>تعديل بيانات الفاتورة</h3>
+    <div style="color:var(--muted);font-size:.85rem;font-weight:700;margin-bottom:10px">⚠️ تعديل المواد والكميات غير متاح — احذف الفاتورة وأضف واحدة جديدة صحيحة</div>
+    <div class="fld"><label>التاريخ</label><input type="date" id="ep_dt" value="${p.purchase_date}"></div>
+    <div class="fld"><label>المورد</label><input id="ep_sup" value="${esc(p.supplier||'')}"></div>
+    <div class="fld"><label>ملاحظات</label><input id="ep_note" value="${esc(p.notes||'')}"></div>
+    <div class="m-act"><button class="save" onclick="savePurchaseInfo('${id}')">حفظ ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
+}
+async function savePurchaseInfo(id){
+  const rec={purchase_date:document.getElementById('ep_dt').value, supplier:document.getElementById('ep_sup').value.trim(), notes:document.getElementById('ep_note').value.trim()||null};
+  const r=await db.from('purchases').update(rec).eq('id',id);
+  if(r.error){toast('✗ '+r.error.message);return;}
+  await logActivity('edit_purchase','فاتورة شراء: '+rec.supplier);
+  closeModal();toast('✓ انحفظ');renderPurchases();
+}
+async function deletePurchase(id){
+  if(!confirm('حذف فاتورة الشراء؟ سيتم التراجع عن كمياتها من المخزون.')) return;
+  const p = PURCHASES_DATA.find(x=>x.id===id); if(!p) return;
+  try{
+    // التراجع عن الكميات المضافة للمخزون بكل الفروع
+    const targetBranch = p.branch_id;
+    const branchesToRevert = targetBranch ? BRANCHES.filter(b=>b.id===targetBranch) : BRANCHES;
+    for(const item of (p.purchase_items||[])){
+      for(const branch of branchesToRevert){
+        const {data:bi} = await db.from('branch_inventory').select('id,stock').eq('branch_id',branch.id).eq('ingredient_id',item.ingredient_id).maybeSingle();
+        if(bi) await db.from('branch_inventory').update({stock: Math.max(0,(bi.stock||0)-item.quantity)}).eq('id',bi.id);
+      }
+    }
+    await db.from('purchase_items').delete().eq('purchase_id',id);
+    await db.from('purchases').delete().eq('id',id);
+    await logActivity('delete_purchase','حذف فاتورة: '+(p.supplier||'—'));
+    toast('✓ اتحذفت الفاتورة وترجّع المخزون');
+    renderPurchases();
+  }catch(e){ toast('✗ '+e.message); }
 }
 function showPurchaseDetail(id){
   const p=PURCHASES_DATA.find(x=>x.id===id);if(!p)return;
@@ -2985,22 +3224,69 @@ async function doInventory(branchId, branchName){
     id:i.id, ingId:i.ingredient_id, name:i.ingredients?.name||'—',
     unit:i.ingredients?.unit||'', stock:i.stock||0, min_stock:i.min_stock||0
   }));
-  modal(`<h3>📋 جرد مخزون — ${esc(branchName)}</h3>
-    <div style="font-weight:700;color:var(--muted);font-size:.85rem;margin-bottom:10px">عدّ المخزون وعدّل الأرقام ← احفظ</div>
+  modal(`<h3>📋 جرد احترافي — ${esc(branchName)}</h3>
+    <div style="font-weight:700;color:var(--muted);font-size:.85rem;margin-bottom:10px">النظام بيعرض الكمية المتوقعة (حسب المبيعات والمشتريات) — عدّ المخزون الفعلي واكتبه، وشوف الفرق تلقائيًا</div>
     <div style="max-height:380px;overflow-y:auto">
-      ${rows.map((r,idx)=>`<div class="two" style="margin-bottom:8px;align-items:center">
+      <div class="two" style="font-weight:900;color:var(--maroon);font-size:.82rem;margin-bottom:4px">
+        <span style="flex:2">المادة</span><span style="flex:1">المتوقع</span><span style="flex:1">الفعلي (عدّه)</span>
+      </div>
+      ${rows.map((r,idx)=>`<div class="two" style="margin-bottom:8px;align-items:center" id="audit_row_${idx}">
         <span style="flex:2;font-weight:700">${esc(r.name)} <small style="color:var(--muted)">(${esc(r.unit)})</small></span>
-        <input class="inv_qty" data-id="${r.id}" type="number" step="0.01" value="${r.stock}" 
+        <span class="audit_expected" data-id="${r.id}" data-ingid="${r.ingId}" data-expected="${r.stock}" style="flex:1;font-weight:900;color:var(--muted)">${r.stock}</span>
+        <input class="inv_qty" data-id="${r.id}" type="number" step="0.01" placeholder="عدّ..." 
+          oninput="updateAuditVariance(${idx})"
           style="flex:1;border:1.5px solid var(--line);border-radius:10px;padding:7px 10px;min-width:80px">
-        <input class="inv_min" type="number" step="0.01" value="${r.min_stock}" placeholder="حد أدنى"
-          style="flex:1;border:1.5px solid var(--line);border-radius:10px;padding:7px 10px;min-width:80px;border-color:var(--warn)">
-      </div>`).join('')||'<div class="empty-note">ما في مواد — اضغط "تهيئة مخزون الفروع" أولاً</div>'}
+      </div>
+      <div id="audit_var_${idx}" style="font-size:.78rem;font-weight:800;margin:-4px 0 6px 0;padding-right:4px"></div>`).join('')||'<div class="empty-note">ما في مواد — اضغط "تهيئة مخزون الفروع" أولاً</div>'}
     </div>
-    <div style="display:flex;gap:6px;margin-top:4px;font-size:.78rem;color:var(--muted)"><span>⬆️ الكمية الفعلية</span><span style="color:var(--warn)">⬆️ الحد الأدنى</span></div>
     <div class="m-act">
-      <button class="save" onclick="saveInventory('${branchId}','${esc(branchName)}')">💾 حفظ الجرد</button>
+      <button class="save" onclick="saveInventoryAudit('${branchId}','${esc(branchName)}')">💾 حفظ الجرد وتسجيله</button>
       <button class="cancel" onclick="closeModal()">إلغاء</button>
     </div>`);
+}
+function updateAuditVariance(idx){
+  const row = document.getElementById('audit_row_'+idx);
+  const expected = parseFloat(row.querySelector('.audit_expected').dataset.expected)||0;
+  const actualInput = row.querySelector('.inv_qty');
+  const actual = parseFloat(actualInput.value);
+  const varDiv = document.getElementById('audit_var_'+idx);
+  if(isNaN(actual)){ varDiv.innerHTML=''; return; }
+  const diff = actual - expected;
+  if(Math.abs(diff)<0.001){ varDiv.innerHTML = '<span style="color:var(--ok)">✓ مطابق</span>'; }
+  else if(diff<0){ varDiv.innerHTML = '<span style="color:var(--red)">🔻 نقص '+Math.abs(diff).toFixed(2)+'</span>'; }
+  else { varDiv.innerHTML = '<span style="color:var(--warn)">🔺 زيادة '+diff.toFixed(2)+'</span>'; }
+}
+async function saveInventoryAudit(branchId, branchName){
+  const qtys=[...document.querySelectorAll('.inv_qty')];
+  const results = [];
+  let updated=0;
+  for(const inp of qtys){
+    const id = inp.dataset.id;
+    const actual = parseFloat(inp.value);
+    if(isNaN(actual)) continue; // تجاوز أي مادة ما انعدّت
+    const row = inp.closest('.two');
+    const expSpan = row.querySelector('.audit_expected');
+    const expected = parseFloat(expSpan.dataset.expected)||0;
+    const ingId = expSpan.dataset.ingid;
+    const diff = actual - expected;
+    results.push({ ingredient_id: ingId, expected, actual, variance: diff });
+    await db.from('branch_inventory').update({stock: actual}).eq('id', id);
+    updated++;
+  }
+  if(!updated){ toast('⚠️ عدّ مادة واحدة على الأقل'); return; }
+  // تسجيل الجرد بسجل دائم
+  const totalVarianceItems = results.filter(r=>Math.abs(r.variance)>0.001).length;
+  try{
+    await db.from('inventory_audits').insert({
+      branch_id: branchId, staff_id: ME.id, staff_name: ME.full_name,
+      items_counted: updated, items_with_variance: totalVarianceItems,
+      details: results
+    });
+  }catch(e){ console.error('audit log failed:', e); }
+  await logActivity('inventory_audit', 'جرد '+branchName+' — '+updated+' مادة، '+totalVarianceItems+' فرق');
+  closeModal();
+  toast(totalVarianceItems>0 ? ('⚠️ الجرد اتحفظ — '+totalVarianceItems+' مادة فيها فرق') : '✅ الجرد اتحفظ — كل شي مطابق');
+  renderInventory();
 }
 async function saveInventory(branchId, branchName){
   const qtys=[...document.querySelectorAll('.inv_qty')];
@@ -3058,8 +3344,28 @@ async function renderInventory(){
     <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">
       <button class="add-btn" style="margin:0" onclick="initBranchStock()">⚡ تهيئة مخزون الفروع</button>
       <button class="mini ok" style="padding:9px 18px" onclick="admTab('transfers')">🔄 نقل بضاعة بين الفروع</button>
+      <button class="mini edit" style="padding:9px 18px" onclick="showAuditHistory()">📜 سجل عمليات الجرد</button>
     </div>
     ${branchHtml}`;
+}
+async function showAuditHistory(){
+  const {data} = await db.from('inventory_audits')
+    .select('*, branches(name_ar)').order('created_at',{ascending:false}).limit(50);
+  const audits = data||[];
+  modal(`<h3>📜 سجل عمليات الجرد</h3>
+    <div style="max-height:420px;overflow-y:auto">
+      <table class="tbl">
+        <tr><th>التاريخ</th><th>الفرع</th><th>الموظف</th><th>مواد معدودة</th><th>فروقات</th></tr>
+        ${audits.map(a=>`<tr class="${a.items_with_variance>0?'late':''}">
+          <td>${new Date(a.created_at).toLocaleString('ar-JO')}</td>
+          <td>${esc(a.branches?.name_ar||'—')}</td>
+          <td>${esc(a.staff_name||'—')}</td>
+          <td>${a.items_counted}</td>
+          <td>${a.items_with_variance>0?`<b style="color:var(--red)">⚠️ ${a.items_with_variance}</b>`:'<span style="color:var(--ok)">✓ لا شي</span>'}</td>
+        </tr>`).join('')||'<tr><td colspan="5" class="empty-note">ما في عمليات جرد مسجلة بعد</td></tr>'}
+      </table>
+    </div>
+    <div class="m-act"><button class="cancel" onclick="closeModal()">إغلاق</button></div>`);
 }
 
 /* ---- تعديل مخزون يدوي ---- */
@@ -3186,23 +3492,71 @@ async function saveTransfer(){
 /* ================= نماذج الإدارة ================= */
 function modal(html){ closeModal(); const d=document.createElement('div'); d.className='modal'; d.id='theModal'; d.innerHTML=`<div class="mbox">${html}</div>`; d.onclick=e=>{ if(e.target===d) d.remove(); }; document.body.appendChild(d); }
 function closeModal(){ const m = document.getElementById('theModal'); if (m) m.remove(); }
+window.__logoImg = undefined;
+window.resizeLogoImage = function(input){
+  const f = input.files && input.files[0]; if(!f) return;
+  const img = new Image();
+  img.onload = ()=>{
+    const cv = document.createElement('canvas');
+    const scale = Math.min(1, 240/Math.max(img.width, img.height));
+    cv.width = Math.round(img.width*scale); cv.height = Math.round(img.height*scale);
+    cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+    window.__logoImg = cv.toDataURL('image/png', 0.85);
+    document.getElementById('f_logoPrev').innerHTML = '<img src="'+window.__logoImg+'" style="width:80px;height:80px;object-fit:contain;border:1px solid var(--line);border-radius:8px">';
+  };
+  img.src = URL.createObjectURL(f);
+};
 async function saveSettings(){
   const f_wanum = document.getElementById('f_wanum');
   const f_receiptTemplate = document.getElementById('f_receiptTemplate');
   const f_printMethod = document.getElementById('f_printMethod');
   const f_printerIP = document.getElementById('f_printerIP');
   const f_printerPort = document.getElementById('f_printerPort');
+  const f_extraInfo = document.getElementById('f_extraInfo');
+  const f_alertTone = document.getElementById('f_alertTone');
+  const f_alertVolume = document.getElementById('f_alertVolume');
   const settings = {
     delivery_whatsapp: f_wanum ? f_wanum.value.trim() : '',
     printer_method: f_printMethod ? f_printMethod.value : 'auto',
     printer_ip: f_printerIP ? f_printerIP.value.trim() : '',
     printer_port: f_printerPort ? f_printerPort.value.trim() : '9100',
-    receipt_template: f_receiptTemplate ? f_receiptTemplate.value : 'modern'
+    receipt_template: f_receiptTemplate ? f_receiptTemplate.value : 'modern',
+    invoice_extra_info: f_extraInfo ? f_extraInfo.value.trim() : '',
+    alert_tone: f_alertTone ? f_alertTone.value : 'classic',
+    alert_volume: f_alertVolume ? f_alertVolume.value : '0.5',
   };
+  if(window.__logoImg !== undefined) settings.invoice_logo = window.__logoImg || '';
   try {
     for(const[key,value]of Object.entries(settings)){ await db.from('settings').upsert({key,value}); SETTINGS[key]=value; }
+    window.__logoImg = undefined;
+    await logActivity('edit_settings', 'تحديث إعدادات النظام');
     toast('✓ تم الحفظ');
   } catch(e) { console.error(e); toast('✗ فشل الحفظ'); }
+}
+
+/* ================= تصفير النظام (المالك فقط) ================= */
+async function doFullReset(){
+  if(!isAdmin()){ toast('⛔ صلاحية المالك فقط'); return; }
+  const confirmTxt = document.getElementById('f_resetConfirm')?.value.trim();
+  if(confirmTxt !== 'تصفير'){ toast('⚠️ اكتب "تصفير" بالضبط للتأكيد'); return; }
+  if(!confirm('⚠️ تأكيد أخير: هذا سيمسح كل البيانات نهائيًا ولا يمكن التراجع. متابع؟')) return;
+  try {
+    toast('⏳ جاري التصفير...');
+    await db.from('order_items').delete().neq('id','00000000-0000-0000-0000-000000000000');
+    await db.from('orders').delete().neq('id','00000000-0000-0000-0000-000000000000');
+    await db.from('purchase_items').delete().neq('id','00000000-0000-0000-0000-000000000000');
+    await db.from('purchases').delete().neq('id','00000000-0000-0000-0000-000000000000');
+    await db.from('expenses').delete().neq('id','00000000-0000-0000-0000-000000000000');
+    await db.from('cash_shifts').delete().neq('id','00000000-0000-0000-0000-000000000000');
+    await db.from('customers').delete().neq('id','00000000-0000-0000-0000-000000000000');
+    await db.from('stock_transfers').delete().neq('id','00000000-0000-0000-0000-000000000000');
+    await db.from('inventory_audits').delete().neq('id','00000000-0000-0000-0000-000000000000');
+    await db.from('branch_inventory').update({stock:0}).neq('id','00000000-0000-0000-0000-000000000000');
+    await logActivity('full_reset', 'تصفير كامل للنظام بواسطة '+ME.full_name);
+    toast('✅ تم تصفير النظام بالكامل — الفروع والموظفين والأصناف محفوظين');
+    closeModal();
+    setTimeout(()=>location.reload(), 1500);
+  } catch(e) { console.error(e); toast('✗ خطأ أثناء التصفير: '+e.message); }
 }
 function codeForm(id){ const list=window.__CODES||[]; const c=list.find(x=>x.id===id)||{}; modal(`<h3>${id?'تعديل كود':'كود جديد'}</h3><div class="fld"><label>الكود</label><input id="f_cc" value="${esc(c.code||'')}" style="text-transform:uppercase"></div><div class="fld"><label>النوع</label><select id="f_ck"><option value="percent" ${c.kind!=='fixed'?'selected':''}>نسبة %</option><option value="fixed" ${c.kind==='fixed'?'selected':''}>مبلغ ثابت</option></select></div><div class="fld"><label>القيمة</label><input id="f_cv" inputmode="decimal" value="${c.value??''}"></div><div class="m-act"><button class="save" onclick="saveCode('${id||''}')">حفظ</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`); }
 async function saveCode(id){ 
@@ -3266,10 +3620,15 @@ async function saveCat(id){
   } catch(e) { console.error(e); }
 }
 async function toggleCat(id,v){ try { const r=await db.from('categories').update({is_active:v}).eq('id',id); if(r.error){toast('✗ '+r.error.message);console.error(r.error);return;} toast(v?'✓ ظاهر':'✓ مخفي'); renderAdmin(); bootData(); } catch(e) { toast('✗ '+e.message); console.error(e); } }
-function staffForm(id){
+async function staffForm(id){
+  await loadCustomRoles();
   const st = STAFF.find(x=>x.id===id)||{};
   const effPerm = k => {
     if(st.permissions && typeof st.permissions==='object' && k in st.permissions) return !!st.permissions[k];
+    if(st.role==='custom' && st.role_id){
+      const cr = CUSTOM_ROLES.find(r=>r.id===st.role_id);
+      return !!(cr?.permissions||{})[k];
+    }
     return (ROLE_DEFAULT_PERMS[st.role||'cashier']||[]).includes(k);
   };
   const permHtml = Object.entries(PERMS).map(([grp, keys])=>`
@@ -3285,7 +3644,9 @@ function staffForm(id){
     <div class="fld"><label>الدور</label><select id="f_sr" onchange="resetPermsToRole(this.value)">
       <option value="cashier" ${st.role==='cashier'?'selected':''}>كاشير</option>
       <option value="callcenter" ${st.role==='callcenter'?'selected':''}>كول سنتر</option>
-      <option value="admin" ${st.role==='admin'?'selected':''}>مدير (كل الصلاحيات)</option></select></div>
+      <option value="admin" ${st.role==='admin'?'selected':''}>مدير (كل الصلاحيات)</option>
+      ${CUSTOM_ROLES.map(r=>`<option value="custom:${r.id}" ${st.role==='custom'&&st.role_id===r.id?'selected':''}>${esc(r.name)}</option>`).join('')}
+      </select></div>
     <div class="fld"><label>الفرع</label><select id="f_sb"><option value="">كل الفروع</option>
       ${BRANCHES.map(b=>`<option value="${b.id}" ${st.branch_id===b.id?'selected':''}>${esc(b.name_ar)}</option>`).join('')}</select></div>
     <div class="fld" id="permsBox"><label>الصلاحيات * <span style="font-weight:600">(عدّل زي ما بدك — بتنحفظ لهاد الموظف تحديدًا)</span></label>
@@ -3300,6 +3661,13 @@ function staffForm(id){
 }
 window.resetPermsToRole = function(role){
   document.getElementById('permsBox').style.display = (role==='admin') ? 'none' : '';
+  if(role.startsWith('custom:')){
+    const rid = role.split(':')[1];
+    const cr = CUSTOM_ROLES.find(r=>r.id===rid);
+    const perms = cr?.permissions || {};
+    document.querySelectorAll('.permChk').forEach(c=>c.checked = !!perms[c.dataset.perm]);
+    return;
+  }
   const defs = ROLE_DEFAULT_PERMS[role]||[];
   document.querySelectorAll('.permChk').forEach(c=>c.checked = defs.includes(c.dataset.perm));
 };
@@ -3312,7 +3680,10 @@ async function saveStaff(id){
   const f_sb = document.getElementById('f_sb');
   const permissions = {};
   document.querySelectorAll('.permChk').forEach(c=>{ permissions[c.dataset.perm] = c.checked; });
-  const rec={full_name: f_sn ? f_sn.value.trim() : '', username: f_su ? f_su.value.trim() : '', pin: f_sp ? f_sp.value.trim() : '', role: f_sr ? f_sr.value : 'cashier', branch_id: f_sb ? f_sb.value||null : null, permissions}; 
+  let roleVal = f_sr ? f_sr.value : 'cashier';
+  let roleId = null;
+  if(roleVal.startsWith('custom:')){ roleId = roleVal.split(':')[1]; roleVal='custom'; }
+  const rec={full_name: f_sn ? f_sn.value.trim() : '', username: f_su ? f_su.value.trim() : '', pin: f_sp ? f_sp.value.trim() : '', role: roleVal, role_id: roleId, branch_id: f_sb ? f_sb.value||null : null, permissions}; 
   if(!rec.full_name||!rec.username||!/^\d{4}$/.test(rec.pin)){ toast('⚠️ جميع الحقول مطلوبة'); return; } 
   if(rec.role==='cashier'&&!rec.branch_id){ toast('⚠️ الكاشير يحتاج فرع'); return; } 
   const dup=STAFF.find(x=>x.pin===rec.pin&&x.id!==id&&x.is_active); 
