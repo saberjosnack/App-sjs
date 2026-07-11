@@ -380,6 +380,21 @@ input, textarea, select { -webkit-user-select:text !important }
 
     <!-- ===== الطلبات ===== -->
     <section id="v-day" class="hidden">
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px" id="dayQuickFilters">
+        <button class="mini ok" onclick="setDayFilter('today')">📅 اليوم</button>
+        <button class="mini tog" onclick="setDayFilter('yesterday')">📅 البارحة</button>
+        <button class="mini tog" onclick="setDayFilter('week')">📅 هذا الأسبوع</button>
+        <button class="mini tog" onclick="setDayFilter('month')">📅 هذا الشهر</button>
+        <button class="mini tog" onclick="setDayFilter('last7')">📅 آخر 7 أيام</button>
+        <button class="mini tog" onclick="setDayFilter('last30')">📅 آخر 30 يوم</button>
+        <button class="mini edit" onclick="setDayFilter('custom')">📅 تحديد يدوي</button>
+      </div>
+      <div id="dayCustomRow" class="hidden" style="display:none;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+        <div><label style="font-weight:700;font-size:.82rem;color:var(--muted)">من تاريخ</label><br><input type="date" id="dayFrom" class="dfield" style="width:auto"></div>
+        <div><label style="font-weight:700;font-size:.82rem;color:var(--muted)">إلى تاريخ</label><br><input type="date" id="dayTo" class="dfield" style="width:auto"></div>
+        <div style="display:flex;align-items:flex-end"><button class="mini ok" style="padding:9px 18px" onclick="loadDay()">عرض</button></div>
+      </div>
+      <div id="dayDateLabel" style="font-weight:900;color:var(--maroon);margin-bottom:8px;font-size:.9rem"></div>
       <div class="search-bar hidden" id="invSearchBar">
         <input id="invSearch" placeholder="🔍 بحث عن فاتورة: رقم الطلب / رقم الهاتف / اسم العميل" onkeydown="if(event.key==='Enter')searchInvoices()">
         <button class="mini ok" style="padding:10px 20px" onclick="searchInvoices()">بحث</button>
@@ -400,6 +415,21 @@ input, textarea, select { -webkit-user-select:text !important }
 
     <!-- ===== اللوحة (مدير) ===== -->
     <section id="v-dash" class="hidden">
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px" id="dashQuickFilters">
+        <button class="mini ok" onclick="setDashFilter('today')">📅 اليوم</button>
+        <button class="mini tog" onclick="setDashFilter('yesterday')">📅 البارحة</button>
+        <button class="mini tog" onclick="setDashFilter('week')">📅 هذا الأسبوع</button>
+        <button class="mini tog" onclick="setDashFilter('month')">📅 هذا الشهر</button>
+        <button class="mini tog" onclick="setDashFilter('last7')">📅 آخر 7 أيام</button>
+        <button class="mini tog" onclick="setDashFilter('last30')">📅 آخر 30 يوم</button>
+        <button class="mini edit" onclick="setDashFilter('custom')">📅 تحديد يدوي</button>
+      </div>
+      <div id="dashCustomRow" class="hidden" style="display:none;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+        <div><label style="font-weight:700;font-size:.82rem;color:var(--muted)">من تاريخ</label><br><input type="date" id="dashFrom" class="dfield" style="width:auto"></div>
+        <div><label style="font-weight:700;font-size:.82rem;color:var(--muted)">إلى تاريخ</label><br><input type="date" id="dashTo" class="dfield" style="width:auto"></div>
+        <div style="display:flex;align-items:flex-end"><button class="mini ok" style="padding:9px 18px" onclick="loadDashboard()">عرض</button></div>
+      </div>
+      <div id="dashDateLabel" style="font-weight:900;color:var(--maroon);margin-bottom:8px;font-size:.9rem"></div>
       <div id="dashAlert"></div>
       <div class="day-head" id="dashCards"></div>
       <div class="dash-grid">
@@ -450,6 +480,7 @@ input, textarea, select { -webkit-user-select:text !important }
         <button data-r="profit" onclick="repTab('profit')">💰 الأرباح</button>
         <button data-r="foodcost" onclick="repTab('foodcost')">🍔 Food Cost</button>
       </div>
+      <div id="salesKPI"></div>
       <div id="salesSummary"></div>
       <div class="tbl-wrap" id="salesDetails"></div>
     </section>
@@ -462,6 +493,7 @@ input, textarea, select { -webkit-user-select:text !important }
         <button data-a="codes" onclick="admTab('codes')">🎟️ أكواد الخصم</button>
         <button data-a="staff" onclick="admTab('staff')">👥 الموظفين</button>
         <button data-a="branches" onclick="admTab('branches')">🏪 الفروع</button>
+        <button data-a="inventory" onclick="admTab('inventory')" style="background:var(--yellow);border-color:#d9c400">📋 جرد المخزون</button>
         <button data-a="ingredients" onclick="admTab('ingredients')">🥩 المكونات</button>
         <button data-a="recipes" onclick="admTab('recipes')">📋 الوصفات</button>
         <button data-a="inventory" onclick="admTab('inventory')">📦 المخزون</button>
@@ -787,7 +819,9 @@ window.startShift = async function(){
     openingValue = parseFloat(opening);
     if(isNaN(openingValue) || openingValue < 0){ toast('⚠️ اكتب مبلغ صحيح'); return; }
   } else if(!confirm('▶️ فتح شيفت جديد؟')) return;
-  const branch_id = ME.branch_id || document.getElementById('branchSel')?.value || null;
+  const _bsel = document.getElementById('branchSel')?.value;
+  const branch_id = ME.branch_id || (_bsel && _bsel!==''?_bsel:null) || BRANCHES[0]?.id || null;
+  if(!branch_id){ toast('⚠️ اختر الفرع أولاً'); $('btnSave').disabled=false; return; }
   
   try {
     const { error: checkError } = await db.from('cash_shifts').select('id').limit(1);
@@ -1673,6 +1707,31 @@ function showInvoice(id){
     </div>`);
 }
 
+function setDayFilter(mode){
+  document.querySelectorAll('#dayQuickFilters button').forEach(b=>b.className='mini tog');
+  const map={today:0,yesterday:1};
+  document.querySelectorAll('#dayQuickFilters button').forEach(b=>{
+    if(b.getAttribute('onclick')?.includes("'"+mode+"'")) b.className='mini ok';
+  });
+  const cdr=document.getElementById('dayCustomRow');
+  const lbl=document.getElementById('dayDateLabel');
+  let from='',to='',label='';
+  if(mode==='custom'){
+    if(cdr){cdr.style.display='flex';cdr.classList.remove('hidden');}
+    if(lbl) lbl.textContent='حدد الفترة ثم اضغط عرض';
+    return;
+  }
+  if(cdr){cdr.style.display='none';cdr.classList.add('hidden');}
+  if(mode==='today'){ const fd=getFinancialDay(); from=fd.from; to=fd.to; label='📅 اليوم — '+fd.label; }
+  if(mode==='yesterday'){ const fd=getFinancialDay(1); from=fd.from; to=fd.to; label='📅 البارحة — '+fd.label; }
+  if(mode==='week'){ const fd=getFinancialWeek(); from=fd.from; to=fd.to; label='📅 هذا الأسبوع'; }
+  if(mode==='month'){ const fd=getFinancialMonth(); from=fd.from; to=fd.to; label='📅 هذا الشهر'; }
+  if(mode==='last7'){ const t=new Date(); const f=new Date(t-7*86400000); from=f.toISOString(); to=t.toISOString(); label='📅 آخر 7 أيام'; }
+  if(mode==='last30'){ const t=new Date(); const f=new Date(t-30*86400000); from=f.toISOString(); to=t.toISOString(); label='📅 آخر 30 يوم'; }
+  window.__dayFrom=from; window.__dayTo=to;
+  if(lbl) lbl.textContent=label;
+  loadDay();
+}
 async function loadDay(){
   try {
     const adm = isAdmin();
@@ -1683,9 +1742,19 @@ async function loadDay(){
       .order('created_at', {ascending:false});
     
     if (adm) {
-      // المدير: اليوم المالي (10ص → 3ص)
-      const fd = getFinancialDay();
-      q = q.gte('created_at', fd.from).lte('created_at', fd.to);
+      // المدير: فلتر ذكي (اليوم/أسبوع/شهر...) أو يدوي، وإلا اليوم المالي الافتراضي
+      const df = document.getElementById('dayFrom')?.value;
+      const dt = document.getElementById('dayTo')?.value;
+      if(window.__dayFrom && window.__dayTo){
+        q = q.gte('created_at', window.__dayFrom).lte('created_at', window.__dayTo);
+      } else if(df && dt){
+        q = q.gte('created_at', df+'T00:00:00').lte('created_at', dt+'T23:59:59');
+      } else {
+        const fd = getFinancialDay();
+        q = q.gte('created_at', fd.from).lte('created_at', fd.to);
+        window.__dayFrom=fd.from; window.__dayTo=fd.to;
+        setTimeout(()=>{ const lbl=document.getElementById('dayDateLabel'); if(lbl && !lbl.textContent) lbl.textContent='📅 اليوم — '+fd.label; },0);
+      }
       if (ME.branch_id) q = q.eq('branch_id', ME.branch_id);
     } else {
       // الموظف: آخر 6 فواتير فقط (ضد السرقة) ومن فرعه فقط
@@ -1978,7 +2047,37 @@ function getRepRange(){
 function printSalesReport(){ window.print(); }
 
 /* ================= مخطط المبيعات ================= */
+function renderKPICards(orders){
+  const K=document.getElementById('salesKPI');
+  if(!K) return;
+  const ok=(orders||[]).filter(o=>o.status!=='cancelled');
+  const cancelled=(orders||[]).filter(o=>o.status==='cancelled');
+  const gross=ok.reduce((a,o)=>a+parseFloat(o.subtotal||0),0);
+  const discounts=ok.reduce((a,o)=>a+parseFloat(o.discount||0),0);
+  const net=ok.reduce((a,o)=>a+parseFloat(o.total||0),0);
+  const delivery=ok.filter(o=>o.order_type==='delivery');
+  const takeaway=ok.filter(o=>o.order_type==='takeaway');
+  const avgOrder=ok.length?net/ok.length:0;
+  const byBranch={};
+  ok.forEach(o=>{ const b=BRANCHES.find(x=>x.id===o.branch_id)?.name_ar||'—'; byBranch[b]=(byBranch[b]||0)+parseFloat(o.total||0); });
+  K.innerHTML = `
+    <div class="day-head" style="margin-bottom:10px">
+      <div class="stat">إجمالي المبيعات<b>${fmt(gross)} ${CURRENCY}</b></div>
+      <div class="stat">صافي المبيعات<b style="color:var(--red)">${fmt(net)} ${CURRENCY}</b></div>
+      <div class="stat">الخصومات<b style="color:var(--warn)">${fmt(discounts)} ${CURRENCY}</b></div>
+      <div class="stat">عدد الطلبات<b>${ok.length}</b></div>
+      <div class="stat">متوسط الفاتورة<b>${fmt(avgOrder)} ${CURRENCY}</b></div>
+      <div class="stat">طلبات ملغاة<b style="color:var(--red)">${cancelled.length}</b></div>
+      <div class="stat">توصيل<b>${delivery.length} <small>(${fmt(delivery.reduce((a,o)=>a+parseFloat(o.total||0),0))})</small></b></div>
+      <div class="stat">استلام<b>${takeaway.length} <small>(${fmt(takeaway.reduce((a,o)=>a+parseFloat(o.total||0),0))})</small></b></div>
+    </div>
+    ${Object.keys(byBranch).length>1?`<div class="day-head" style="margin-bottom:10px">
+      ${Object.entries(byBranch).map(([b,v])=>`<div class="stat">🏪 ${esc(b)}<b>${fmt(v)} ${CURRENCY}</b></div>`).join('')}
+    </div>`:''}`;
+}
+
 async function renderSalesChart(orders){
+  renderKPICards(orders);
   const D=document.getElementById('salesSummary');
   if(!orders||!orders.length){ if(D) D.innerHTML=''; return; }
   // تجميع بالساعة
@@ -2797,6 +2896,46 @@ async function loadRepExtra(mode){
 /* ================= المخزون لكل فرع ================= */
 
 /* ---- عرض مخزون الفروع ---- */
+async function doInventory(branchId, branchName){
+  await loadIngredients();
+  const {data:inv}=await db.from('branch_inventory').select('*, ingredients(name,unit)').eq('branch_id',branchId);
+  const rows=(inv||[]).map(i=>({
+    id:i.id, ingId:i.ingredient_id, name:i.ingredients?.name||'—',
+    unit:i.ingredients?.unit||'', stock:i.stock||0, min_stock:i.min_stock||0
+  }));
+  modal(`<h3>📋 جرد مخزون — ${esc(branchName)}</h3>
+    <div style="font-weight:700;color:var(--muted);font-size:.85rem;margin-bottom:10px">عدّ المخزون وعدّل الأرقام ← احفظ</div>
+    <div style="max-height:380px;overflow-y:auto">
+      ${rows.map((r,idx)=>`<div class="two" style="margin-bottom:8px;align-items:center">
+        <span style="flex:2;font-weight:700">${esc(r.name)} <small style="color:var(--muted)">(${esc(r.unit)})</small></span>
+        <input class="inv_qty" data-id="${r.id}" type="number" step="0.01" value="${r.stock}" 
+          style="flex:1;border:1.5px solid var(--line);border-radius:10px;padding:7px 10px;min-width:80px">
+        <input class="inv_min" type="number" step="0.01" value="${r.min_stock}" placeholder="حد أدنى"
+          style="flex:1;border:1.5px solid var(--line);border-radius:10px;padding:7px 10px;min-width:80px;border-color:var(--warn)">
+      </div>`).join('')||'<div class="empty-note">ما في مواد — اضغط "تهيئة مخزون الفروع" أولاً</div>'}
+    </div>
+    <div style="display:flex;gap:6px;margin-top:4px;font-size:.78rem;color:var(--muted)"><span>⬆️ الكمية الفعلية</span><span style="color:var(--warn)">⬆️ الحد الأدنى</span></div>
+    <div class="m-act">
+      <button class="save" onclick="saveInventory('${branchId}','${esc(branchName)}')">💾 حفظ الجرد</button>
+      <button class="cancel" onclick="closeModal()">إلغاء</button>
+    </div>`);
+}
+async function saveInventory(branchId, branchName){
+  const qtys=[...document.querySelectorAll('.inv_qty')];
+  const mins=[...document.querySelectorAll('.inv_min')];
+  let updated=0;
+  for(let i=0;i<qtys.length;i++){
+    const id=qtys[i].dataset.id;
+    const stock=parseFloat(qtys[i].value)||0;
+    const min_stock=parseFloat(mins[i]?.value)||0;
+    await db.from('branch_inventory').update({stock,min_stock}).eq('id',id);
+    updated++;
+  }
+  closeModal();
+  toast('✅ تم حفظ جرد '+branchName+' — '+updated+' مادة');
+  renderInventory();
+}
+
 async function renderInventory(){
   await loadIngredients();
   const C = document.getElementById('admContent');
@@ -3104,31 +3243,62 @@ async function saveStaff(id){
   } catch(e) { console.error(e); }
 }
 async function toggleStaff(id,v){ try { await db.from('staff').update({is_active:v}).eq('id',id); renderAdmin(); } catch(e) { console.error(e); } }
-function branchForm(id){ const list=window.__ALLBR||BRANCHES; const b=list.find(x=>x.id===id)||{}; modal(`<h3>${id?'تعديل فرع':'فرع جديد'}</h3><div class="fld"><label>الاسم (عربي)</label><input id="f_bn" value="${esc(b.name_ar||'')}"></div><div class="fld"><label>الاسم (إنجليزي)</label><input id="f_be" value="${esc(b.name||'')}"></div><div class="fld"><label>الهاتف</label><input id="f_bp" inputmode="tel" value="${esc(b.phone||'')}"></div><div class="m-act"><button class="save" onclick="saveBranch('${id||''}')">حفظ</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`); }
+function branchForm(id){ const list=window.__ALLBR||BRANCHES; const b=list.find(x=>x.id===id)||{}; modal(`<h3>${id?'تعديل فرع':'فرع جديد'}</h3><div class="fld"><label>الاسم (عربي)</label><input id="f_bn" value="${esc(b.name_ar||'')}"></div><div class="fld"><label>العنوان</label><input id="f_be" value="${esc(b.address||'')}"></div><div class="m-act"><button class="save" onclick="saveBranch('${id||''}')">حفظ</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`); }
 async function saveBranch(id){ 
   const f_bn = document.getElementById('f_bn');
   const f_be = document.getElementById('f_be');
-  const f_bp = document.getElementById('f_bp');
-  const rec={name_ar: f_bn ? f_bn.value.trim() : '', name: f_be ? f_be.value.trim()||(f_bn ? f_bn.value.trim() : '') : '', phone: f_bp ? f_bp.value.trim()||null : null}; 
+  const rec={name_ar: f_bn ? f_bn.value.trim() : '', address: f_be ? f_be.value.trim()||null : null}; 
   if(!rec.name_ar){ toast('⚠️ الاسم مطلوب'); return; } 
   try {
     const r=id?await db.from('branches').update(rec).eq('id',id):await db.from('branches').insert(rec); 
-    if(r.error){ toast('✗ فشل'); return; } 
+    if(r.error){ toast('✗ '+(r.error.message||'فشل الحفظ')); console.error('saveBranch error:', r.error); return; } 
     closeModal(); toast('✓ انحفظ'); renderAdmin(); bootData(); 
-  } catch(e) { console.error(e); }
+  } catch(e) { toast('✗ خطأ: '+e.message); console.error(e); }
 }
 async function toggleBranch(id,v){ try { await db.from('branches').update({is_active:v}).eq('id',id); renderAdmin(); bootData(); } catch(e) { console.error(e); } }
 
 /* ================= التنقل ================= */
 let dashTimer = null;
+function setDashFilter(mode){
+  document.querySelectorAll('#dashQuickFilters button').forEach(b=>b.className='mini tog');
+  document.querySelectorAll('#dashQuickFilters button').forEach(b=>{
+    if(b.getAttribute('onclick')?.includes("'"+mode+"'")) b.className='mini ok';
+  });
+  const cdr=document.getElementById('dashCustomRow');
+  const lbl=document.getElementById('dashDateLabel');
+  let from='',to='',label='';
+  if(mode==='custom'){
+    if(cdr){cdr.style.display='flex';cdr.classList.remove('hidden');}
+    if(lbl) lbl.textContent='حدد الفترة ثم اضغط عرض';
+    return;
+  }
+  if(cdr){cdr.style.display='none';cdr.classList.add('hidden');}
+  if(mode==='today'){ const fd=getFinancialDay(); from=fd.from; to=fd.to; label='📅 اليوم — '+fd.label; }
+  if(mode==='yesterday'){ const fd=getFinancialDay(1); from=fd.from; to=fd.to; label='📅 البارحة — '+fd.label; }
+  if(mode==='week'){ const fd=getFinancialWeek(); from=fd.from; to=fd.to; label='📅 هذا الأسبوع'; }
+  if(mode==='month'){ const fd=getFinancialMonth(); from=fd.from; to=fd.to; label='📅 هذا الشهر'; }
+  if(mode==='last7'){ const t=new Date(); const f=new Date(t-7*86400000); from=f.toISOString(); to=t.toISOString(); label='📅 آخر 7 أيام'; }
+  if(mode==='last30'){ const t=new Date(); const f=new Date(t-30*86400000); from=f.toISOString(); to=t.toISOString(); label='📅 آخر 30 يوم'; }
+  window.__dashFrom=from; window.__dashTo=to;
+  if(lbl) lbl.textContent=label;
+  loadDashboard();
+}
 async function loadDashboard(){
   if(!isAdmin()) return;
   const now = new Date();
-  const t0 = new Date(); t0.setHours(0,0,0,0);
+  let t0, tEnd;
+  if(window.__dashFrom && window.__dashTo){
+    t0=new Date(window.__dashFrom); tEnd=new Date(window.__dashTo);
+  } else {
+    const fd=getFinancialDay();
+    t0=new Date(fd.from); tEnd=new Date(fd.to);
+    window.__dashFrom=fd.from; window.__dashTo=fd.to;
+    setTimeout(()=>{ const lbl=document.getElementById('dashDateLabel'); if(lbl && !lbl.textContent) lbl.textContent='📅 اليوم — '+fd.label; },0);
+  }
   const y0 = new Date(t0.getTime() - 86400000);
-  // طلبات اليوم + أمس (حتى نفس الساعة)
+  // طلبات الفترة + أمس (حتى نفس الساعة)
   const [today, yest, cancels, shifts30] = await Promise.all([
-    db.from('orders').select('total, subtotal, discount, branch_id, status, order_type').gte('created_at', t0.toISOString()),
+    db.from('orders').select('total, subtotal, discount, branch_id, status, order_type').gte('created_at', t0.toISOString()).lte('created_at', tEnd.toISOString()),
     db.from('orders').select('total, created_at, status').gte('created_at', y0.toISOString()).lt('created_at', t0.toISOString()),
     db.from('orders').select('cancel_reason').eq('status','cancelled').not('cancel_reason','is',null).gte('created_at', new Date(Date.now()-30*86400000).toISOString()),
     db.from('cash_shifts').select('opening_balance, closing_balance, expected_balance, status, staff(full_name)').eq('status','closed').gte('start_time', new Date(Date.now()-30*86400000).toISOString()),
