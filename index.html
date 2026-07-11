@@ -2465,9 +2465,10 @@ function renderKPICards(orders){
 }
 
 async function renderSalesChart(orders){
-  renderKPICards(orders);
+  try{ renderKPICards(orders); }catch(e){ console.error('renderKPICards failed:', e); }
   const D=document.getElementById('salesSummary');
-  if(!orders||!orders.length){ if(D) D.innerHTML=''; return; }
+  if(!orders||!orders.length){ if(D) D.innerHTML='<div class="empty-note">ما في بيانات لهاي الفترة</div>'; return; }
+  try{
   // تجميع بالساعة
   const byHour={};
   orders.filter(o=>o.status!=='cancelled').forEach(o=>{
@@ -2512,6 +2513,10 @@ async function renderSalesChart(orders){
         ${hours.map((h,i)=>i%2===0?`<text x="${px(i)}" y="${H-PAD.b+14}" text-anchor="middle" font-size="9" fill="#8a7a72">${labels[i]}</text>`:'').join('')}
       </svg>
     </div>`;
+  }catch(e){
+    console.error('renderSalesChart failed:', e);
+    if(D) D.innerHTML = '<div class="alert-red">⚠️ خطأ برسم المخطط: '+esc(e.message||'غير معروف')+'</div>';
+  }
 }
 
 let repMode = 'summary', REP_ORDERS = [], REP_SHIFTS = [];
@@ -2622,20 +2627,7 @@ async function loadSalesReport(){
     const cash = orders.filter(o => o.payment_method==='cash' && o.status!=='cancelled').length;
     const card = orders.filter(o => o.payment_method==='card' && o.status!=='cancelled').length;
     const cliq = orders.filter(o => o.payment_method==='cliq' && o.status!=='cancelled').length;
-    const salesSummary = document.getElementById('salesSummary');
-    if (salesSummary) {
-      salesSummary.innerHTML = `
-        <div class="sales-grid">
-          <div class="sales-card"><div class="label">إجمالي المبيعات</div><div class="value">${fmt(total)} ${CURRENCY}</div><div class="sub">${count} طلب</div></div>
-          <div class="sales-card"><div class="label">توصيل</div><div class="value">${delivery}</div></div>
-          <div class="sales-card"><div class="label">استلام</div><div class="value">${takeaway}</div></div>
-          <div class="sales-card"><div class="label">ملغي</div><div class="value" style="color:var(--red)">${cancelled}</div></div>
-          <div class="sales-card"><div class="label">💵 كاش</div><div class="value">${cash}</div></div>
-          <div class="sales-card"><div class="label">💳 كرت</div><div class="value">${card}</div></div>
-          <div class="sales-card"><div class="label">📱 كليك</div><div class="value">${cliq}</div></div>
-        </div>
-      `;
-    }
+    // ملاحظة: بطاقات الإحصائيات صارت جزء من renderKPICards (بتعرض بـ salesKPI) — ما منمسح المخطط بعد الآن
     window.renderSalesInvoices = function(){
     const salesDetails = document.getElementById('salesDetails');
     if (salesDetails) {
