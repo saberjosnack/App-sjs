@@ -532,6 +532,7 @@ const CURRENCY = "د.أ";
 const LATE_MIN = 20;
 const READY_WAIT_MIN = 7;
 let _readyAlertsSent = new Set();
+let overdueRingInterval = null, readyRingInterval = null;
 const db = supabase.createClient(SB_URL, SB_KEY);
 
 let ME = null;
@@ -875,6 +876,8 @@ async function bootData(){
     ]);
     BRANCHES = b.data||[]; CATS = c.data||[]; ITEMS = i.data||[];
     SETTINGS = {}; (s.data||[]).forEach(x=>SETTINGS[x.key]=x.value);
+    FIN_START_H = parseInt(SETTINGS.fin_start_hour) ?? 10; if(isNaN(FIN_START_H)) FIN_START_H = 10;
+    FIN_END_H = parseInt(SETTINGS.fin_end_hour) ?? 3; if(isNaN(FIN_END_H)) FIN_END_H = 3;
     if(ME && ME.role==='custom') await loadCustomRoles();
     const branchSel = document.getElementById('branchSel');
     if (branchSel) branchSel.innerHTML = BRANCHES.map(x=>`<option value="${x.id}">🏪 ${esc(x.name_ar)}</option>`).join('');
@@ -1104,9 +1107,15 @@ async function checkOverdue(){
     const { count } = await q;
     const has = (count||0) > 0;
     const badge = document.getElementById('overdueBadge');
-    if (badge) {
-      badge.classList.toggle('hidden', !has);
-      if(has){ badge.textContent = `⏰ ${count} طلب تجهيزه متأخر +${LATE_MIN} د!`; beep(6,1500); }
+    if (badge) badge.classList.toggle('hidden', !has);
+    if(has){
+      if(badge) badge.textContent = `⏰ ${count} طلب تجهيزه متأخر +${LATE_MIN} د!`;
+      if(!overdueRingInterval){
+        beep(3,1500);
+        overdueRingInterval = setInterval(()=>beep(2,1500), 4000);
+      }
+    } else if(overdueRingInterval){
+      clearInterval(overdueRingInterval); overdueRingInterval = null;
     }
   } catch(e) { console.error(e); }
 }
@@ -1127,10 +1136,17 @@ async function checkReadyAlerts(){
       readyBadge.classList.toggle('hidden', !has);
       if(has) readyBadge.textContent = `📦 ${pendingOrders.length} طلب لسا ما استلم +${READY_WAIT_MIN} د!`;
     }
+    if(has){
+      if(!readyRingInterval){
+        beep(3);
+        readyRingInterval = setInterval(()=>beep(2), 4000);
+      }
+    } else if(readyRingInterval){
+      clearInterval(readyRingInterval); readyRingInterval = null;
+    }
     pendingOrders.forEach(o=>{
       if(_readyAlertsSent.has(o.id)) return;
       _readyAlertsSent.add(o.id);
-      beep(4);
       const nm = o.customers?.name||'—';
       const ph = o.customers?.phone||'';
       const typeLabel = o.order_type==='delivery' ? 'المندوب' : 'العميل';
@@ -2154,7 +2170,7 @@ async function loadDay(){
             <button class="mini tog" onclick="reprintDay('${o.id}')">🖨️</button>
             ${o.order_type==='delivery' && o.status!=='cancelled' && (ME.role==='callcenter'||adm) ? `<button class="mini wa" onclick="waSend('${o.id}')">📲</button>` : ''}
             ${adm && o.status!=='cancelled' ? `<button class="mini edit" onclick="editOrder('${o.id}')">✏️</button>`:''}
-            ${o.status!=='cancelled'?`<button class="mini del" onclick="cancelDay('${o.id}')">✗</button>`:''}
+            ${o.status!=='cancelled' && perm('order_cancel')?`<button class="mini del" onclick="cancelDay('${o.id}')">✗</button>`:''}
           </td></tr>`;}).join('')}</table>`;
     }
   } catch(e) { 
@@ -2186,11 +2202,14 @@ function reprintDay(id){
 }
 
 async function cancelDay(id){
+  if(!perm('order_cancel')){ toast('⛔ ما عندك صلاحية إلغاء الطلبات — راجع المدير'); return; }
   const o = DAY.find(x=>x.id===id);
   const reason = prompt('⚠️ سبب الإلغاء:');
   if(reason===null || !reason.trim()){ toast('⚠️ سبب الإلغاء مطلوب'); return; }
   try {
-    await db.from('orders').update({ status:'cancelled', cancel_reason: reason.trim(), cancelled_at: new Date().toISOString() }).eq('id', id);
+    const { error } = await db.from('orders').update({ status:'cancelled', cancel_reason: reason.trim(), cancelled_at: new Date().toISOString() }).eq('id', id);
+    if(error){ toast('✗ فشل الإلغاء: '+error.message); console.error(error); return; }
+    await logActivity('cancel_order', 'إلغاء طلب #'+(o?.order_number||id)+' — السبب: '+reason.trim());
     if(o){ 
       const cust = o.customers ? { name: o.customers.name, phone: o.customers.phone } : null; 
       const win = window.open('','_blank'); 
@@ -2713,6 +2732,16 @@ async function renderAdmin(){
     C.innerHTML=`<div class="mbox" style="max-width:480px">
       <h3>🔧 إعدادات النظام</h3>
       <div class="fld"><label>📱 رقم واتساب التوصيل</label><input id="f_wanum" inputmode="tel" value="${esc(SETTINGS.delivery_whatsapp||'')}"></div>
+
+      <hr style="margin:16px 0"><h4 style="color:var(--maroon)">📅 اليوم المالي</h4>
+      <div style="color:var(--muted);font-size:.82rem;font-weight:600;margin-bottom:8px">تحدد بداية ونهاية "اليوم" بالتقارير والطلبات — مفيد لو المطعم يشتغل لبعد نص الليل</div>
+      <div class="two">
+        <div style="flex:1"><label>ساعة البداية (0-23)</label>
+          <input type="number" id="f_finStart" min="0" max="23" value="${FIN_START_H}" style="border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;width:100%"></div>
+        <div style="flex:1"><label>ساعة النهاية اليوم التالي (0-23)</label>
+          <input type="number" id="f_finEnd" min="0" max="23" value="${FIN_END_H}" style="border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;width:100%"></div>
+      </div>
+      <div style="color:var(--muted);font-size:.78rem;font-weight:600;margin-bottom:4px">مثال حالي: اليوم المالي يبدأ الساعة ${FIN_START_H}:00 وينتهي ${FIN_END_H}:00 اليوم التالي</div>
       <hr style="margin:16px 0"><h4 style="color:var(--maroon)">🖨️ الطابعة</h4>
       <div class="fld"><label>طريقة الطباعة</label>
         <select id="f_printMethod">
@@ -3059,9 +3088,12 @@ function expenseForm(id){
     <div class="m-act"><button class="save" onclick="saveExpense('${id||''}')">حفظ ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
 }
 async function saveExpense(id){
+  const desc = document.getElementById('fe_desc').value.trim();
+  const cat = document.getElementById('fe_cat').value;
   const rec={expense_date:document.getElementById('fe_dt').value,
-    category:document.getElementById('fe_cat').value,
-    description:document.getElementById('fe_desc').value.trim(),
+    category:cat,
+    title: desc || cat,
+    description:desc,
     amount:parseFloat(document.getElementById('fe_amt').value)||0,
     branch_id:document.getElementById('fe_br').value||null};
   if(!rec.amount){toast('⚠️ المبلغ مطلوب');return;}
@@ -3610,6 +3642,29 @@ function printConsumptionReport(){
     </table></body></html>`;
   printRaw(text, html);
 }
+function showAuditDetail(idx){
+  const a = (window.__auditHistoryData||[])[idx]; if(!a) return;
+  const branchName = a.branches?.name_ar||'—';
+  const rows = (a.details||[]).filter(d=>Math.abs(d.variance||0)>0.001);
+  modal(`<h3>📋 تفاصيل الفروقات — ${esc(branchName)}</h3>
+    <div style="color:var(--muted);font-weight:700;font-size:.85rem;margin-bottom:10px">${new Date(a.created_at).toLocaleString('ar-JO')} — الموظف: ${esc(a.staff_name||'—')}</div>
+    <table class="tbl">
+      <tr><th>المادة</th><th>المتوقع</th><th>الفعلي</th><th>الفرق</th></tr>
+      ${rows.map(d=>{
+        const ing = INGR.find(x=>x.id===d.ingredient_id);
+        const name = ing?.name || 'مادة محذوفة';
+        const unit = ing?.unit || '';
+        const isShort = d.variance < 0;
+        return `<tr>
+          <td><b>${esc(name)}</b></td>
+          <td>${fmt(d.expected)} ${esc(unit)}</td>
+          <td>${fmt(d.actual)} ${esc(unit)}</td>
+          <td><b style="color:${isShort?'var(--red)':'var(--warn)'}">${isShort?'🔻 نقص':'🔺 زيادة'} ${fmt(Math.abs(d.variance))}</b></td>
+        </tr>`;
+      }).join('')||'<tr><td colspan="4" class="empty-note">ما في تفاصيل محفوظة</td></tr>'}
+    </table>
+    <div class="m-act"><button class="save" onclick="showAuditHistory()">⬅️ رجوع للسجل</button><button class="cancel" onclick="closeModal()">إغلاق</button></div>`);
+}
 async function showAuditHistory(){
   const {data, error} = await db.from('inventory_audits')
     .select('*, branches(name_ar)').order('created_at',{ascending:false}).limit(50);
@@ -3621,17 +3676,19 @@ async function showAuditHistory(){
     return;
   }
   const audits = data||[];
+  window.__auditHistoryData = audits;
   modal(`<h3>📜 سجل عمليات الجرد</h3>
     <div style="max-height:420px;overflow-y:auto">
       <table class="tbl">
-        <tr><th>التاريخ</th><th>الفرع</th><th>الموظف</th><th>مواد معدودة</th><th>فروقات</th></tr>
-        ${audits.map(a=>`<tr class="${a.items_with_variance>0?'late':''}">
+        <tr><th>التاريخ</th><th>الفرع</th><th>الموظف</th><th>مواد معدودة</th><th>فروقات</th><th></th></tr>
+        ${audits.map((a,idx)=>`<tr class="${a.items_with_variance>0?'late':''}">
           <td>${new Date(a.created_at).toLocaleString('ar-JO')}</td>
-          <td>${esc(a.branches?.name_ar||'—')}</td>
+          <td><b>${esc(a.branches?.name_ar||'—')}</b></td>
           <td>${esc(a.staff_name||'—')}</td>
           <td>${a.items_counted}</td>
           <td>${a.items_with_variance>0?`<b style="color:var(--red)">⚠️ ${a.items_with_variance}</b>`:'<span style="color:var(--ok)">✓ لا شي</span>'}</td>
-        </tr>`).join('')||'<tr><td colspan="5" class="empty-note">ما في عمليات جرد مسجلة بعد</td></tr>'}
+          <td>${a.items_with_variance>0?`<button class="mini edit" onclick="showAuditDetail(${idx})">تفاصيل</button>`:'—'}</td>
+        </tr>`).join('')||'<tr><td colspan="6" class="empty-note">ما في عمليات جرد مسجلة بعد</td></tr>'}
       </table>
     </div>
     <div class="m-act"><button class="cancel" onclick="closeModal()">إغلاق</button></div>`);
@@ -3717,7 +3774,7 @@ let trItemCount = 0;
 function transferForm(){
   trItemCount = 0;
   modal(`<h3>🔄 نقل بضاعة بين الفروع</h3>
-    <div class="fld"><label>من فرع</label><select id="tr_from" style="border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;width:100%;background:#fff">
+    <div class="fld"><label>من فرع</label><select id="tr_from" onchange="document.getElementById('tr_charge').value=this.value" style="border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;width:100%;background:#fff">
       <option value="">اختر الفرع...</option>
       ${BRANCHES.map(b=>`<option value="${b.id}">${esc(b.name_ar)}</option>`).join('')}</select></div>
     <div class="fld"><label>إلى فرع</label><select id="tr_to" style="border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;width:100%;background:#fff">
@@ -3725,6 +3782,10 @@ function transferForm(){
       ${BRANCHES.map(b=>`<option value="${b.id}">${esc(b.name_ar)}</option>`).join('')}</select></div>
     <div class="fld"><label>أجرة النقل (${CURRENCY}) — ثابتة على كل النقلة، اختياري</label>
       <input id="tr_fee" type="number" step="0.01" placeholder="مثال: 2.5" style="border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;width:100%;background:#fff"></div>
+    <div class="fld"><label>الفرع المحاسَب على الأجرة (بيتسجل عليه كمصروف)</label>
+      <select id="tr_charge" style="border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;width:100%;background:#fff">
+        ${BRANCHES.map(b=>`<option value="${b.id}">${esc(b.name_ar)}</option>`).join('')}
+      </select></div>
     <div class="fld"><label>المواد المنقولة (حتى 20 صنف)</label>
       <div id="tr_items_list">${trItemRow(0)}</div>
       <button type="button" class="mini ok" style="margin-top:6px" onclick="addTrItemRow()">＋ إضافة مادة</button>
@@ -3817,12 +3878,15 @@ async function saveTransfer(){
     console.error('stock_transfers insert error:', eTransfer);
   }
 
-  // 4) مصروف تلقائي بأجرة النقل على الفرع المرسل
+  // 4) مصروف تلقائي بأجرة النقل على الفرع المحاسَب (يختاره المستخدم)
   if(fee > 0){
+    const chargedBranchId = document.getElementById('tr_charge')?.value || fromId;
+    const chargedBranch = BRANCHES.find(b=>b.id===chargedBranchId);
+    const descTxt = 'نقل من '+(fromBranch?.name_ar||'')+' إلى '+(toBranch?.name_ar||'');
     const { error: eExp } = await db.from('expenses').insert({
       expense_date: new Date().toISOString().split('T')[0],
-      category: 'نقل بضاعة', description: 'نقل من '+(fromBranch?.name_ar||'')+' إلى '+(toBranch?.name_ar||''),
-      amount: fee, branch_id: fromId
+      category: 'نقل بضاعة', title: descTxt, description: descTxt,
+      amount: fee, branch_id: chargedBranchId
     });
     if(eExp){
       toast('⚠️ النقل تم لكن فشل تسجيل مصروف الأجرة: '+eExp.message);
@@ -3902,6 +3966,8 @@ async function saveSettings(){
   const f_extraInfo = document.getElementById('f_extraInfo');
   const f_alertTone = document.getElementById('f_alertTone');
   const f_alertVolume = document.getElementById('f_alertVolume');
+  const f_finStart = document.getElementById('f_finStart');
+  const f_finEnd = document.getElementById('f_finEnd');
   const settings = {
     delivery_whatsapp: f_wanum ? f_wanum.value.trim() : '',
     printer_method: f_printMethod ? f_printMethod.value : 'auto',
@@ -3909,10 +3975,14 @@ async function saveSettings(){
     printer_port: f_printerPort ? f_printerPort.value.trim() : '9100',
     receipt_template: f_receiptTemplate ? f_receiptTemplate.value : 'modern',
     invoice_extra_info: f_extraInfo ? f_extraInfo.value.trim() : '',
+    fin_start_hour: f_finStart ? f_finStart.value : '10',
+    fin_end_hour: f_finEnd ? f_finEnd.value : '3',
     alert_tone: f_alertTone ? f_alertTone.value : 'classic',
     alert_volume: f_alertVolume ? f_alertVolume.value : '0.5',
   };
   if(window.__logoImg !== undefined) settings.invoice_logo = window.__logoImg || '';
+  FIN_START_H = parseInt(settings.fin_start_hour)||10;
+  FIN_END_H = parseInt(settings.fin_end_hour)||3;
   try {
     for(const[key,value]of Object.entries(settings)){ await db.from('settings').upsert({key,value}); SETTINGS[key]=value; }
     window.__logoImg = undefined;
@@ -4233,8 +4303,8 @@ async function loadDashboard(){
 }
 
 /* ================= اليوم المالي (10ص → 3ص) ================= */
-const FIN_START_H = 10; // بداية اليوم المالي (10 صباحًا)
-const FIN_END_H   = 3;  // نهاية اليوم المالي (3 فجرًا اليوم التالي)
+let FIN_START_H = 10; // بداية اليوم المالي (10 صباحًا) — قابلة للتعديل من الإعدادات
+let FIN_END_H   = 3;  // نهاية اليوم المالي (3 فجرًا اليوم التالي) — قابلة للتعديل من الإعدادات
 
 function getFinancialDay(offsetDays=0){
   // يرجع {from, to} لليوم المالي (اليوم أو offsetDays للأمس وما قبل)
