@@ -281,6 +281,19 @@
 </head>
 <body>
 
+<!-- ============ اختيار فرع الجهاز (مرة وحدة لهاد الجهاز) ============ -->
+<div id="deviceBranchScreen" class="hidden">
+  <div class="login-card">
+    <div class="login-logo">S<span>J</span>S</div>
+    <div class="login-sub">🖥️ هاد الجهاز — أي فرع يتبع؟</div>
+    <div style="color:var(--muted);font-size:.82rem;font-weight:700;margin-bottom:16px">اختره مرة وحدة بس — بيتحدد فيه الطباعة تلقائيًا لهاد الجهاز بغض النظر مين بيسجل دخول</div>
+    <select id="deviceBranchSelect" style="width:100%;padding:14px;border:2px solid var(--maroon);border-radius:12px;font-size:1.05rem;font-weight:800;margin-bottom:16px">
+      <option value="">اختر الفرع...</option>
+    </select>
+    <button class="pk-alt" style="width:100%;background:var(--red);color:#fff;padding:14px;border-radius:12px;font-weight:900;font-size:1.05rem" onclick="confirmDeviceBranch()">تأكيد ✓</button>
+  </div>
+</div>
+
 <!-- ============ الدخول ============ -->
 <div id="loginScreen">
   <div class="login-card">
@@ -321,6 +334,7 @@
     <div id="overdueBadge" class="hidden">⏰ طلبات متأخرة!</div>
     <div id="readyBadge" class="hidden" style="background:var(--warn);color:#fff;border-radius:999px;padding:4px 12px;font-weight:900;font-size:.85rem;animation:blink 1s infinite">📦 طلبات جاهزة!</div>
     <div class="who"><span id="whoName"></span><br><span id="whoBranch"></span></div>
+    <button onclick="showDevicePrinterSettings()" style="background:var(--yellow);color:var(--maroon);border-radius:999px;padding:6px 14px;font-weight:900;margin-left:6px">🖨️ الطابعة</button>
     <button id="btnLogout" onclick="window.logout()">خروج</button>
   </header>
   <nav id="mainNav">
@@ -1023,6 +1037,13 @@
     const app = document.getElementById('app');
     if (loginScreen) loginScreen.classList.add('hidden');
     if (app) app.classList.remove('hidden');
+    // تنبيه لو فيه تعارض بين فرع حساب الموظف وفرع الجهاز المضبوط مسبقًا
+    const devBr = getDeviceBranchId();
+    if(ME.branch_id && devBr && ME.branch_id !== devBr){
+      const devBrName = BRANCHES.find(b=>b.id===devBr)?.name_ar || '؟';
+      const meBrName = ME.branches?.name_ar || '؟';
+      setTimeout(()=>toast('⚠️ تنبيه: هاد الجهاز مضبوط لفرع "'+devBrName+'" لكن حسابك تبع فرع "'+meBrName+'" — تأكد إنك بالمكان الصح'), 800);
+    }
     const whoName = document.getElementById('whoName');
     if (whoName) whoName.textContent = '👤 ' + ME.full_name + ' (' + (ROLE_AR[ME.role]||ME.role) + ')';
     const whoBranch = document.getElementById('whoBranch');
@@ -1050,11 +1071,76 @@
     location.reload();
   };
 
+  /* ---- فرع الجهاز (ثابت لهاد الجهاز، مستقل عن مين بيسجل دخول) ---- */
+  function getDeviceBranchId(){ return localStorage.getItem('sjs_device_branch_id') || null; }
+  async function initDeviceBranchGate(){
+    if(getDeviceBranchId()) return; // مضبوط من قبل — نكمل عادي
+    const screen = document.getElementById('deviceBranchScreen');
+    const loginScreen = document.getElementById('loginScreen');
+    if(loginScreen) loginScreen.classList.add('hidden');
+    if(screen) screen.classList.remove('hidden');
+    try{
+      const {data} = await db.from('branches').select('id,name_ar').order('created_at');
+      const sel = document.getElementById('deviceBranchSelect');
+      if(sel && data) sel.innerHTML = '<option value="">اختر الفرع...</option>' + data.map(b=>`<option value="${b.id}">🏪 ${esc(b.name_ar)}</option>`).join('');
+    }catch(e){ console.error('load branches for device gate failed:', e); }
+  }
+  window.confirmDeviceBranch = function(){
+    const val = document.getElementById('deviceBranchSelect')?.value;
+    if(!val){ toast('⚠️ اختر الفرع'); return; }
+    localStorage.setItem('sjs_device_branch_id', val);
+    document.getElementById('deviceBranchScreen')?.classList.add('hidden');
+    document.getElementById('loginScreen')?.classList.remove('hidden');
+    toast('✓ اتحدد فرع الجهاز');
+  };
+  window.changeDeviceBranch = function(){
+    if(!confirm('تغيير فرع هاد الجهاز؟')) return;
+    localStorage.removeItem('sjs_device_branch_id');
+    location.reload();
+  };
+  initDeviceBranchGate();
+
   const saved = sessionStorage.getItem('sjs_me');
-  if(saved){ try{ ME = JSON.parse(saved); enterApp(); }catch(e){ sessionStorage.removeItem('sjs_me'); } }
+  if(getDeviceBranchId() && saved){ try{ ME = JSON.parse(saved); enterApp(); }catch(e){ sessionStorage.removeItem('sjs_me'); } }
 
   /* ================= إعدادات الطابعة (محلية لهاد الجهاز فقط — مو مشتركة) ================= */
   const LOCAL_PRINTER_KEYS = ['printer_method','printer_ip','printer_port','printer_bt_address','auto_print_branch'];
+  function showDevicePrinterSettings(){
+    const deviceBr = BRANCHES.find(b=>b.id===getDeviceBranchId());
+    modal(`<h3>🖨️ إعدادات الطابعة — لهاد الجهاز بس</h3>
+      <div style="color:var(--muted);font-size:.8rem;font-weight:700;margin-bottom:10px">هاي الإعدادات محفوظة بهاد الجهاز تحديدًا — أي حدا يسجل دخول فيه بياخذ نفس الإعدادات.</div>
+      <div class="fld"><label>🏪 فرع هاد الجهاز</label>
+        <div style="display:flex;gap:8px;align-items:center">
+          <b style="flex:1">${deviceBr?esc(deviceBr.name_ar):'⚠️ غير محدد'}</b>
+          <button type="button" class="mini del" onclick="changeDeviceBranch()">تغيير</button>
+        </div></div>
+      <hr style="margin:12px 0">
+      <div class="fld"><label>طريقة الطباعة</label><select id="dps_method">
+        <option value="auto" ${SETTINGS.printer_method==='auto'?'selected':''}>تلقائي</option>
+        <option value="network" ${SETTINGS.printer_method==='network'?'selected':''}>شبكة (وكيل الطباعة SJS-Print-Agent)</option>
+        <option value="rawbt" ${SETTINGS.printer_method==='rawbt'?'selected':''}>أندرويد — RawBT (بلوتوث/شبكة)</option>
+      </select></div>
+      <div class="fld"><label>IP الطابعة (لو شبكة)</label><input id="dps_ip" value="${esc(SETTINGS.printer_ip||'')}" placeholder="192.168.1.100"></div>
+      <div class="fld"><label>منفذ الطابعة</label><input id="dps_port" value="${esc(SETTINGS.printer_port||'9100')}"></div>
+      <label class="chk" style="display:flex;align-items:center;gap:8px;margin:10px 0">
+        <input type="checkbox" id="dps_autoPrint" ${SETTINGS.auto_print_branch?'checked':''}> 🔔 طباعة تلقائية لطلبات فرع هاد الجهاز
+      </label>
+      <div class="m-act">
+        <button class="save" onclick="saveDevicePrinterSettings()">حفظ ✓</button>
+        <button class="mini ok" onclick="testPrinter()">🖨️ اختبار طباعة</button>
+        <button class="cancel" onclick="closeModal()">إغلاق</button>
+      </div>`);
+  }
+  function saveDevicePrinterSettings(){
+    saveLocalPrinterSettings({
+      printer_method: document.getElementById('dps_method').value,
+      printer_ip: document.getElementById('dps_ip').value.trim(),
+      printer_port: document.getElementById('dps_port').value.trim(),
+      auto_print_branch: document.getElementById('dps_autoPrint').checked,
+    });
+    closeModal();
+    toast('✓ اتحفظت إعدادات الطابعة لهاد الجهاز');
+  }
   function applyLocalPrinterSettings(){
     LOCAL_PRINTER_KEYS.forEach(k=>{
       try{
@@ -1332,11 +1418,13 @@
   const _autoPrintBusy = new Set();
   async function checkAutoPrintQueue(){
     try {
-      if(!ME || !ME.branch_id) return;               // بس أجهزة مرتبطة بفرع معيّن
+      if(!ME) return;
+      const scopeBranchId = ME.branch_id || getDeviceBranchId(); // فرع حساب الموظف (لو ثابت) أهم دايمًا، وفرع الجهاز احتياطي بس لحسابات بدون فرع (مدير/كول سنتر)
+      if(!scopeBranchId) return;                      // بس أجهزة مرتبطة بفرع معيّن
       if(!SETTINGS.auto_print_branch) return;         // لازم تكون مفعّلة من الإعدادات بهاد الجهاز
       const { data, error } = await db.from('orders')
         .select('*, order_items(*), customers(name, phone, address)')
-        .eq('branch_id', ME.branch_id)
+        .eq('branch_id', scopeBranchId)
         .eq('auto_printed', false)
         .eq('status', 'new')
         .order('created_at', { ascending: true })
@@ -2304,7 +2392,7 @@
       toast(editingOrder ? `✓ تعدّل طلب #${ord.order_number}` : `✓ طلب #${ord.order_number} — انحفظ`);
       // نطبع محليًا فقط لو هاد الجهاز فعليًا بنفس فرع الطلب — أي شخص بدون فرع ثابت (مدير/كول سنتر)
       // يختار فرع تاني، ما لازم يطبع عندو محليًا — الطباعة بتصير تلقائيًا على جهاز الفرع المستهدف
-      const shouldPrintLocally = print && (ME.branch_id === branch_id);
+      const shouldPrintLocally = print && ((ME.branch_id||getDeviceBranchId()) === branch_id);
       if(shouldPrintLocally) {
         try{
           await printSmart(ord, cartCopy, t, custInfo);
