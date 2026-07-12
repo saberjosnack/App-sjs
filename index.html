@@ -305,8 +305,8 @@
       <div class="pin-box" id="pin3" onclick="focusPinInput()"></div>
       <div class="pin-box" id="pin4" onclick="focusPinInput()"></div>
       <input type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="4" id="pinHiddenInput"
-             style="position:absolute;opacity:0;width:1px;height:1px;pointer-events:none"
-             oninput="onPinHiddenInput(this)" autocomplete="off">
+        style="position:absolute;opacity:0;width:1px;height:1px;pointer-events:none"
+        oninput="onPinHiddenInput(this)" autocomplete="off">
     </div>
     <div id="loginErr"></div>
     <div class="pad">
@@ -1452,152 +1452,43 @@
 
   /* ================= طباعة تلقائية لطلبات الكول سنتر بجهاز الفرع ================= */
   const _autoPrintBusy = new Set();
-  
-  /**
-   * 🔥 الدالة المعدلة: تفحص الطلبات الجديدة وتطبعها تلقائياً على جهاز الفرع
-   */
-  async function checkAutoPrintQueue() {
+  async function checkAutoPrintQueue(){
     try {
-        if (!ME) return;
-        const deviceBranchId = getDeviceBranchId();
-        const scopeBranchId = ME.branch_id || deviceBranchId;
-        if (!scopeBranchId) return;
-        if (!SETTINGS.auto_print_branch) return;
-
-        // جلب الطلبات الجديدة لهذا الفرع فقط
-        const { data, error } = await db.from('orders')
-            .select('*, order_items(*), customers(name, phone, address)')
-            .eq('branch_id', scopeBranchId)
+      if(!ME) return;
+      const scopeBranchId = ME.branch_id || getDeviceBranchId(); // فرع حساب الموظف (لو ثابت) أهم دايمًا، وفرع الجهاز احتياطي بس لحسابات بدون فرع (مدير/كول سنتر)
+      if(!scopeBranchId) return;                      // بس أجهزة مرتبطة بفرع معيّن
+      if(!SETTINGS.auto_print_branch) return;         // لازم تكون مفعّلة من الإعدادات بهاد الجهاز
+      const { data, error } = await db.from('orders')
+        .select('*, order_items(*), customers(name, phone, address)')
+        .eq('branch_id', scopeBranchId)
+        .eq('auto_printed', false)
+        .eq('status', 'new')
+        .order('created_at', { ascending: true })
+        .limit(5);
+      if(error || !data || !data.length) return;
+      for(const o of data){
+        if(_autoPrintBusy.has(o.id)) continue;
+        _autoPrintBusy.add(o.id);
+        try{
+          // ✋ حجز آمن (Atomic Claim): نعلّم الطلب "مطبوع" أول شي بشرط إنه لسا false —
+          // لو جهاز تاني بنفس الفرع سبقنا وحجزه بنفس اللحظة، الـ update هون رح يرجع صف فاضي
+          // ومنعرف إنه مو دورنا، فما نطبعه مرتين على جهازين مختلفين بالغلط
+          const { data: claimed, error: claimErr } = await db.from('orders')
+            .update({ auto_printed: true })
+            .eq('id', o.id)
             .eq('auto_printed', false)
-            .eq('status', 'new')
-            .order('created_at', { ascending: true })
-            .limit(5);
-
-        if (error || !data || !data.length) return;
-
-        console.log(`🖨️ found ${data.length} orders to print for branch ${scopeBranchId}`);
-
-        for (const o of data) {
-            if (_autoPrintBusy.has(o.id)) continue;
-            _autoPrintBusy.add(o.id);
-
-            try {
-                // حجز الطلب (Atomic Claim) - منع الطباعة المزدوجة
-                const { data: claimed, error: claimErr } = await db.from('orders')
-                    .update({ auto_printed: true })
-                    .eq('id', o.id)
-                    .eq('auto_printed', false)
-                    .select('id');
-
-                if (claimErr || !claimed || !claimed.length) {
-                    // جهاز آخر سبقنا
-                    console.log(`⏭️ order #${o.order_number} already claimed by another device`);
-                    continue;
-                }
-
-                const cust = o.customers ? {
-                    name: o.customers.name,
-                    phone: o.customers.phone,
-                    addr: o.customers.address || ''
-                } : null;
-
-                console.log(`🖨️ Printing order #${o.order_number} at branch ${scopeBranchId}`);
-                
-                // 🔥 طباعة مباشرة
-                await printSmart(o, o.order_items || [], {
-                    sub: +o.subtotal,
-                    disc: +o.discount,
-                    del: +o.delivery_fee,
-                    total: +o.total
-                }, cust);
-                
-                console.log(`✅ Successfully printed order #${o.order_number}`);
-                
-                // تنبيه صوتي
-                beep(3, 1200);
-
-            } catch (printErr) {
-                console.error(`❌ Failed to print #${o.order_number}:`, printErr);
-                // محاولة RawBT كبديل
-                try {
-                    const text = generateReceiptText(o, o.order_items || [], {
-                        sub: +o.subtotal,
-                        disc: +o.discount,
-                        del: +o.delivery_fee,
-                        total: +o.total
-                    }, cust);
-                    function triggerRawbtIntent(text) {
-    // 🔥 محاولة الطباعة عبر الجسر الأصلي (PrinterBridge) أولاً
-    if (window.SJSPrinter) {
-        try {
-            console.log('📱 محاولة الطباعة عبر الجسر الأصلي...');
-            const b64 = textToEscPosBase64(text);
-            const btAddress = localStorage.getItem('sjs_printer_bt_address') || '';
-            
-            if (btAddress) {
-                window.SJSPrinter.printBluetooth(btAddress, b64);
-                toast('📲 جاري الطباعة عبر الجسر الأصلي (بلوتوث)');
-                console.log('✅ تم إرسال الطباعة عبر الجسر الأصلي');
-                return;
-            } else {
-                // إذا ما في عنوان بلوتوث، جرب الشبكة
-                const ip = localStorage.getItem('sjs_printer_ip') || '';
-                const port = parseInt(localStorage.getItem('sjs_printer_port') || '9100');
-                if (ip) {
-                    window.SJSPrinter.printNetwork(ip, port, b64);
-                    toast('📡 جاري الطباعة عبر الجسر الأصلي (شبكة)');
-                    console.log('✅ تم إرسال الطباعة عبر الجسر الأصلي (شبكة)');
-                    return;
-                }
-                console.log('⚠️ لا يوجد عنوان بلوتوث ولا IP للجسر الأصلي');
-            }
-        } catch(e) {
-            console.error('❌ SJSPrinter failed:', e);
-            toast('⚠️ فشل الجسر الأصلي: ' + (e.message || 'خطأ غير معروف'));
-        }
-    }
-    
-    // 📲 RawBT كبديل (الطريقة القديمة)
-    try {
-        console.log('📲 محاولة الطباعة عبر RawBT (بديل)...');
-        const old = document.getElementById('rawbtFrame');
-        if (old) old.remove();
-        
-        const fr = document.createElement('iframe');
-        fr.id = 'rawbtFrame';
-        fr.style.cssText = 'position:fixed;width:0;height:0;border:0;visibility:hidden;opacity:0';
-        document.body.appendChild(fr);
-        
-        fr.src = 'intent:' + encodeURIComponent(text) + '#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;';
-        
-        setTimeout(() => {
-            try { 
-                fr.remove(); 
-                console.log('✅ RawBT iframe removed');
-            } catch(e) { 
-                console.log('⚠️ RawBT iframe removal error:', e);
-            }
-        }, 4000);
-        
-        toast('📲 انبعت للطابعة عبر RawBT');
-        console.log('✅ تم إرسال الطباعة عبر RawBT');
-        
-    } catch(e) { 
-        console.error('❌ RawBT intent trigger failed:', e);
-        toast('⚠️ فشل RawBT: ' + (e.message || 'خطأ غير معروف'));
-    }
-}(text);
-                    console.log(`✅ Printed #${o.order_number} via RawBT fallback`);
-                } catch (rawbtErr) {
-                    console.error(`❌ RawBT fallback failed for #${o.order_number}:`, rawbtErr);
-                }
-            } finally {
-                _autoPrintBusy.delete(o.id);
-            }
-        }
-    } catch (e) {
-        console.error('checkAutoPrintQueue error:', e);
-    }
+            .select('id');
+          if(claimErr || !claimed || !claimed.length){
+            // جهاز تاني حجزه قبلنا — تجاهله
+            continue;
+          }
+          const cust = o.customers ? { name:o.customers.name, phone:o.customers.phone, addr:o.customers.address||'' } : null;
+          beep(6);
+          await printSmart(o, o.order_items||[], { sub:+o.subtotal, disc:+o.discount, del:+o.delivery_fee, total:+o.total }, cust);
+        } catch(e){ console.error('auto print failed:', e); }
+        finally { _autoPrintBusy.delete(o.id); }
+      }
+    } catch(e) { console.error(e); }
   }
 
   /* ---- تنبيه انتظار الاستلام/التوصيل بعد الجاهزية (+7 دقايق) ---- */
@@ -2377,67 +2268,7 @@
       catch(e) { console.error('web bluetooth print failed:', e); toast('⚠️ فشل البلوتوث: '+(e.message||'تأكد اخترت الجهاز')); }
     }
     if (method === 'rawbt' || (method === 'auto' && isAndroid)) {
-      function triggerRawbtIntent(text) {
-    // 🔥 محاولة الطباعة عبر الجسر الأصلي (PrinterBridge) أولاً
-    if (window.SJSPrinter) {
-        try {
-            console.log('📱 محاولة الطباعة عبر الجسر الأصلي...');
-            const b64 = textToEscPosBase64(text);
-            const btAddress = localStorage.getItem('sjs_printer_bt_address') || '';
-            
-            if (btAddress) {
-                window.SJSPrinter.printBluetooth(btAddress, b64);
-                toast('📲 جاري الطباعة عبر الجسر الأصلي (بلوتوث)');
-                console.log('✅ تم إرسال الطباعة عبر الجسر الأصلي');
-                return;
-            } else {
-                // إذا ما في عنوان بلوتوث، جرب الشبكة
-                const ip = localStorage.getItem('sjs_printer_ip') || '';
-                const port = parseInt(localStorage.getItem('sjs_printer_port') || '9100');
-                if (ip) {
-                    window.SJSPrinter.printNetwork(ip, port, b64);
-                    toast('📡 جاري الطباعة عبر الجسر الأصلي (شبكة)');
-                    console.log('✅ تم إرسال الطباعة عبر الجسر الأصلي (شبكة)');
-                    return;
-                }
-                console.log('⚠️ لا يوجد عنوان بلوتوث ولا IP للجسر الأصلي');
-            }
-        } catch(e) {
-            console.error('❌ SJSPrinter failed:', e);
-            toast('⚠️ فشل الجسر الأصلي: ' + (e.message || 'خطأ غير معروف'));
-        }
-    }
-    
-    // 📲 RawBT كبديل (الطريقة القديمة)
-    try {
-        console.log('📲 محاولة الطباعة عبر RawBT (بديل)...');
-        const old = document.getElementById('rawbtFrame');
-        if (old) old.remove();
-        
-        const fr = document.createElement('iframe');
-        fr.id = 'rawbtFrame';
-        fr.style.cssText = 'position:fixed;width:0;height:0;border:0;visibility:hidden;opacity:0';
-        document.body.appendChild(fr);
-        
-        fr.src = 'intent:' + encodeURIComponent(text) + '#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;';
-        
-        setTimeout(() => {
-            try { 
-                fr.remove(); 
-                console.log('✅ RawBT iframe removed');
-            } catch(e) { 
-                console.log('⚠️ RawBT iframe removal error:', e);
-            }
-        }, 4000);
-        
-        toast('📲 انبعت للطابعة عبر RawBT');
-        console.log('✅ تم إرسال الطباعة عبر RawBT');
-        
-    } catch(e) { 
-        console.error('❌ RawBT intent trigger failed:', e);
-        toast('⚠️ فشل RawBT: ' + (e.message || 'خطأ غير معروف'));
-    }
-}(text);
+      triggerRawbtIntent(text);
       toast('📲 انبعت التقرير للطابعة');
       return;
     }
@@ -2463,80 +2294,22 @@
     fallbackPrint(htmlFallback);
   }
 
-  function function triggerRawbtIntent(text) {
-    // 🔥 محاولة الطباعة عبر الجسر الأصلي (PrinterBridge) أولاً
-    if (window.SJSPrinter) {
-        try {
-            console.log('📱 محاولة الطباعة عبر الجسر الأصلي...');
-            const b64 = textToEscPosBase64(text);
-            const btAddress = localStorage.getItem('sjs_printer_bt_address') || '';
-            
-            if (btAddress) {
-                window.SJSPrinter.printBluetooth(btAddress, b64);
-                toast('📲 جاري الطباعة عبر الجسر الأصلي (بلوتوث)');
-                console.log('✅ تم إرسال الطباعة عبر الجسر الأصلي');
-                return;
-            } else {
-                // إذا ما في عنوان بلوتوث، جرب الشبكة
-                const ip = localStorage.getItem('sjs_printer_ip') || '';
-                const port = parseInt(localStorage.getItem('sjs_printer_port') || '9100');
-                if (ip) {
-                    window.SJSPrinter.printNetwork(ip, port, b64);
-                    toast('📡 جاري الطباعة عبر الجسر الأصلي (شبكة)');
-                    console.log('✅ تم إرسال الطباعة عبر الجسر الأصلي (شبكة)');
-                    return;
-                }
-                console.log('⚠️ لا يوجد عنوان بلوتوث ولا IP للجسر الأصلي');
-            }
-        } catch(e) {
-            console.error('❌ SJSPrinter failed:', e);
-            toast('⚠️ فشل الجسر الأصلي: ' + (e.message || 'خطأ غير معروف'));
-        }
-    }
-    
-    // 📲 RawBT كبديل (الطريقة القديمة)
-    try {
-        console.log('📲 محاولة الطباعة عبر RawBT (بديل)...');
-        const old = document.getElementById('rawbtFrame');
-        if (old) old.remove();
-        
-        const fr = document.createElement('iframe');
-        fr.id = 'rawbtFrame';
-        fr.style.cssText = 'position:fixed;width:0;height:0;border:0;visibility:hidden;opacity:0';
-        document.body.appendChild(fr);
-        
-        fr.src = 'intent:' + encodeURIComponent(text) + '#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;';
-        
-        setTimeout(() => {
-            try { 
-                fr.remove(); 
-                console.log('✅ RawBT iframe removed');
-            } catch(e) { 
-                console.log('⚠️ RawBT iframe removal error:', e);
-            }
-        }, 4000);
-        
-        toast('📲 انبعت للطابعة عبر RawBT');
-        console.log('✅ تم إرسال الطباعة عبر RawBT');
-        
-    } catch(e) { 
-        console.error('❌ RawBT intent trigger failed:', e);
-        toast('⚠️ فشل RawBT: ' + (e.message || 'خطأ غير معروف'));
-    }
-}(text){
-    // ⚠️ إصلاح حرج: لا نستخدم window.location.href أبدًا لروابط intent:// —
-    // هذا بينقل الصفحة الرئيسية كاملة، ولو الـWebView ما عالج intent:// صح،
-    // بتطلع شاشة خطأ كاملة (net::ERR_UNKNOWN_URL_SCHEME) وتضيع كل التطبيق.
-    // الحل: إطار مخفي (iframe) منعزل — أي فشل فيه ما بأثر على الصفحة الرئيسية إطلاقًا.
+  function triggerRawbtIntent(text){
+    // ⚠️ الإطار المخفي (iframe) ما بيوصل لـRawBT بمعظم الـWebViews (بعض إصدارات أندرويد
+    // ما بتلتقط intent:// جوا iframe إطلاقًا). الطريقة الأوثق: رابط <a> حقيقي بالصفحة
+    // الرئيسية نفسها (مش iframe) — الـWebViewClient بيعترضه قبل أي تنقّل فعلي يصير،
+    // فما في خطر عالصفحة، وبنفس الوقت أكتر احتمال يوصل فعليًا لـRawBT.
     try{
-      const old = document.getElementById('rawbtFrame');
+      const url = 'intent:' + encodeURIComponent(text) + '#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;';
+      const old = document.getElementById('rawbtLink');
       if (old) old.remove();
-      const fr = document.createElement('iframe');
-      fr.id = 'rawbtFrame';
-      fr.style.cssText = 'position:fixed;width:0;height:0;border:0;visibility:hidden;opacity:0';
-      document.body.appendChild(fr);
-      fr.src = 'intent:' + encodeURIComponent(text) + '#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;';
-      setTimeout(()=>{ try{ fr.remove(); }catch(e){} }, 4000);
+      const a = document.createElement('a');
+      a.id = 'rawbtLink';
+      a.href = url;
+      a.style.cssText = 'position:fixed;width:1px;height:1px;opacity:0;pointer-events:none';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(()=>{ try{ a.remove(); }catch(e){} }, 3000);
     }catch(e){ console.error('RawBT intent trigger failed:', e); }
   }
   async function printSmart(ord, lines, t, cust) {
@@ -2545,67 +2318,7 @@
     // أندرويد: طباعة مباشرة بدون أي نافذة عبر تطبيق RawBT (بلوتوث/شبكة)
     if (method === 'rawbt' || (method === 'auto' && isAndroid)) {
       const text = generateReceiptText(ord, lines, t, cust);
-      function triggerRawbtIntent(text) {
-    // 🔥 محاولة الطباعة عبر الجسر الأصلي (PrinterBridge) أولاً
-    if (window.SJSPrinter) {
-        try {
-            console.log('📱 محاولة الطباعة عبر الجسر الأصلي...');
-            const b64 = textToEscPosBase64(text);
-            const btAddress = localStorage.getItem('sjs_printer_bt_address') || '';
-            
-            if (btAddress) {
-                window.SJSPrinter.printBluetooth(btAddress, b64);
-                toast('📲 جاري الطباعة عبر الجسر الأصلي (بلوتوث)');
-                console.log('✅ تم إرسال الطباعة عبر الجسر الأصلي');
-                return;
-            } else {
-                // إذا ما في عنوان بلوتوث، جرب الشبكة
-                const ip = localStorage.getItem('sjs_printer_ip') || '';
-                const port = parseInt(localStorage.getItem('sjs_printer_port') || '9100');
-                if (ip) {
-                    window.SJSPrinter.printNetwork(ip, port, b64);
-                    toast('📡 جاري الطباعة عبر الجسر الأصلي (شبكة)');
-                    console.log('✅ تم إرسال الطباعة عبر الجسر الأصلي (شبكة)');
-                    return;
-                }
-                console.log('⚠️ لا يوجد عنوان بلوتوث ولا IP للجسر الأصلي');
-            }
-        } catch(e) {
-            console.error('❌ SJSPrinter failed:', e);
-            toast('⚠️ فشل الجسر الأصلي: ' + (e.message || 'خطأ غير معروف'));
-        }
-    }
-    
-    // 📲 RawBT كبديل (الطريقة القديمة)
-    try {
-        console.log('📲 محاولة الطباعة عبر RawBT (بديل)...');
-        const old = document.getElementById('rawbtFrame');
-        if (old) old.remove();
-        
-        const fr = document.createElement('iframe');
-        fr.id = 'rawbtFrame';
-        fr.style.cssText = 'position:fixed;width:0;height:0;border:0;visibility:hidden;opacity:0';
-        document.body.appendChild(fr);
-        
-        fr.src = 'intent:' + encodeURIComponent(text) + '#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;';
-        
-        setTimeout(() => {
-            try { 
-                fr.remove(); 
-                console.log('✅ RawBT iframe removed');
-            } catch(e) { 
-                console.log('⚠️ RawBT iframe removal error:', e);
-            }
-        }, 4000);
-        
-        toast('📲 انبعت للطابعة عبر RawBT');
-        console.log('✅ تم إرسال الطباعة عبر RawBT');
-        
-    } catch(e) { 
-        console.error('❌ RawBT intent trigger failed:', e);
-        toast('⚠️ فشل RawBT: ' + (e.message || 'خطأ غير معروف'));
-    }
-}(text);
+      triggerRawbtIntent(text);
       toast('📲 انبعتت للطابعة');
       return;
     }
@@ -2813,160 +2526,234 @@
 
   /* ================= الطلبات ================= */
   let DAY = [];
-  
-  /**
-   * 🔥 الدالة المعدلة: تعرض كل طلبات اليوم للكول سنتر عند اختيار فرع محدد
-   */
-  async function loadDay() {
+  /* ---- بحث الفواتير (مدير) ---- */
+  async function searchInvoices(){
+    if(!isAdmin()){ toast('⛔ صلاحية المدير فقط'); return; }
+    const q = document.getElementById('invSearch').value.trim();
+    if(!q){ loadDay(); return; }
+    const L = document.getElementById('dayList');
+    L.innerHTML = '<div class="empty-note">... جاري البحث</div>';
+    document.getElementById('dayStats').innerHTML = '';
+    try{
+      let orders = [];
+      const sel = '*, order_items(*), branches(name_ar), customers(name, phone, address)';
+      if(/^\d{1,6}$/.test(q)){
+        // رقم طلب
+        const r = await db.from('orders').select(sel).eq('order_number', parseInt(q)).limit(20);
+        orders = r.data||[];
+      }
+      if(!orders.length){
+        // هاتف أو اسم عميل
+        const c = await db.from('customers').select('id').or(`phone.ilike.%${q}%,name.ilike.%${q}%`).limit(30);
+        const ids = (c.data||[]).map(x=>x.id);
+        if(ids.length){
+          const r = await db.from('orders').select(sel).in('customer_id', ids).order('created_at',{ascending:false}).limit(50);
+          orders = r.data||[];
+        }
+      }
+      DAY = orders;
+      if(!orders.length){ L.innerHTML = '<div class="empty-note">ما في نتائج لـ"'+esc(q)+'"</div>'; return; }
+      L.innerHTML = `<div style="font-weight:800;color:var(--muted);margin-bottom:8px">نتائج البحث: ${orders.length} فاتورة — اضغط على أي سطر للتفاصيل</div>
+        <table class="tbl"><tr><th>#</th><th>التاريخ</th><th>الفرع</th><th>العميل</th><th>الهاتف</th><th>النوع</th><th>الإجمالي</th><th>الحالة</th><th></th></tr>
+        ${orders.map(o=>`<tr class="${o.status==='cancelled'?'off':''}" style="cursor:pointer" onclick="showInvoice('${o.id}')">
+          <td><b>${o.order_number}</b></td>
+          <td>${new Date(o.created_at).toLocaleString('ar-JO')}</td>
+          <td>${esc(o.branches?.name_ar||'—')}</td>
+          <td>${esc(o.customers?.name||'—')}</td>
+          <td dir="ltr" style="text-align:right">${esc(o.customers?.phone||'—')}</td>
+          <td>${TYPE_AR[o.order_type]||''}</td>
+          <td><b>${fmt(o.total)}</b></td>
+          <td>${o.status==='cancelled'?'❌':'✅'}</td>
+          <td><button class="mini tog" onclick="event.stopPropagation();reprintDay('${o.id}')">🖨️</button></td>
+        </tr>`).join('')}</table>`;
+    }catch(e){ console.error(e); L.innerHTML = '<div class="alert-red">⚠️ '+esc(e.message||'خطأ بالبحث')+'</div>'; }
+  }
+
+  /* ---- تفاصيل الفاتورة الكاملة (مدير) ---- */
+  function showInvoice(id){
+    if(!isAdmin()) return;
+    const o = DAY.find(x=>x.id===id); if(!o) return;
+    modal(`<h3>🧾 فاتورة #${o.order_number}</h3>
+      <table class="tbl" style="margin-bottom:12px">
+        <tr><td><b>التاريخ</b></td><td>${new Date(o.created_at).toLocaleString('ar-JO')}</td></tr>
+        <tr><td><b>الفرع</b></td><td>${esc(o.branches?.name_ar||'—')}</td></tr>
+        <tr><td><b>الموظف</b></td><td>${esc(o.created_by_name||'—')}</td></tr>
+        <tr><td><b>النوع / الدفع</b></td><td>${TYPE_AR[o.order_type]||''} / ${PAY_AR[o.payment_method]||''}</td></tr>
+        <tr><td><b>العميل</b></td><td>${esc(o.customers?.name||'—')}${o.customers?.phone?` — <span dir="ltr">${esc(o.customers.phone)}</span>`:''}</td></tr>
+        ${o.customers?.address?`<tr><td><b>العنوان</b></td><td>${esc(o.customers.address)}</td></tr>`:''}
+        ${o.notes?`<tr><td><b>ملاحظة</b></td><td>${esc(o.notes)}</td></tr>`:''}
+        ${o.status==='cancelled'?`<tr><td><b style="color:var(--red)">ملغي — السبب</b></td><td>${esc(o.cancel_reason||'—')}</td></tr>`:''}
+      </table>
+      <table class="tbl" style="margin-bottom:12px">
+        <tr><th>الصنف</th><th>الكمية</th><th>السعر</th><th>المجموع</th></tr>
+        ${(o.order_items||[]).map(l=>`<tr><td>${esc(l.item_name)}${l.notes?`<br><small style="color:var(--muted)">📝 ${esc(l.notes)}</small>`:''}</td><td>×${l.quantity}</td><td>${fmt(l.unit_price)}</td><td><b>${fmt(l.unit_price*l.quantity)}</b></td></tr>`).join('')}
+      </table>
+      <div class="trow"><span>المجموع</span><span>${fmt(o.subtotal)}</span></div>
+      ${+o.discount>0?`<div class="trow"><span>خصم ${o.discount_code?'('+esc(o.discount_code)+')':''}</span><span>− ${fmt(o.discount)}</span></div>`:''}
+      ${+o.delivery_fee>0?`<div class="trow"><span>توصيل</span><span>${fmt(o.delivery_fee)}</span></div>`:''}
+      <div class="trow total"><span>الإجمالي</span><span>${fmt(o.total)} ${CURRENCY}</span></div>
+      <div class="m-act">
+        <button class="save" onclick="reprintDay('${o.id}');closeModal()">🖨️ طباعة</button>
+        <button class="cancel" onclick="closeModal()">إغلاق</button>
+      </div>`);
+  }
+
+  function setDayFilter(mode){
+    document.querySelectorAll('#dayQuickFilters button').forEach(b=>b.className='mini tog');
+    const map={today:0,yesterday:1};
+    document.querySelectorAll('#dayQuickFilters button').forEach(b=>{
+      if(b.getAttribute('onclick')?.includes("'"+mode+"'")) b.className='mini ok';
+    });
+    const cdr=document.getElementById('dayCustomRow');
+    const lbl=document.getElementById('dayDateLabel');
+    let from='',to='',label='';
+    if(mode==='custom'){
+      if(cdr){cdr.style.display='flex';cdr.classList.remove('hidden');}
+      if(lbl) lbl.textContent='حدد الفترة ثم اضغط عرض';
+      return;
+    }
+    if(cdr){cdr.style.display='none';cdr.classList.add('hidden');}
+    if(mode==='today'){ const fd=getFinancialDay(); from=fd.from; to=fd.to; label='📅 اليوم — '+fd.label; }
+    if(mode==='yesterday'){ const fd=getFinancialDay(1); from=fd.from; to=fd.to; label='📅 البارحة — '+fd.label; }
+    if(mode==='week'){ const fd=getFinancialWeek(); from=fd.from; to=fd.to; label='📅 هذا الأسبوع'; }
+    if(mode==='month'){ const fd=getFinancialMonth(); from=fd.from; to=fd.to; label='📅 هذا الشهر'; }
+    if(mode==='last7'){ const t=new Date(); const f=new Date(t-7*86400000); from=f.toISOString(); to=t.toISOString(); label='📅 آخر 7 أيام'; }
+    if(mode==='last30'){ const t=new Date(); const f=new Date(t-30*86400000); from=f.toISOString(); to=t.toISOString(); label='📅 آخر 30 يوم'; }
+    window.__dayFrom=from; window.__dayTo=to;
+    if(lbl) lbl.textContent=label;
+    loadDay();
+  }
+  async function loadDay(){
     try {
-        const adm = isAdmin();
-        const cc = isCallCenter();
-        console.log('جاري تحميل الطلبات...');
+      const adm = isAdmin();
+      const cc = isCallCenter();
+      console.log('جاري تحميل الطلبات...');
 
-        // صف اختيار الفرع — للكول سنتر دايمًا، وللمدير لو حسابه مش مربوط بفرع معيّن
-        const showBranchPicker = cc || (adm && !ME.branch_id);
-        const ccRow = document.getElementById('ccBranchRow');
-        if (ccRow) ccRow.classList.toggle('hidden', !showBranchPicker);
-        const ccSel = document.getElementById('dayBranchSel');
-        if (showBranchPicker && ccSel && ccSel.options.length <= 1 && BRANCHES.length) {
-            ccSel.innerHTML = '<option value="">' + (adm ? 'كل الفروع' : 'كل الفروع (آخر 20 طلب)') + '</option>' +
-                BRANCHES.map(b => `<option value="${b.id}">${esc(b.name_ar)}</option>`).join('');
-        }
+      // صف اختيار الفرع — للكول سنتر دايمًا، وللمدير لو حسابه مش مربوط بفرع معيّن (يشوف كل الفروع)
+      const showBranchPicker = cc || (adm && !ME.branch_id);
+      const ccRow = document.getElementById('ccBranchRow');
+      if (ccRow) ccRow.classList.toggle('hidden', !showBranchPicker);
+      const ccSel = document.getElementById('dayBranchSel');
+      if (showBranchPicker && ccSel && ccSel.options.length<=1 && BRANCHES.length){
+        ccSel.innerHTML = '<option value="">' + (adm ? 'كل الفروع' : 'كل الفروع (آخر 20 طلب)') + '</option>' +
+          BRANCHES.map(b=>`<option value="${b.id}">${esc(b.name_ar)}</option>`).join('');
+      }
 
-        let q = db.from('orders')
-            .select('*, order_items(*), branches(name_ar), customers(name, phone, address, favorite_items, feedback, notes, flagged)')
-            .order('created_at', { ascending: false });
+      let q = db.from('orders')
+        .select('*, order_items(*), branches(name_ar), customers(name, phone, address, favorite_items, feedback, notes, flagged)')
+        .order('created_at', {ascending:false});
 
-        if (adm) {
-            // المدير: فلتر ذكي (اليوم/أسبوع/شهر...) أو يدوي
-            const df = document.getElementById('dayFrom')?.value;
-            const dt = document.getElementById('dayTo')?.value;
-            let from, to;
-            if (window.__dayFrom && window.__dayTo) {
-                from = window.__dayFrom;
-                to = window.__dayTo;
-            } else if (df && dt) {
-                from = df + 'T00:00:00';
-                to = dt + 'T23:59:59';
-            } else {
-                const fd = getFinancialDay();
-                from = fd.from;
-                to = fd.to;
-                window.__dayFrom = from;
-                window.__dayTo = to;
-                setTimeout(() => {
-                    const lbl = document.getElementById('dayDateLabel');
-                    if (lbl && !lbl.textContent) lbl.textContent = '📅 اليوم — ' + fd.label;
-                }, 0);
-            }
-            q = q.gte('created_at', from).lte('created_at', to);
-            if (ME.branch_id) q = q.eq('branch_id', ME.branch_id);
-            else if (ccSel?.value) q = q.eq('branch_id', ccSel.value);
-        } else if (cc) {
-            // 🔥 كول سنتر: تحسين العرض
-            const selectedBranch = ccSel?.value || '';
-            const fd = getFinancialDay();
-            
-            if (selectedBranch) {
-                // ✅ فرع محدد = كل طلبات اليوم المالي لهذا الفرع
-                console.log(`📋 جلب كل طلبات اليوم للفرع: ${selectedBranch}`);
-                q = q.eq('branch_id', selectedBranch)
-                     .gte('created_at', fd.from)
-                     .lte('created_at', fd.to);
-            } else {
-                // ⚠️ لا فرع محدد = آخر 20 طلب من كل الفروع (مراجعة سريعة)
-                console.log('📋 جلب آخر 20 طلب من كل الفروع');
-                q = q.limit(20);
-            }
+      if (adm) {
+        // المدير: فلتر ذكي (اليوم/أسبوع/شهر...) أو يدوي، وإلا اليوم المالي الافتراضي
+        const df = document.getElementById('dayFrom')?.value;
+        const dt = document.getElementById('dayTo')?.value;
+        if(window.__dayFrom && window.__dayTo){
+          q = q.gte('created_at', window.__dayFrom).lte('created_at', window.__dayTo);
+        } else if(df && dt){
+          q = q.gte('created_at', df+'T00:00:00').lte('created_at', dt+'T23:59:59');
         } else {
-            // موظف عادي: فقط طلبات فرعه
-            if (ME.branch_id) q = q.eq('branch_id', ME.branch_id);
-            q = q.limit(6);
+          const fd = getFinancialDay();
+          q = q.gte('created_at', fd.from).lte('created_at', fd.to);
+          window.__dayFrom=fd.from; window.__dayTo=fd.to;
+          setTimeout(()=>{ const lbl=document.getElementById('dayDateLabel'); if(lbl && !lbl.textContent) lbl.textContent='📅 اليوم — '+fd.label; },0);
+        }
+        if (ME.branch_id) q = q.eq('branch_id', ME.branch_id);
+        else if (ccSel?.value) q = q.eq('branch_id', ccSel.value); // فلتر فرع اختياري إضافي فوق فلتر التاريخ
+      } else if (cc) {
+        // كول سنتر: اختار فرع معيّن = يشوف كل طلبات اليوم المالي لهاد الفرع (بدون سقف)
+        // ما اختار فرع = آخر 20 طلب من كل الفروع (مراجعة سريعة بدون تحميل زايد)
+        const selBranch = ccSel?.value || '';
+        const fd = getFinancialDay();
+        if (selBranch) {
+          q = q.eq('branch_id', selBranch).gte('created_at', fd.from).lte('created_at', fd.to);
+        } else {
+          q = q.limit(20);
+        }
+      } else {
+        // الموظف: آخر 6 فواتير فقط (ضد السرقة) ومن فرعه فقط
+        if (ME.branch_id) q = q.eq('branch_id', ME.branch_id);
+        q = q.limit(6);
+      }
+
+      const { data, error } = await q;
+      if (error) {
+        console.error('خطأ في جلب الطلبات:', error);
+        toast('⚠️ خطأ في جلب الطلبات');
+        return;
+      }
+
+      DAY = data||[];
+      console.log('عدد الطلبات:', DAY.length);
+
+      const dayStats = document.getElementById('dayStats');
+      if (dayStats) {
+        if(adm || cc){
+          const ok = DAY.filter(o=>o.status!=='cancelled');
+          const sum = ok.reduce((s,o)=>s + (+o.total), 0);
+          const cancelled = DAY.filter(o=>o.status==='cancelled');
+          const ccSelBranch = document.getElementById('dayBranchSel')?.value;
+          dayStats.innerHTML = `
+            ${cc && ccSelBranch ? '<div class="stat" style="color:var(--muted)">📅 كل طلبات اليوم لهاد الفرع</div>' : ''}
+            <div class="stat">طلبات ${cc?'':'اليوم'}<b>${ok.length}</b></div>
+            <div class="stat">المبيعات<b>${fmt(sum)} ${CURRENCY}</b></div>
+            <div class="stat">توصيل<b>${ok.filter(o=>o.order_type==='delivery').length}</b></div>
+            <div class="stat">استلام<b>${ok.filter(o=>o.order_type==='takeaway').length}</b></div>
+            <div class="stat">ملغي<b>${cancelled.length}</b></div>
+            <button class="mini ok" onclick="loadDay()">🔄 تحديث</button>
+            ${adm?'<button class="mini edit" onclick="switchView(\'admin\')">⚙️ الإدارة</button>':''}
+            ${ME.branch_id?'<button class="mini del" onclick="window.endShift()">🔴 إنهاء الشيفت</button>':''}
+          `;
+        } else {
+          dayStats.innerHTML = `
+            <div class="stat" style="color:var(--muted)">📋 طلباتك (${DAY.length})</div>
+            <button class="mini ok" onclick="loadDay()">🔄 تحديث</button>
+            <button class="mini del" onclick="window.endShift()">🔴 إنهاء الشيفت</button>
+            <button class="mini edit" onclick="switchView('admin')">⚙️ الإدارة</button>
+          `;
+        }
+      }
+
+      const dayList = document.getElementById('dayList');
+      if (dayList) {
+        if (DAY.length === 0) {
+          dayList.innerHTML = `<div class="empty-note">📭 لا توجد طلبات مسجلة حتى الآن</div>`;
+          return;
         }
 
-        const { data, error } = await q;
-        if (error) {
-            console.error('خطأ في جلب الطلبات:', error);
-            toast('⚠️ خطأ في جلب الطلبات');
-            return;
-        }
-
-        DAY = data || [];
-        console.log(`📊 عدد الطلبات: ${DAY.length}`);
-
-        // عرض الإحصائيات...
-        const dayStats = document.getElementById('dayStats');
-        if (dayStats) {
-            if (adm || cc) {
-                const ok = DAY.filter(o => o.status !== 'cancelled');
-                const sum = ok.reduce((s, o) => s + (+o.total), 0);
-                const cancelled = DAY.filter(o => o.status === 'cancelled');
-                const ccSelBranch = document.getElementById('dayBranchSel')?.value;
-                dayStats.innerHTML = `
-                    ${cc && ccSelBranch ? '<div class="stat" style="color:var(--muted)">📅 كل طلبات اليوم لهاد الفرع</div>' : ''}
-                    <div class="stat">طلبات ${cc ? '' : 'اليوم'}<b>${ok.length}</b></div>
-                    <div class="stat">المبيعات<b>${fmt(sum)} ${CURRENCY}</b></div>
-                    <div class="stat">توصيل<b>${ok.filter(o => o.order_type === 'delivery').length}</b></div>
-                    <div class="stat">استلام<b>${ok.filter(o => o.order_type === 'takeaway').length}</b></div>
-                    <div class="stat">ملغي<b>${cancelled.length}</b></div>
-                    <button class="mini ok" onclick="loadDay()">🔄 تحديث</button>
-                    ${adm ? '<button class="mini edit" onclick="switchView(\'admin\')">⚙️ الإدارة</button>' : ''}
-                    ${ME.branch_id ? '<button class="mini del" onclick="window.endShift()">🔴 إنهاء الشيفت</button>' : ''}
-                `;
-            } else {
-                dayStats.innerHTML = `
-                    <div class="stat" style="color:var(--muted)">📋 طلباتك (${DAY.length})</div>
-                    <button class="mini ok" onclick="loadDay()">🔄 تحديث</button>
-                    <button class="mini del" onclick="window.endShift()">🔴 إنهاء الشيفت</button>
-                    <button class="mini edit" onclick="switchView('admin')">⚙️ الإدارة</button>
-                `;
-            }
-        }
-
-        // عرض قائمة الطلبات...
-        const dayList = document.getElementById('dayList');
-        if (dayList) {
-            if (DAY.length === 0) {
-                dayList.innerHTML = `<div class="empty-note">📭 لا توجد طلبات مسجدة حتى الآن</div>`;
-                return;
-            }
-
-            dayList.innerHTML = `<table class="tbl"><tr><th>#</th><th>الوقت</th><th>⏱️</th><th>النوع</th>${(adm || cc) ? '<th>الفرع</th>' : ''}<th>العميل</th><th>الكاشير</th><th>الأصناف</th><th>الإجمالي</th><th>الحالة</th><th></th></tr>
-                ${DAY.map(o => {
-                    const mins = Math.floor((Date.now() - new Date(o.created_at)) / 60000);
-                    const readyMins = o.status === 'ready' ? Math.floor((Date.now() - new Date(o.updated_at || o.created_at)) / 60000) : 0;
-                    const pending = o.status === 'new';
-                    const isReady = o.status === 'ready';
-                    const late = pending && mins >= LATE_MIN;
-                    const readyLate = isReady && readyMins >= READY_WAIT_MIN;
-                    const timer = pending ? `<span class="timer-chip ${late ? 'late' : ''}">${mins} د تجهيز</span>`
-                        : isReady ? `<span class="timer-chip ${readyLate ? 'late' : ''}">${readyMins} د انتظار</span>`
-                        : (o.status === 'cancelled' ? '—' : '✓');
-                    return `<tr class="${o.status === 'cancelled' ? 'off' : ''} ${(late || readyLate) ? 'late' : ''}">
-                        <td><b>${o.order_number}</b></td>
-                        <td>${new Date(o.created_at).toLocaleTimeString('ar-JO', { hour: '2-digit', minute: '2-digit' })}</td>
-                        <td>${timer}</td>
-                        <td>${TYPE_AR[o.order_type] || ''}</td>
-                        ${(adm || cc) ? `<td>${esc(o.branches?.name_ar || '—')}</td>` : ''}
-                        <td>${esc(o.customers?.name || '—')}</td>
-                        <td>${esc(o.created_by_name || '—')}</td>
-                        <td>${(o.order_items || []).map(l => l.quantity + '× ' + esc(l.item_name)).join('، ')}</td>
-                        <td><b>${fmt(o.total)}</b></td>
-                        <td>${o.status === 'new' ? '🔄 قيد التجهيز' : o.status === 'ready' ? '📦 جاهز' : (o.status === 'delivered' ? '✅ منجز' : '❌ ملغي')}</td>
-                        <td style="white-space:nowrap">
-                            ${pending ? `<button class="mini ok" onclick="markReady('${o.id}')">✅ جاهز</button>` : ''}
-                            ${isReady ? `<button class="mini ok" onclick="finishOrder('${o.id}')">📦 تم الاستلام</button>` : ''}
-                            <button class="mini tog" onclick="reprintDay('${o.id}')">🖨️</button>
-                            ${o.order_type === 'delivery' && o.status !== 'cancelled' && (ME.role === 'callcenter' || adm) ? `<button class="mini wa" onclick="waSend('${o.id}')">📲</button>` : ''}
-                            ${adm && o.status !== 'cancelled' ? `<button class="mini edit" onclick="editOrder('${o.id}')">✏️</button>` : ''}
-                            ${o.status !== 'cancelled' && perm('order_cancel') ? `<button class="mini del" onclick="cancelDay('${o.id}')">✗</button>` : ''}
-                        </td>
-                    </tr>`;
-                }).join('')}</table>`;
-        }
-    } catch (e) {
-        console.error('خطأ في loadDay:', e);
-        toast('⚠️ خطأ في تحميل الطلبات');
+        dayList.innerHTML = `<table class="tbl"><tr><th>#</th><th>الوقت</th><th>⏱️</th><th>النوع</th>${(adm||cc)?'<th>الفرع</th>':''}<th>العميل</th><th>الكاشير</th><th>الأصناف</th><th>الإجمالي</th><th>الحالة</th><th></th></tr>
+          ${DAY.map(o=>{
+            const mins = Math.floor((Date.now()-new Date(o.created_at))/60000);
+            const readyMins = o.status==='ready' ? Math.floor((Date.now()-new Date(o.updated_at||o.created_at))/60000) : 0;
+            const pending = o.status==='new';
+            const isReady = o.status==='ready';
+            const late = pending && mins>=LATE_MIN;
+            const readyLate = isReady && readyMins>=READY_WAIT_MIN;
+            const timer = pending ? `<span class="timer-chip ${late?'late':''}">${mins} د تجهيز</span>`
+              : isReady ? `<span class="timer-chip ${readyLate?'late':''}">${readyMins} د انتظار</span>`
+              : (o.status==='cancelled'?'—':'✓');
+            return `<tr class="${o.status==='cancelled'?'off':''} ${(late||readyLate)?'late':''}">
+            <td><b>${o.order_number}</b></td>
+            <td>${new Date(o.created_at).toLocaleTimeString('ar-JO',{hour:'2-digit',minute:'2-digit'})}</td>
+            <td>${timer}</td>
+            <td>${TYPE_AR[o.order_type]||''}</td>
+            ${(adm||cc)?`<td>${esc(o.branches?.name_ar||'—')}</td>`:''}
+            <td>${esc(o.customers?.name||'—')}</td>
+            <td>${esc(o.created_by_name||'—')}</td>
+            <td>${(o.order_items||[]).map(l=>l.quantity+'× '+esc(l.item_name)).join('، ')}</td>
+            <td><b>${fmt(o.total)}</b></td>
+            <td>${o.status==='new' ? '🔄 قيد التجهيز' : o.status==='ready' ? '📦 جاهز' : (o.status==='delivered' ? '✅ منجز' : '❌ ملغي')}</td>
+            <td style="white-space:nowrap">
+              ${pending?`<button class="mini ok" onclick="markReady('${o.id}')">✅ جاهز</button>`:''}
+              ${isReady?`<button class="mini ok" onclick="finishOrder('${o.id}')">📦 تم الاستلام</button>`:''}
+              <button class="mini tog" onclick="reprintDay('${o.id}')">🖨️</button>
+              ${o.order_type==='delivery' && o.status!=='cancelled' && (ME.role==='callcenter'||adm) ? `<button class="mini wa" onclick="waSend('${o.id}')">📲</button>` : ''}
+              ${adm && o.status!=='cancelled' ? `<button class="mini edit" onclick="editOrder('${o.id}')">✏️</button>`:''}
+              ${o.status!=='cancelled' && perm('order_cancel')?`<button class="mini del" onclick="cancelDay('${o.id}')">✗</button>`:''}
+            </td></tr>`;}).join('')}</table>`;
+      }
+    } catch(e) {
+      console.error('خطأ في loadDay:', e);
+      toast('⚠️ خطأ في تحميل الطلبات');
     }
   }
 
@@ -2985,57 +2772,22 @@
     } catch(e) { console.error(e); }
   }
 
-  /**
-   * 🔥 الدالة المعدلة: إعادة الطباعة مع سؤال التوجيه
-   */
-  function reprintDay(id) {
-    const o = DAY.find(x => x.id === id);
-    if (!o) return;
-
-    const isLocalBranch = (ME.branch_id || getDeviceBranchId()) === o.branch_id;
-    const branchName = BRANCHES.find(b => b.id === o.branch_id)?.name_ar || '—';
-
-    if (!isLocalBranch) {
-        // هذا الجهاز ليس في نفس فرع الطلب
-        const msg = `⚠️ الطلب #${o.order_number} لفرع "${branchName}"\n\n` +
-                   `اختر:\n` +
-                   `• "موافق" = طباعة هنا (على هذا الجهاز)\n` +
-                   `• "إلغاء" = إرسال للطباعة في فرع "${branchName}"`;
-        
-        const choice = confirm(msg);
-        
-        if (!choice) {
-            // إلغاء = إرسال للفرع المستهدف
-            db.from('orders').update({ auto_printed: false }).eq('id', id).then(() => {
-                toast(`📨 تم إرسال الطلب #${o.order_number} للطباعة في فرع "${branchName}"`);
-            }).catch(err => {
-                console.error('خطأ في إرسال الطلب للفرع:', err);
-                toast('⚠️ فشل إرسال الطلب للفرع');
-            });
-            return;
-        }
-        // موافق = طباعة هنا
+  function reprintDay(id){
+    const o = DAY.find(x=>x.id===id);
+    if(!o) return;
+    // نفس قاعدة الطباعة بالحفظ: نطبع محليًا بس لو هاد الجهاز/الحساب فعليًا بنفس فرع الطلب
+    // غير هيك (مدير/كول سنتر يشوف طلب فرع تاني) ما نفتح صفحة طباعة محلية عشوائية —
+    // نطلب من جهاز الفرع المستهدف يطبعها هو (بإعادة تصفيرها كـ "غير مطبوعة" ليلتقطها تلقائيًا)
+    const isLocalBranch = (ME.branch_id||getDeviceBranchId()) === o.branch_id;
+    if(!isLocalBranch){
+      if(!confirm('هاد الطلب لفرع "'+(BRANCHES.find(b=>b.id===o.branch_id)?.name_ar||'—')+'" — مش عندك.\nتريد ترسله يطبع هناك تلقائيًا (بدل ما يفتح صفحة طباعة هون)؟')) return;
+      db.from('orders').update({auto_printed:false}).eq('id',id).then(()=>{
+        toast('📨 انبعت لجهاز فرع '+(BRANCHES.find(b=>b.id===o.branch_id)?.name_ar||'—')+' ليطبعها');
+      });
+      return;
     }
-
-    // طباعة محلياً
-    const cust = o.customers ? {
-        name: o.customers.name,
-        phone: o.customers.phone,
-        addr: o.customers.address || ''
-    } : null;
-
-    try {
-        printSmart(o, o.order_items || [], {
-            sub: +o.subtotal,
-            disc: +o.discount,
-            del: +o.delivery_fee,
-            total: +o.total
-        }, cust);
-        toast(`🖨️ جاري طباعة الطلب #${o.order_number}`);
-    } catch (err) {
-        console.error('خطأ في إعادة الطباعة:', err);
-        toast('⚠️ فشل الطباعة: ' + (err.message || 'خطأ غير معروف'));
-    }
+    const cust = o.customers ? { name: o.customers.name, phone: o.customers.phone, addr: o.customers.address||'' } : null;
+    printSmart(o, o.order_items||[], { sub: +o.subtotal, disc: +o.discount, del: +o.delivery_fee, total: +o.total }, cust);
   }
 
   async function cancelDay(id){
@@ -3753,8 +3505,7 @@
             <td>${sh.closing_balance!==null?fmt(sh.closing_balance):'—'}</td>
             <td>${match}</td>
             <td style="white-space:nowrap">${sh.status==='closed'?`<button class="mini tog" onclick="reprintShift('${sh.id}')" title="إعادة طباعة تقرير الإغلاق">🖨️</button>`:''}</td>
-          </tr>`;
-        }).join('')||'<tr><td colspan="13" class="empty-note">ما في شيفتات بهاي الفترة</td></tr>'}
+          </tr>`;}).join('')||'<tr><td colspan="13" class="empty-note">ما في شيفتات بهاي الفترة</td></tr>'}
       </table>`;
     }catch(e){
       console.error(e);
