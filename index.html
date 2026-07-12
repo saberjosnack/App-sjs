@@ -437,13 +437,6 @@
         <div><label style="font-weight:700;font-size:.82rem;color:var(--muted)">إلى تاريخ</label><br><input type="date" id="dayTo" class="dfield" style="width:auto"></div>
         <div style="display:flex;align-items:flex-end"><button class="mini ok" style="padding:9px 18px" onclick="loadDay()">عرض</button></div>
       </div>
-      <div id="ccBranchRow" class="hidden" style="gap:8px;flex-wrap:wrap;margin-bottom:8px;align-items:flex-end">
-        <div><label style="font-weight:700;font-size:.82rem;color:var(--muted)">🏪 الفرع</label><br>
-          <select id="dayBranchSel" class="dfield" style="width:auto;min-width:170px" onchange="loadDay()">
-            <option value="">كل الفروع (آخر 20 طلب)</option>
-          </select>
-        </div>
-      </div>
       <div id="dayDateLabel" style="font-weight:900;color:var(--maroon);margin-bottom:8px;font-size:.9rem"></div>
       <div class="search-bar hidden" id="invSearchBar">
         <input id="invSearch" placeholder="🔍 بحث عن فاتورة: رقم الطلب / رقم الهاتف / اسم العميل" onkeydown="if(event.key==='Enter')searchInvoices()">
@@ -547,7 +540,6 @@
         <button data-a="inventory" onclick="admTab('inventory')" style="background:var(--yellow);border-color:#d9c400">📋 جرد المخزون</button>
         <button data-a="ingredients" onclick="admTab('ingredients')">🥩 المكونات</button>
         <button data-a="recipes" onclick="admTab('recipes')">📋 الوصفات</button>
-        <button data-a="inventory" onclick="admTab('inventory')">📦 المخزون</button>
         <button data-a="transfers" onclick="admTab('transfers')">🔄 نقل بضاعة</button>
         <button data-a="expenses" onclick="admTab('expenses')">💸 المصاريف</button>
         <button data-a="purchases" onclick="admTab('purchases')">🛒 المشتريات</button>
@@ -1083,7 +1075,6 @@
     setTimeout(loadPlatformsList, 1000);
     setTimeout(sendDeviceHeartbeat, 2000);
     setInterval(sendDeviceHeartbeat, 45000);
-    setInterval(pullDevicePrinterSettings, 45000);
     setInterval(checkDevicesOffline, 60000);
     checkShift();
     if (shiftCheckInterval) clearInterval(shiftCheckInterval);
@@ -1170,7 +1161,6 @@
     localStorage.setItem('sjs_paper_width', document.getElementById('dps_paperWidth').value);
     closeModal();
     toast('✓ اتحفظت إعدادات الطابعة لهاد الجهاز');
-    sendDeviceHeartbeat(); // نحدّث شاشة "الأجهزة" فورًا بدل ما ننتظر 45 ثانية
   }
   function applyLocalPrinterSettings(){
     LOCAL_PRINTER_KEYS.forEach(k=>{
@@ -1189,26 +1179,6 @@
       SETTINGS[k] = obj[k];
     });
   }
-  // شاشة "الأجهزة" بلوحة الإدارة هي المصدر الحقيقي — لو المدير غيّر طريقة/بيانات الطابعة
-  // لجهاز معيّن من هناك، هاد الجهاز بالذات بيسحبها ويطبّقها محليًا (بدل ما تضل تعديل شكلي بلا تأثير)
-  async function pullDevicePrinterSettings(){
-    try{
-      const deviceId = getDeviceId();
-      const { data, error } = await db.from('devices')
-        .select('printer_method, printer_ip, printer_port, printer_bt_address')
-        .eq('device_id', deviceId).maybeSingle();
-      if(error || !data) return;
-      let changed = false;
-      ['printer_method','printer_ip','printer_port','printer_bt_address'].forEach(k=>{
-        const v = data[k];
-        if(v!==null && v!==undefined && String(v)!=='' && SETTINGS[k]!==v){
-          SETTINGS[k]=v; try{ localStorage.setItem('sjs_'+k, v); }catch(e){}
-          changed = true;
-        }
-      });
-      if(changed) console.log('تحدّثت إعدادات الطابعة من شاشة الأجهزة (لوحة التحكم)');
-    }catch(e){ console.error('pull printer settings failed:', e); }
-  }
 
   /* ================= تحميل البيانات ================= */
   async function bootData(){
@@ -1222,7 +1192,6 @@
       BRANCHES = b.data||[]; CATS = c.data||[]; ITEMS = i.data||[];
       SETTINGS = {}; (s.data||[]).forEach(x=>SETTINGS[x.key]=x.value);
       applyLocalPrinterSettings();
-      await pullDevicePrinterSettings(); // لو المدير عدّل إعدادات الطابعة لهاد الجهاز من شاشة "الأجهزة"، نطبّقها هون فورًا
       FIN_START_H = parseInt(SETTINGS.fin_start_hour) ?? 10; if(isNaN(FIN_START_H)) FIN_START_H = 10;
       FIN_END_H = parseInt(SETTINGS.fin_end_hour) ?? 3; if(isNaN(FIN_END_H)) FIN_END_H = 3;
       if(ME && ME.role==='custom') await loadCustomRoles();
@@ -1245,13 +1214,6 @@
   /* ================= الشيفتات ================= */
   async function checkShift(){
     try {
-      // المدير العام (حسابه مش مربوط بفرع) ما إله علاقة بالشيفتات/الدرج أبداً — بيراقب كل الفروع بس
-      if (isAdmin() && !ME.branch_id) {
-        const badge = document.getElementById('shiftBadge');
-        if (badge) badge.classList.add('hidden');
-        currentShift = null;
-        return;
-      }
       const { data } = await db.from('cash_shifts')
         .select('*')
         .eq('staff_id', ME.id)
@@ -1493,16 +1455,23 @@
         if(_autoPrintBusy.has(o.id)) continue;
         _autoPrintBusy.add(o.id);
         try{
+          // ✋ حجز آمن (Atomic Claim): نعلّم الطلب "مطبوع" أول شي بشرط إنه لسا false —
+          // لو جهاز تاني بنفس الفرع سبقنا وحجزه بنفس اللحظة، الـ update هون رح يرجع صف فاضي
+          // ومنعرف إنه مو دورنا، فما نطبعه مرتين على جهازين مختلفين بالغلط
+          const { data: claimed, error: claimErr } = await db.from('orders')
+            .update({ auto_printed: true })
+            .eq('id', o.id)
+            .eq('auto_printed', false)
+            .select('id');
+          if(claimErr || !claimed || !claimed.length){
+            // جهاز تاني حجزه قبلنا — تجاهله
+            continue;
+          }
           const cust = o.customers ? { name:o.customers.name, phone:o.customers.phone, addr:o.customers.address||'' } : null;
           beep(6);
           await printSmart(o, o.order_items||[], { sub:+o.subtotal, disc:+o.discount, del:+o.delivery_fee, total:+o.total }, cust);
         } catch(e){ console.error('auto print failed:', e); }
-        finally {
-          // نعلّمه مطبوع دايمًا (نجح أو فشل) عشان ما يعاود يحاول لا نهاية له على نفس الطلب —
-          // لو الطباعة فشلت فعليًا، الموظف يقدر يعيد الطباعة يدويًا بزر 🖨️
-          try { await db.from('orders').update({ auto_printed: true }).eq('id', o.id); } catch(e2){ console.error(e2); }
-          _autoPrintBusy.delete(o.id);
-        }
+        finally { _autoPrintBusy.delete(o.id); }
       }
     } catch(e) { console.error(e); }
   }
@@ -2233,41 +2202,26 @@
     window.SJSPrinter.printBluetooth(SETTINGS.printer_bt_address, b64);
   }
 
-  // يطلق نية RawBT (intent:) من دون ما ينقل الصفحة الرئيسية — لو الجهاز ما عنده RawBT
-  // أو المتصفح مش Chrome، بيفشل بهدوء بمكان معزول بدل ما يكسر التطبيق كامل ويوقع بصفحة خطأ
-  function triggerRawbtIntent(text){
-    try{
-      const old = document.getElementById('rawbtFrame');
-      if (old) old.remove();
-      const fr = document.createElement('iframe');
-      fr.id = 'rawbtFrame';
-      fr.style.cssText = 'position:fixed;width:0;height:0;border:0;visibility:hidden';
-      document.body.appendChild(fr);
-      fr.src = 'intent:' + encodeURIComponent(text) + '#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;';
-      setTimeout(()=>{ try{ fr.remove(); }catch(e){} }, 4000);
-    }catch(e){ console.error('RawBT intent trigger failed:', e); }
-  }
-
   async function printRaw(text, htmlFallback){
-    // موجّه طباعة عام: يستخدم نفس آلية الفواتير (تطبيق أصلي / RawBT / وكيل الشبكة) لأي نص أو تقرير
+    // موجّه طباعة عام: يستخدم نفس آلية الفواتير (RawBT / وكيل الشبكة) لأي نص أو تقرير
     const method = SETTINGS.printer_method || 'auto';
     const isAndroid = /Android/i.test(navigator.userAgent);
-    // أولوية "تلقائي": لو هاد الجهاز فيه تطبيقنا الأصلي (SJSPrinter) ومربوط بطابعة بلوتوث/شبكة، نفضّله
-    // دايمًا لأنه أوثق (بدون تطبيق خارجي ولا رابط intent ممكن يفشل) — RawBT بس لو ما في تطبيق أصلي
-    if (method === 'app_bluetooth' || (method === 'auto' && window.SJSPrinter && SETTINGS.printer_bt_address)) {
-      try { await printViaAppBluetooth(text); return; }
-      catch(e) { console.error('App bluetooth print failed:', e); toast('⚠️ اختر طابعة بلوتوث من الإعدادات'); }
+    if (method === 'rawbt' || (method === 'auto' && isAndroid)) {
+      try {
+        window.location.href = 'intent:' + encodeURIComponent(text) + '#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;';
+        toast('📲 انبعت التقرير للطابعة');
+        return;
+      } catch(e) { console.error('RawBT failed:', e); }
     }
-    if (method === 'app_network' || (method === 'auto' && window.SJSPrinter && SETTINGS.printer_ip && !SETTINGS.printer_bt_address)) {
+    if (method === 'app_network' && window.SJSPrinter) {
       try { await printViaAppNetwork(text); return; }
       catch(e) { console.error('App network print failed:', e); toast('⚠️ تأكد من IP الطابعة'); }
     }
-    if (method === 'rawbt' || (method === 'auto' && isAndroid && !window.SJSPrinter)) {
-      triggerRawbtIntent(text);
-      toast('📲 انبعت التقرير للطابعة');
-      return;
+    if (method === 'app_bluetooth' && window.SJSPrinter) {
+      try { await printViaAppBluetooth(text); return; }
+      catch(e) { console.error('App bluetooth print failed:', e); toast('⚠️ اختر طابعة بلوتوث من الإعدادات'); }
     }
-    if (method === 'network' || (method === 'auto' && SETTINGS.printer_ip && !window.SJSPrinter)) {
+    if (method === 'network' || (method === 'auto' && SETTINGS.printer_ip)) {
       try {
         if(!SETTINGS.printer_ip) throw new Error('no ip');
         await printViaAgent(text);
@@ -2284,25 +2238,26 @@
   async function printSmart(ord, lines, t, cust) {
     const method = SETTINGS.printer_method || 'auto';
     const isAndroid = /Android/i.test(navigator.userAgent);
-    // نفس أولوية "تلقائي" أعلاه: تطبيق أصلي (بلوتوث/شبكة) أولًا لو متوفر ومربوط، وإلا RawBT، وإلا وكيل الشبكة
-    if (method === 'app_bluetooth' || (method === 'auto' && window.SJSPrinter && SETTINGS.printer_bt_address)) {
-      try { await printViaAppBluetooth(generateReceiptText(ord, lines, t, cust)); return; }
-      catch(e) { console.error('App bluetooth print failed:', e); toast('⚠️ اختر طابعة بلوتوث من الإعدادات'); }
+    // أندرويد: طباعة مباشرة بدون أي نافذة عبر تطبيق RawBT (بلوتوث/شبكة)
+    if (method === 'rawbt' || (method === 'auto' && isAndroid)) {
+      try {
+        const text = generateReceiptText(ord, lines, t, cust);
+        window.location.href = 'intent:' + encodeURIComponent(text) + '#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;';
+        toast('📲 انبعتت للطابعة');
+        return;
+      } catch(e) { console.error('RawBT failed:', e); }
     }
-    if (method === 'app_network' || (method === 'auto' && window.SJSPrinter && SETTINGS.printer_ip && !SETTINGS.printer_bt_address)) {
+    // تطبيق أندرويد: طباعة مباشرة عبر شبكة أو بلوتوث بدون أي برنامج وسيط
+    if (method === 'app_network' && window.SJSPrinter) {
       try { await printViaAppNetwork(generateReceiptText(ord, lines, t, cust)); return; }
       catch(e) { console.error('App network print failed:', e); toast('⚠️ تأكد من IP الطابعة'); }
     }
-    // أندرويد: طباعة مباشرة بدون أي نافذة عبر تطبيق RawBT (بلوتوث/شبكة) — بس لو ما في تطبيق أصلي
-    if (method === 'rawbt' || (method === 'auto' && isAndroid && !window.SJSPrinter)) {
-      const text = generateReceiptText(ord, lines, t, cust);
-      triggerRawbtIntent(text);
-      toast('📲 انبعتت للطابعة');
-      return;
+    if (method === 'app_bluetooth' && window.SJSPrinter) {
+      try { await printViaAppBluetooth(generateReceiptText(ord, lines, t, cust)); return; }
+      catch(e) { console.error('App bluetooth print failed:', e); toast('⚠️ اختر طابعة بلوتوث من الإعدادات'); }
     }
-    // تطبيق أندرويد: طباعة مباشرة عبر شبكة أو بلوتوث بدون أي برنامج وسيط
     // شبكة: عبر وكيل الطباعة المحلي (SJS-Print-Agent) — فوري وبدون أي نافذة، عربي مثالي
-    if (method === 'network' || (method === 'auto' && SETTINGS.printer_ip && !window.SJSPrinter)) {
+    if (method === 'network' || (method === 'auto' && SETTINGS.printer_ip)) {
       try {
         if(!SETTINGS.printer_ip) throw new Error('no ip');
         const text = generateReceiptText(ord, lines, t, cust);
@@ -2423,9 +2378,10 @@
         shift_id: currentShift ? currentShift.id : null,
         created_by: ME.id,
         created_by_name: ME.full_name,
-        // طلبات الكول سنتر لازم تنطبع تلقائيًا بجهاز الفرع (auto_printed=false)
-        // طلبات الفرع نفسه (كاشير) بتنطبع محليًا فورًا، فما في داعي جهاز تاني يطبعها كمان
-        auto_printed: !isCallCenter()
+        // auto_printed = صح فقط لو هاد الجهاز فعليًا بنفس فرع الطلب (بيطبعه محليًا فورًا).
+        // أي حساب بدون فرع ثابت (مدير/كول سنتر) بيرسل لفرع تاني = auto_printed:false
+        // عشان جهاز الفرع المستهدف يلتقطه ويطبعه — بغض النظر عن الدور
+        auto_printed: (ME.branch_id||getDeviceBranchId()) === branch_id
       };
 
       console.log('البيانات المرسلة:', rec);
@@ -2595,18 +2551,7 @@
   async function loadDay(){
     try {
       const adm = isAdmin();
-      const cc = isCallCenter();
       console.log('جاري تحميل الطلبات...');
-
-      // صف اختيار الفرع — للكول سنتر دايمًا، وللمدير لو حسابه مش مربوط بفرع معيّن (يشوف كل الفروع)
-      const showBranchPicker = cc || (adm && !ME.branch_id);
-      const ccRow = document.getElementById('ccBranchRow');
-      if (ccRow) ccRow.classList.toggle('hidden', !showBranchPicker);
-      const ccSel = document.getElementById('dayBranchSel');
-      if (showBranchPicker && ccSel && ccSel.options.length<=1 && BRANCHES.length){
-        ccSel.innerHTML = '<option value="">' + (adm ? 'كل الفروع' : 'كل الفروع (آخر 20 طلب)') + '</option>' +
-          BRANCHES.map(b=>`<option value="${b.id}">${esc(b.name_ar)}</option>`).join('');
-      }
 
       let q = db.from('orders')
         .select('*, order_items(*), branches(name_ar), customers(name, phone, address, favorite_items, feedback, notes, flagged)')
@@ -2627,12 +2572,6 @@
           setTimeout(()=>{ const lbl=document.getElementById('dayDateLabel'); if(lbl && !lbl.textContent) lbl.textContent='📅 اليوم — '+fd.label; },0);
         }
         if (ME.branch_id) q = q.eq('branch_id', ME.branch_id);
-        else if (ccSel?.value) q = q.eq('branch_id', ccSel.value); // فلتر فرع اختياري إضافي فوق فلتر التاريخ
-      } else if (cc) {
-        // كول سنتر: يقدر يختار فرع معيّن (آخر 20 طلب من هاد الفرع) أو يشوف آخر 20 طلب من كل الفروع
-        const selBranch = ccSel?.value || '';
-        if (selBranch) q = q.eq('branch_id', selBranch);
-        q = q.limit(20);
       } else {
         // الموظف: آخر 6 فواتير فقط (ضد السرقة) ومن فرعه فقط
         if (ME.branch_id) q = q.eq('branch_id', ME.branch_id);
@@ -2663,7 +2602,7 @@
             <div class="stat">ملغي<b>${cancelled.length}</b></div>
             <button class="mini ok" onclick="loadDay()">🔄 تحديث</button>
             <button class="mini edit" onclick="switchView('admin')">⚙️ الإدارة</button>
-            ${ME.branch_id ? `<button class="mini del" onclick="window.endShift()">🔴 إنهاء الشيفت</button>` : ''}
+            <button class="mini del" onclick="window.endShift()">🔴 إنهاء الشيفت</button>
           `;
         } else {
           dayStats.innerHTML = `
@@ -2682,7 +2621,7 @@
           return;
         }
 
-        dayList.innerHTML = `<table class="tbl"><tr><th>#</th><th>الوقت</th><th>⏱️</th><th>النوع</th>${(adm||cc)?'<th>الفرع</th>':''}<th>العميل</th><th>الكاشير</th><th>الأصناف</th><th>الإجمالي</th><th>الحالة</th><th></th></tr>
+        dayList.innerHTML = `<table class="tbl"><tr><th>#</th><th>الوقت</th><th>⏱️</th><th>النوع</th>${adm?'<th>الفرع</th>':''}<th>العميل</th><th>الكاشير</th><th>الأصناف</th><th>الإجمالي</th><th>الحالة</th><th></th></tr>
           ${DAY.map(o=>{
             const mins = Math.floor((Date.now()-new Date(o.created_at))/60000);
             const readyMins = o.status==='ready' ? Math.floor((Date.now()-new Date(o.updated_at||o.created_at))/60000) : 0;
@@ -2698,7 +2637,7 @@
             <td>${new Date(o.created_at).toLocaleTimeString('ar-JO',{hour:'2-digit',minute:'2-digit'})}</td>
             <td>${timer}</td>
             <td>${TYPE_AR[o.order_type]||''}</td>
-            ${(adm||cc)?`<td>${esc(o.branches?.name_ar||'—')}</td>`:''}
+            ${adm?`<td>${esc(o.branches?.name_ar||'—')}</td>`:''}
             <td>${esc(o.customers?.name||'—')}</td>
             <td>${esc(o.created_by_name||'—')}</td>
             <td>${(o.order_items||[]).map(l=>l.quantity+'× '+esc(l.item_name)).join('، ')}</td>
@@ -4423,8 +4362,7 @@
       </select></div>
       <div class="fld"><label>IP الطابعة</label><input id="dv_ip" value="${esc(d.printer_ip||'')}" placeholder="192.168.1.100"></div>
       <div class="fld"><label>منفذ الطابعة</label><input id="dv_port" value="${esc(d.printer_port||'9100')}"></div>
-      <div style="color:var(--muted);font-size:.78rem;margin-bottom:10px">✅ هاي القيم بتنطبق فعليًا على هاد الجهاز خلال ٤٥ ثانية تلقائيًا (أو فورًا لو أعاد فتح البرنامج) — ما في داعي تروح للجهاز نفسه.</div>
-      <div style="color:var(--muted);font-size:.78rem;margin-bottom:10px">📶 لو الطابعة متوصلة بلوتوث: اختر "أندرويد RawBT" وتأكد إن تطبيق RawBT مثبت وشغال ومقرون بالطابعة على هاد الجهاز بالذات — أو اختر "تطبيق - بلوتوث مباشر" لو مثبت تطبيقنا الأصلي (بدون RawBT).</div>
+      <div style="color:var(--muted);font-size:.78rem;margin-bottom:10px">⚠️ هاي القيم للعرض فقط — تعديل إعدادات الطباعة الفعلية لازم يصير من نفس الجهاز (الإعدادات ← الطابعة) لأنها محفوظة محليًا فيه.</div>
       <div class="m-act"><button class="save" onclick="saveDeviceInfo('${id||''}')">${id?'حفظ التعديل':'إضافة الجهاز'} ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
   }
   async function saveDeviceInfo(id){
