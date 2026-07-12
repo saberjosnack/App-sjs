@@ -617,6 +617,7 @@
   function beep(times=5, frequency=null){
     try{
       audioCtx = audioCtx || new (window.AudioContext||window.webkitAudioContext)();
+      if(audioCtx.state === 'suspended'){ audioCtx.resume().catch(()=>{}); }
       const toneKey = (typeof SETTINGS!=='undefined' && SETTINGS.alert_tone) || 'classic';
       const preset = TONE_PRESETS[toneKey] || TONE_PRESETS.classic;
       const vol = (typeof SETTINGS!=='undefined' && parseFloat(SETTINGS.alert_volume)) || 0.5;
@@ -642,6 +643,7 @@
     const preset = TONE_PRESETS[toneKey] || TONE_PRESETS.classic;
     try{
       audioCtx = audioCtx || new (window.AudioContext||window.webkitAudioContext)();
+      if(audioCtx.state === 'suspended'){ audioCtx.resume().catch(()=>{}); }
       const o = audioCtx.createOscillator(), g = audioCtx.createGain();
       o.connect(g); g.connect(audioCtx.destination);
       o.type = preset.wave; o.frequency.value = preset.freq;
@@ -4179,6 +4181,7 @@
       const offlineCount = DEVICES_DATA.length - onlineCount;
       C.innerHTML = `
         <div style="color:var(--muted);font-weight:700;font-size:.85rem;margin-bottom:10px">كل جهاز بيسجل نفسه تلقائيًا أول ما يفتح البرنامج ويرسل إشارة اتصال كل 45 ثانية. الجهاز يعتبر "غير متصل" إذا انقطع أكثر من ${DEVICE_OFFLINE_MIN} دقايق.</div>
+        <button class="add-btn" onclick="deviceForm(null)">＋ إضافة جهاز يدويًا</button>
         <div class="day-head" style="margin-bottom:14px">
           <div class="stat">إجمالي الأجهزة<b>${DEVICES_DATA.length}</b></div>
           <div class="stat">متصلة الآن<b style="color:var(--ok)">${onlineCount}</b></div>
@@ -4207,8 +4210,9 @@
     }
   }
   function deviceForm(id){
-    const d = DEVICES_DATA.find(x=>x.id===id); if(!d) return;
-    modal(`<h3>🖥️ تعديل جهاز</h3>
+    const d = id ? (DEVICES_DATA.find(x=>x.id===id)||{}) : {};
+    modal(`<h3>${id?'🖥️ تعديل جهاز':'🖥️ إضافة جهاز يدويًا'}</h3>
+      ${!id?'<div style="color:var(--muted);font-size:.8rem;font-weight:700;margin-bottom:10px">لإضافة جهاز قبل ما يتوصل فعليًا (مثلًا لتحضير إعدادات الطباعة مسبقًا). لما الجهاز الحقيقي يفتح البرنامج، رح يتسجل بشكل منفصل تلقائيًا ولازم تربطه لاحقًا بنفس الاسم أو تحذف هاد المؤقت.</div>':''}
       <div class="fld"><label>اسم الجهاز</label><input id="dv_name" value="${esc(d.device_name||'')}" placeholder="مثال: POS الحسين"></div>
       <div class="fld"><label>الفرع المرتبط</label><select id="dv_branch">
         <option value="">كل الفروع</option>
@@ -4226,16 +4230,29 @@
       <div class="fld"><label>IP الطابعة</label><input id="dv_ip" value="${esc(d.printer_ip||'')}" placeholder="192.168.1.100"></div>
       <div class="fld"><label>منفذ الطابعة</label><input id="dv_port" value="${esc(d.printer_port||'9100')}"></div>
       <div style="color:var(--muted);font-size:.78rem;margin-bottom:10px">⚠️ هاي القيم للعرض فقط — تعديل إعدادات الطباعة الفعلية لازم يصير من نفس الجهاز (الإعدادات ← الطابعة) لأنها محفوظة محليًا فيه.</div>
-      <div class="m-act"><button class="save" onclick="saveDeviceInfo('${id}')">حفظ الاسم والفرع ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
+      <div class="m-act"><button class="save" onclick="saveDeviceInfo('${id||''}')">${id?'حفظ التعديل':'إضافة الجهاز'} ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
   }
   async function saveDeviceInfo(id){
+    const name = document.getElementById('dv_name').value.trim();
+    if(!name){ toast('⚠️ اسم الجهاز مطلوب'); return; }
     const rec = {
-      device_name: document.getElementById('dv_name').value.trim(),
+      device_name: name,
       branch_id: document.getElementById('dv_branch').value || null,
+      printer_method: document.getElementById('dv_printMethod')?.value || 'auto',
+      printer_ip: document.getElementById('dv_ip')?.value.trim() || '',
+      printer_port: document.getElementById('dv_port')?.value.trim() || '9100',
     };
-    const r = await db.from('devices').update(rec).eq('id', id);
+    let r;
+    if(id){
+      r = await db.from('devices').update(rec).eq('id', id);
+    } else {
+      rec.device_id = 'manual-' + Date.now();
+      rec.device_type = 'يدوي';
+      rec.app_version = '—';
+      r = await db.from('devices').insert(rec);
+    }
     if(r.error){ toast('✗ '+r.error.message); return; }
-    await logActivity('device_edit', 'تعديل جهاز: '+rec.device_name);
+    await logActivity(id?'device_edit':'device_add', (id?'تعديل جهاز: ':'إضافة جهاز يدوي: ')+rec.device_name);
     closeModal(); toast('✓ انحفظ'); renderDevices();
   }
   async function deleteDevice(id, name){
@@ -4998,6 +5015,9 @@
     const to = new Date(from);
     to.setDate(to.getDate()+1);
     to.setHours(FIN_END_H,0,0,0);
+    // سد الفجوة العمياء: لو الوقت الحالي (لليوم الحالي بس) تجاوز نهاية النطاق الرسمي (بين 3ص و10ص مثلًا)
+    // مدّد النهاية للحظة الحالية عشان أي طلب صار بهالفترة "الرمادية" ما يضيع من الفلتر
+    if(offsetDays===0 && now.getTime() > to.getTime()) to.setTime(now.getTime());
     return {from: from.toISOString(), to: to.toISOString(),
       label: from.toLocaleDateString('ar-JO',{weekday:'short',day:'numeric',month:'short'})};
   }
