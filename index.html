@@ -1083,6 +1083,7 @@
     setTimeout(loadPlatformsList, 1000);
     setTimeout(sendDeviceHeartbeat, 2000);
     setInterval(sendDeviceHeartbeat, 45000);
+    setInterval(pullDevicePrinterSettings, 45000);
     setInterval(checkDevicesOffline, 60000);
     checkShift();
     if (shiftCheckInterval) clearInterval(shiftCheckInterval);
@@ -1169,6 +1170,7 @@
     localStorage.setItem('sjs_paper_width', document.getElementById('dps_paperWidth').value);
     closeModal();
     toast('✓ اتحفظت إعدادات الطابعة لهاد الجهاز');
+    sendDeviceHeartbeat(); // نحدّث شاشة "الأجهزة" فورًا بدل ما ننتظر 45 ثانية
   }
   function applyLocalPrinterSettings(){
     LOCAL_PRINTER_KEYS.forEach(k=>{
@@ -1187,6 +1189,26 @@
       SETTINGS[k] = obj[k];
     });
   }
+  // شاشة "الأجهزة" بلوحة الإدارة هي المصدر الحقيقي — لو المدير غيّر طريقة/بيانات الطابعة
+  // لجهاز معيّن من هناك، هاد الجهاز بالذات بيسحبها ويطبّقها محليًا (بدل ما تضل تعديل شكلي بلا تأثير)
+  async function pullDevicePrinterSettings(){
+    try{
+      const deviceId = getDeviceId();
+      const { data, error } = await db.from('devices')
+        .select('printer_method, printer_ip, printer_port, printer_bt_address')
+        .eq('device_id', deviceId).maybeSingle();
+      if(error || !data) return;
+      let changed = false;
+      ['printer_method','printer_ip','printer_port','printer_bt_address'].forEach(k=>{
+        const v = data[k];
+        if(v!==null && v!==undefined && String(v)!=='' && SETTINGS[k]!==v){
+          SETTINGS[k]=v; try{ localStorage.setItem('sjs_'+k, v); }catch(e){}
+          changed = true;
+        }
+      });
+      if(changed) console.log('تحدّثت إعدادات الطابعة من شاشة الأجهزة (لوحة التحكم)');
+    }catch(e){ console.error('pull printer settings failed:', e); }
+  }
 
   /* ================= تحميل البيانات ================= */
   async function bootData(){
@@ -1200,6 +1222,7 @@
       BRANCHES = b.data||[]; CATS = c.data||[]; ITEMS = i.data||[];
       SETTINGS = {}; (s.data||[]).forEach(x=>SETTINGS[x.key]=x.value);
       applyLocalPrinterSettings();
+      await pullDevicePrinterSettings(); // لو المدير عدّل إعدادات الطابعة لهاد الجهاز من شاشة "الأجهزة"، نطبّقها هون فورًا
       FIN_START_H = parseInt(SETTINGS.fin_start_hour) ?? 10; if(isNaN(FIN_START_H)) FIN_START_H = 10;
       FIN_END_H = parseInt(SETTINGS.fin_end_hour) ?? 3; if(isNaN(FIN_END_H)) FIN_END_H = 3;
       if(ME && ME.role==='custom') await loadCustomRoles();
@@ -2226,23 +2249,25 @@
   }
 
   async function printRaw(text, htmlFallback){
-    // موجّه طباعة عام: يستخدم نفس آلية الفواتير (RawBT / وكيل الشبكة) لأي نص أو تقرير
+    // موجّه طباعة عام: يستخدم نفس آلية الفواتير (تطبيق أصلي / RawBT / وكيل الشبكة) لأي نص أو تقرير
     const method = SETTINGS.printer_method || 'auto';
     const isAndroid = /Android/i.test(navigator.userAgent);
-    if (method === 'rawbt' || (method === 'auto' && isAndroid)) {
+    // أولوية "تلقائي": لو هاد الجهاز فيه تطبيقنا الأصلي (SJSPrinter) ومربوط بطابعة بلوتوث/شبكة، نفضّله
+    // دايمًا لأنه أوثق (بدون تطبيق خارجي ولا رابط intent ممكن يفشل) — RawBT بس لو ما في تطبيق أصلي
+    if (method === 'app_bluetooth' || (method === 'auto' && window.SJSPrinter && SETTINGS.printer_bt_address)) {
+      try { await printViaAppBluetooth(text); return; }
+      catch(e) { console.error('App bluetooth print failed:', e); toast('⚠️ اختر طابعة بلوتوث من الإعدادات'); }
+    }
+    if (method === 'app_network' || (method === 'auto' && window.SJSPrinter && SETTINGS.printer_ip && !SETTINGS.printer_bt_address)) {
+      try { await printViaAppNetwork(text); return; }
+      catch(e) { console.error('App network print failed:', e); toast('⚠️ تأكد من IP الطابعة'); }
+    }
+    if (method === 'rawbt' || (method === 'auto' && isAndroid && !window.SJSPrinter)) {
       triggerRawbtIntent(text);
       toast('📲 انبعت التقرير للطابعة');
       return;
     }
-    if (method === 'app_network' && window.SJSPrinter) {
-      try { await printViaAppNetwork(text); return; }
-      catch(e) { console.error('App network print failed:', e); toast('⚠️ تأكد من IP الطابعة'); }
-    }
-    if (method === 'app_bluetooth' && window.SJSPrinter) {
-      try { await printViaAppBluetooth(text); return; }
-      catch(e) { console.error('App bluetooth print failed:', e); toast('⚠️ اختر طابعة بلوتوث من الإعدادات'); }
-    }
-    if (method === 'network' || (method === 'auto' && SETTINGS.printer_ip)) {
+    if (method === 'network' || (method === 'auto' && SETTINGS.printer_ip && !window.SJSPrinter)) {
       try {
         if(!SETTINGS.printer_ip) throw new Error('no ip');
         await printViaAgent(text);
@@ -2259,24 +2284,25 @@
   async function printSmart(ord, lines, t, cust) {
     const method = SETTINGS.printer_method || 'auto';
     const isAndroid = /Android/i.test(navigator.userAgent);
-    // أندرويد: طباعة مباشرة بدون أي نافذة عبر تطبيق RawBT (بلوتوث/شبكة)
-    if (method === 'rawbt' || (method === 'auto' && isAndroid)) {
+    // نفس أولوية "تلقائي" أعلاه: تطبيق أصلي (بلوتوث/شبكة) أولًا لو متوفر ومربوط، وإلا RawBT، وإلا وكيل الشبكة
+    if (method === 'app_bluetooth' || (method === 'auto' && window.SJSPrinter && SETTINGS.printer_bt_address)) {
+      try { await printViaAppBluetooth(generateReceiptText(ord, lines, t, cust)); return; }
+      catch(e) { console.error('App bluetooth print failed:', e); toast('⚠️ اختر طابعة بلوتوث من الإعدادات'); }
+    }
+    if (method === 'app_network' || (method === 'auto' && window.SJSPrinter && SETTINGS.printer_ip && !SETTINGS.printer_bt_address)) {
+      try { await printViaAppNetwork(generateReceiptText(ord, lines, t, cust)); return; }
+      catch(e) { console.error('App network print failed:', e); toast('⚠️ تأكد من IP الطابعة'); }
+    }
+    // أندرويد: طباعة مباشرة بدون أي نافذة عبر تطبيق RawBT (بلوتوث/شبكة) — بس لو ما في تطبيق أصلي
+    if (method === 'rawbt' || (method === 'auto' && isAndroid && !window.SJSPrinter)) {
       const text = generateReceiptText(ord, lines, t, cust);
       triggerRawbtIntent(text);
       toast('📲 انبعتت للطابعة');
       return;
     }
     // تطبيق أندرويد: طباعة مباشرة عبر شبكة أو بلوتوث بدون أي برنامج وسيط
-    if (method === 'app_network' && window.SJSPrinter) {
-      try { await printViaAppNetwork(generateReceiptText(ord, lines, t, cust)); return; }
-      catch(e) { console.error('App network print failed:', e); toast('⚠️ تأكد من IP الطابعة'); }
-    }
-    if (method === 'app_bluetooth' && window.SJSPrinter) {
-      try { await printViaAppBluetooth(generateReceiptText(ord, lines, t, cust)); return; }
-      catch(e) { console.error('App bluetooth print failed:', e); toast('⚠️ اختر طابعة بلوتوث من الإعدادات'); }
-    }
     // شبكة: عبر وكيل الطباعة المحلي (SJS-Print-Agent) — فوري وبدون أي نافذة، عربي مثالي
-    if (method === 'network' || (method === 'auto' && SETTINGS.printer_ip)) {
+    if (method === 'network' || (method === 'auto' && SETTINGS.printer_ip && !window.SJSPrinter)) {
       try {
         if(!SETTINGS.printer_ip) throw new Error('no ip');
         const text = generateReceiptText(ord, lines, t, cust);
@@ -4397,7 +4423,8 @@
       </select></div>
       <div class="fld"><label>IP الطابعة</label><input id="dv_ip" value="${esc(d.printer_ip||'')}" placeholder="192.168.1.100"></div>
       <div class="fld"><label>منفذ الطابعة</label><input id="dv_port" value="${esc(d.printer_port||'9100')}"></div>
-      <div style="color:var(--muted);font-size:.78rem;margin-bottom:10px">⚠️ هاي القيم للعرض فقط — تعديل إعدادات الطباعة الفعلية لازم يصير من نفس الجهاز (الإعدادات ← الطابعة) لأنها محفوظة محليًا فيه.</div>
+      <div style="color:var(--muted);font-size:.78rem;margin-bottom:10px">✅ هاي القيم بتنطبق فعليًا على هاد الجهاز خلال ٤٥ ثانية تلقائيًا (أو فورًا لو أعاد فتح البرنامج) — ما في داعي تروح للجهاز نفسه.</div>
+      <div style="color:var(--muted);font-size:.78rem;margin-bottom:10px">📶 لو الطابعة متوصلة بلوتوث: اختر "أندرويد RawBT" وتأكد إن تطبيق RawBT مثبت وشغال ومقرون بالطابعة على هاد الجهاز بالذات — أو اختر "تطبيق - بلوتوث مباشر" لو مثبت تطبيقنا الأصلي (بدون RawBT).</div>
       <div class="m-act"><button class="save" onclick="saveDeviceInfo('${id||''}')">${id?'حفظ التعديل':'إضافة الجهاز'} ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
   }
   async function saveDeviceInfo(id){
