@@ -335,6 +335,7 @@
     <div id="readyBadge" class="hidden" style="background:var(--warn);color:#fff;border-radius:999px;padding:4px 12px;font-weight:900;font-size:.85rem;animation:blink 1s infinite">📦 طلبات جاهزة!</div>
     <div class="who"><span id="whoName"></span><br><span id="whoBranch"></span></div>
     <button onclick="showDevicePrinterSettings()" style="background:var(--yellow);color:var(--maroon);border-radius:999px;padding:6px 14px;font-weight:900;margin-left:6px">🖨️ الطابعة</button>
+    <button onclick="checkForUpdate()" style="background:rgba(255,255,255,.2);color:#fff;border-radius:999px;padding:6px 14px;font-weight:900;margin-left:6px">🔄 تحقق من تحديث</button>
     <button id="btnLogout" onclick="window.logout()">خروج</button>
   </header>
   <nav id="mainNav">
@@ -2267,11 +2268,9 @@
       catch(e) { console.error('web bluetooth print failed:', e); toast('⚠️ فشل البلوتوث: '+(e.message||'تأكد اخترت الجهاز')); }
     }
     if (method === 'rawbt' || (method === 'auto' && isAndroid)) {
-      try {
-        window.location.href = 'intent:' + encodeURIComponent(text) + '#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;';
-        toast('📲 انبعت التقرير للطابعة');
-        return;
-      } catch(e) { console.error('RawBT failed:', e); }
+      triggerRawbtIntent(text);
+      toast('📲 انبعت التقرير للطابعة');
+      return;
     }
     if (method === 'app_network' && window.SJSPrinter) {
       try { await printViaAppNetwork(text); return; }
@@ -2295,17 +2294,31 @@
     fallbackPrint(htmlFallback);
   }
 
+  function triggerRawbtIntent(text){
+    // ⚠️ إصلاح حرج: لا نستخدم window.location.href أبدًا لروابط intent:// —
+    // هذا بينقل الصفحة الرئيسية كاملة، ولو الـWebView ما عالج intent:// صح،
+    // بتطلع شاشة خطأ كاملة (net::ERR_UNKNOWN_URL_SCHEME) وتضيع كل التطبيق.
+    // الحل: إطار مخفي (iframe) منعزل — أي فشل فيه ما بأثر على الصفحة الرئيسية إطلاقًا.
+    try{
+      const old = document.getElementById('rawbtFrame');
+      if (old) old.remove();
+      const fr = document.createElement('iframe');
+      fr.id = 'rawbtFrame';
+      fr.style.cssText = 'position:fixed;width:0;height:0;border:0;visibility:hidden;opacity:0';
+      document.body.appendChild(fr);
+      fr.src = 'intent:' + encodeURIComponent(text) + '#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;';
+      setTimeout(()=>{ try{ fr.remove(); }catch(e){} }, 4000);
+    }catch(e){ console.error('RawBT intent trigger failed:', e); }
+  }
   async function printSmart(ord, lines, t, cust) {
     const method = SETTINGS.printer_method || 'auto';
     const isAndroid = /Android/i.test(navigator.userAgent);
     // أندرويد: طباعة مباشرة بدون أي نافذة عبر تطبيق RawBT (بلوتوث/شبكة)
     if (method === 'rawbt' || (method === 'auto' && isAndroid)) {
-      try {
-        const text = generateReceiptText(ord, lines, t, cust);
-        window.location.href = 'intent:' + encodeURIComponent(text) + '#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;';
-        toast('📲 انبعتت للطابعة');
-        return;
-      } catch(e) { console.error('RawBT failed:', e); }
+      const text = generateReceiptText(ord, lines, t, cust);
+      triggerRawbtIntent(text);
+      toast('📲 انبعتت للطابعة');
+      return;
     }
     // تطبيق أندرويد: طباعة مباشرة عبر شبكة أو بلوتوث بدون أي برنامج وسيط
     if (method === 'app_network' && window.SJSPrinter) {
@@ -5290,6 +5303,21 @@
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
     navigator.serviceWorker.register('sw.js').catch(()=>{});
   }
+  /* ---- زر "تحقق من تحديث" — يمسح أي نسخة قديمة محفوظة ويجيب أحدث نسخة فورًا ---- */
+  window.checkForUpdate = async function(){
+    toast('🔄 جاري التحقق من تحديث جديد...');
+    try{
+      if ('serviceWorker' in navigator) {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        for (const reg of regs) { await reg.unregister(); }
+      }
+      if ('caches' in window) {
+        const keys = await caches.keys();
+        await Promise.all(keys.map(k => caches.delete(k)));
+      }
+    }catch(e){ console.error('checkForUpdate cleanup failed:', e); }
+    setTimeout(()=>{ location.reload(true); }, 400);
+  };
 </script>
 </body>
 </html>
