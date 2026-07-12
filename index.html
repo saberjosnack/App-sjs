@@ -30,8 +30,8 @@
     .login-logo span{color:var(--maroon)}
     .login-sub{color:var(--muted);margin:2px 0 20px;font-size:.9rem}
     .pin-boxes{display:flex;gap:12px;justify-content:center;margin:10px 0 22px;direction:ltr}
-    .pin-box{width:55px;height:65px;text-align:center;font-size:2rem;font-weight:900;border:3px solid var(--maroon);border-radius:12px;background:#fff;outline:none}
-    .pin-box:focus{border-color:var(--red)}
+    .pin-box{width:55px;height:65px;text-align:center;font-size:2rem;font-weight:900;border:3px solid var(--maroon);border-radius:12px;background:#fff;outline:none;display:flex;align-items:center;justify-content:center;cursor:pointer;user-select:none;transition:border-color .15s}
+    .pin-box.filled{border-color:var(--red);background:#fff8f8}
     .pad{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
     .pad button{background:#fff;border:1px solid var(--line);border-radius:16px;font-size:1.5rem;font-weight:700;padding:16px 0;box-shadow:var(--shadow);transition:.1s}
     .pad button:active{transform:scale(.94);background:var(--yellow)}
@@ -287,10 +287,13 @@
     <div class="login-logo">S<span>J</span>S</div>
     <div class="login-sub">صابر جو سناك — نظام نقاط البيع</div>
     <div class="pin-boxes">
-      <input type="password" inputmode="numeric" pattern="[0-9]*" maxlength="1" class="pin-box" id="pin1" autofocus oninput="onPinTyped(this,0)" onkeydown="onPinKeydown(event,0)">
-      <input type="password" inputmode="numeric" pattern="[0-9]*" maxlength="1" class="pin-box" id="pin2" oninput="onPinTyped(this,1)" onkeydown="onPinKeydown(event,1)">
-      <input type="password" inputmode="numeric" pattern="[0-9]*" maxlength="1" class="pin-box" id="pin3" oninput="onPinTyped(this,2)" onkeydown="onPinKeydown(event,2)">
-      <input type="password" inputmode="numeric" pattern="[0-9]*" maxlength="1" class="pin-box" id="pin4" oninput="onPinTyped(this,3)" onkeydown="onPinKeydown(event,3)">
+      <div class="pin-box" id="pin1" onclick="focusPinInput()"></div>
+      <div class="pin-box" id="pin2" onclick="focusPinInput()"></div>
+      <div class="pin-box" id="pin3" onclick="focusPinInput()"></div>
+      <div class="pin-box" id="pin4" onclick="focusPinInput()"></div>
+      <input type="tel" inputmode="numeric" pattern="[0-9]*" maxlength="4" id="pinHiddenInput"
+        style="position:absolute;opacity:0;width:1px;height:1px;pointer-events:none"
+        oninput="onPinHiddenInput(this)" autocomplete="off">
     </div>
     <div id="loginErr"></div>
     <div class="pad">
@@ -650,63 +653,58 @@
 
   /* ================= الدخول (PIN 4 مربعات) ================= */
   window.pinBuffer = '';
+  const PIN_BOXES = ['pin1','pin2','pin3','pin4'];
 
-  /* ---- كتابة الرمز مباشرة بلوحة المفاتيح (بديل عن لوحة الأرقام بالشاشة) ---- */
-  window.onPinTyped = function(el, idx){
-    const boxes = ['pin1','pin2','pin3','pin4'];
-    const val = (el.value||'').replace(/\D/g,'').slice(0,1);
-    el.value = val;
-    if(val && idx < 3){
-      const next = document.getElementById(boxes[idx+1]);
-      if(next) next.focus();
-    }
-    // إعادة بناء الرمز الكامل من قيم الصناديق الأربعة الفعلية
-    window.pinBuffer = boxes.map(id => document.getElementById(id)?.value || '').join('');
+  function renderPinBoxes(){
+    const val = window.pinBuffer||'';
+    PIN_BOXES.forEach((id,idx)=>{
+      const el = document.getElementById(id);
+      if(!el) return;
+      if(idx < val.length){ el.textContent = '●'; el.classList.add('filled'); }
+      else { el.textContent = ''; el.classList.remove('filled'); }
+    });
+  }
+  window.focusPinInput = function(){
+    const inp = document.getElementById('pinHiddenInput');
+    if(inp) inp.focus();
+  };
+  window.onPinHiddenInput = function(el){
+    const digits = (el.value||'').replace(/\D/g,'').slice(0,4);
+    el.value = digits;
+    window.pinBuffer = digits;
+    renderPinBoxes();
     const err = document.getElementById('loginErr');
-    if (err) err.textContent = '';
-    if(window.pinBuffer.length === 4 && /^\d{4}$/.test(window.pinBuffer)){
+    if(err) err.textContent = '';
+    if(digits.length === 4){
       setTimeout(() => window.tryLogin(), 250);
     }
   };
-  window.onPinKeydown = function(evt, idx){
-    const boxes = ['pin1','pin2','pin3','pin4'];
-    // مسح للخلف: لو الصندوق فاضي، ارجع للصندوق يلي قبله
-    if(evt.key === 'Backspace' && !evt.target.value && idx > 0){
-      const prev = document.getElementById(boxes[idx-1]);
-      if(prev){ prev.focus(); prev.value=''; window.pinBuffer = boxes.map(id => document.getElementById(id)?.value || '').join(''); }
-    }
-  };
-
-
   window.pinKey = function(num) {
-      const boxes = ['pin1','pin2','pin3','pin4'];
       if (window.pinBuffer.length >= 4) return;
       window.pinBuffer += num;
-      const el = document.getElementById(boxes[window.pinBuffer.length-1]);
-      if (el) el.value = '•';
+      renderPinBoxes();
+      const inp = document.getElementById('pinHiddenInput');
+      if(inp) inp.value = window.pinBuffer;
       const err = document.getElementById('loginErr');
       if (err) err.textContent = '';
       if (window.pinBuffer.length === 4) {
           setTimeout(() => window.tryLogin(), 300);
       }
   };
-
   window.pinClear = function() {
       window.pinBuffer = '';
-      ['pin1','pin2','pin3','pin4'].forEach(id => {
-          const el = document.getElementById(id);
-          if (el) el.value = '';
-      });
+      renderPinBoxes();
+      const inp = document.getElementById('pinHiddenInput');
+      if(inp) inp.value = '';
       const err = document.getElementById('loginErr');
       if (err) err.textContent = '';
   };
-
   window.pinBack = function() {
       if (window.pinBuffer.length === 0) return;
       window.pinBuffer = window.pinBuffer.slice(0, -1);
-      const boxes = ['pin1','pin2','pin3','pin4'];
-      const el = document.getElementById(boxes[window.pinBuffer.length]);
-      if (el) el.value = '';
+      renderPinBoxes();
+      const inp = document.getElementById('pinHiddenInput');
+      if(inp) inp.value = window.pinBuffer;
   };
 
   window.tryLogin = async function() {
@@ -1810,3 +1808,11 @@
             const nm = l.item ? l.item.name_ar : l.item_name;
             const pr = l.item ? l.item.price : l.unit_price;
             return `<div style="display:flex;justify-content:space-between;font-size:12px;padding:2px 0">
+              <span>${qty}× ${nm}</span>
+              <span>${(pr*qty).toFixed(2)}</span>
+            </div>`;
+          }).join('')}
+          <hr style="border-top:1px dashed #000">
+          <div style="font-size:12px">
+            <div style="display:flex;justify-content:space-between">المجموع: ${t.sub.toFixed(2)}</div>
+            ${t.disc > 0 ? `<div style="display:flex;justify-content:space-between">خصم: -${t.d
