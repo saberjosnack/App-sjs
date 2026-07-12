@@ -938,6 +938,32 @@
     if (discInput) discInput.classList.toggle('hidden', !adm);
   }
 
+  /* ---- عرض أي خطأ JS مباشرة على الشاشة (بديل F12 على الموبايل) ---- */
+  window.addEventListener('error', function(e){
+    showOnScreenError('خطأ: ' + (e.message||'غير معروف') + '\n' + (e.filename?('بملف: '+e.filename.split('/').pop()+' سطر '+e.lineno):''));
+  });
+  window.addEventListener('unhandledrejection', function(e){
+    showOnScreenError('خطأ (Promise): ' + (e.reason?.message || e.reason || 'غير معروف'));
+  });
+  function showOnScreenError(msg){
+    let box = document.getElementById('onScreenErrorBox');
+    if(!box){
+      box = document.createElement('div');
+      box.id = 'onScreenErrorBox';
+      box.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:#4a0000;color:#FDE507;padding:12px;font-size:.8rem;font-family:monospace;z-index:99999;max-height:40vh;overflow-y:auto;direction:ltr;text-align:left;white-space:pre-wrap;border-top:3px solid #F60100';
+      const closeBtn = document.createElement('button');
+      closeBtn.textContent = '✕ إغلاق';
+      closeBtn.style.cssText = 'position:sticky;top:0;background:#F60100;color:#fff;border-radius:8px;padding:4px 10px;margin-bottom:8px;font-family:Cairo,sans-serif;font-weight:900;float:left;direction:rtl';
+      closeBtn.onclick = () => box.remove();
+      box.appendChild(closeBtn);
+      document.body.appendChild(box);
+    }
+    const line = document.createElement('div');
+    line.style.cssText = 'margin-top:6px;border-top:1px dashed #666;padding-top:6px';
+    line.textContent = new Date().toLocaleTimeString() + ' — ' + msg;
+    box.appendChild(line);
+  }
+
   const APP_VERSION = 'SJS-POS 1.0';
   function getDeviceId(){
     let id = localStorage.getItem('sjs_device_id');
@@ -1793,26 +1819,4 @@
       `,
       'classic': `
         <div style="font-family:'Courier New',monospace;padding:10px;max-width:300px;border:2px solid #000;background:#fff">
-          <div style="text-align:center;border-bottom:1px dashed #000;padding-bottom:6px">
-            <h2 style="margin:0">SJS SNACK</h2>
-            <p style="margin:2px 0;font-size:11px">${br ? br.name_ar : ''}</p>
-          </div>
-          <table style="width:100%;font-size:12px">
-            <tr><td>طلب #${ord.order_number}</td><td style="text-align:right">${new Date(ord.created_at).toLocaleString('ar-JO')}</td></tr>
-            <tr><td>${TYPE_AR[ord.order_type]}</td><td style="text-align:right">${PAY_AR[ord.payment_method]}</td></tr>
-            ${cust && (cust.name||cust.phone) ? `<tr><td colspan="2">👤 ${esc(cust.name||'')}${cust.phone?` — 📞 ${esc(cust.phone)}`:''}</td></tr>${cust.addr?`<tr><td colspan="2">📍 ${esc(cust.addr)}</td></tr>`:''}` : ''}
-          </table>
-          <hr style="border-top:1px dashed #000">
-          ${lines.map(l => {
-            const qty = l.qty ?? l.quantity;
-            const nm = l.item ? l.item.name_ar : l.item_name;
-            const pr = l.item ? l.item.price : l.unit_price;
-            return `<div style="display:flex;justify-content:space-between;font-size:12px;padding:2px 0">
-              <span>${qty}× ${nm}</span>
-              <span>${(pr*qty).toFixed(2)}</span>
-            </div>`;
-          }).join('')}
-          <hr style="border-top:1px dashed #000">
-          <div style="font-size:12px">
-            <div style="display:flex;justify-content:space-between">المجموع: ${t.sub.toFixed(2)}</div>
-            ${t.disc > 0 ? `<div style="display:flex;justify-content:space-between">خصم: -${t.d
+         
