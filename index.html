@@ -2295,19 +2295,21 @@
   }
 
   function triggerRawbtIntent(text){
-    // ⚠️ إصلاح حرج: لا نستخدم window.location.href أبدًا لروابط intent:// —
-    // هذا بينقل الصفحة الرئيسية كاملة، ولو الـWebView ما عالج intent:// صح،
-    // بتطلع شاشة خطأ كاملة (net::ERR_UNKNOWN_URL_SCHEME) وتضيع كل التطبيق.
-    // الحل: إطار مخفي (iframe) منعزل — أي فشل فيه ما بأثر على الصفحة الرئيسية إطلاقًا.
+    // ⚠️ الإطار المخفي (iframe) ما بيوصل لـRawBT بمعظم الـWebViews (بعض إصدارات أندرويد
+    // ما بتلتقط intent:// جوا iframe إطلاقًا). الطريقة الأوثق: رابط <a> حقيقي بالصفحة
+    // الرئيسية نفسها (مش iframe) — الـWebViewClient بيعترضه قبل أي تنقّل فعلي يصير،
+    // فما في خطر عالصفحة، وبنفس الوقت أكتر احتمال يوصل فعليًا لـRawBT.
     try{
-      const old = document.getElementById('rawbtFrame');
+      const url = 'intent:' + encodeURIComponent(text) + '#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;';
+      const old = document.getElementById('rawbtLink');
       if (old) old.remove();
-      const fr = document.createElement('iframe');
-      fr.id = 'rawbtFrame';
-      fr.style.cssText = 'position:fixed;width:0;height:0;border:0;visibility:hidden;opacity:0';
-      document.body.appendChild(fr);
-      fr.src = 'intent:' + encodeURIComponent(text) + '#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;';
-      setTimeout(()=>{ try{ fr.remove(); }catch(e){} }, 4000);
+      const a = document.createElement('a');
+      a.id = 'rawbtLink';
+      a.href = url;
+      a.style.cssText = 'position:fixed;width:1px;height:1px;opacity:0;pointer-events:none';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(()=>{ try{ a.remove(); }catch(e){} }, 3000);
     }catch(e){ console.error('RawBT intent trigger failed:', e); }
   }
   async function printSmart(ord, lines, t, cust) {
