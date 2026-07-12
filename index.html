@@ -352,7 +352,10 @@
               <button data-t="takeaway" class="on">🥡 استلام</button>
               <button data-t="delivery">🛵 توصيل</button>
             </div>
-            <select class="branch-sel hidden" id="branchSel"></select>
+            <div style="display:flex;gap:6px;align-items:center" class="hidden" id="branchSelWrap">
+              <select class="branch-sel" id="branchSel" style="flex:1"></select>
+              <button type="button" onclick="document.getElementById('branchSel').value='';renderCart()" style="background:var(--cream);border:1.5px solid var(--line);border-radius:10px;padding:8px 10px;font-weight:900" title="إلغاء اختيار الفرع">✕</button>
+            </div>
             <select class="branch-sel" id="orderPlatform" style="margin-bottom:2px" onchange="onPlatformChange()">
               <option value="">بدون منصة (مباشر)</option>
             </select>
@@ -587,7 +590,7 @@
       if(noteEl) noteEl.classList.remove('hidden');
       if(otypeBarEl) otypeBarEl.classList.add('hidden');
       if(custBoxEl) custBoxEl.classList.add('hidden');
-      if(branchSelEl) branchSelEl.classList.remove('hidden'); // إجباري اختيار الفرع لطلبات المنصة
+      document.getElementById('branchSelWrap')?.classList.remove('hidden'); // إجباري اختيار الفرع لطلبات المنصة
     } else {
       payMethod = 'cash';
       if(payBarEl){
@@ -935,7 +938,7 @@
     const platformNoteEl = document.getElementById('platformNote');
     if (!perm('order_platform') && platformNoteEl) platformNoteEl.classList.add('hidden');
     const branchSel = document.getElementById('branchSel');
-    if (branchSel) branchSel.classList.toggle('hidden', !(adm||cc||!ME.branch_id));
+    document.getElementById('branchSelWrap')?.classList.toggle('hidden', !(adm||cc||!ME.branch_id));
     const discInput = document.getElementById('discInput');
     if (discInput) discInput.classList.toggle('hidden', !adm);
   }
@@ -1153,10 +1156,7 @@
       if(isNaN(openingValue) || openingValue < 0){ toast('⚠️ اكتب مبلغ صحيح'); return; }
     } else if(!confirm('▶️ فتح شيفت جديد؟')) return;
     const _bsel = document.getElementById('branchSel')?.value;
-    // لو الموظف بدون فرع ثابت (كول سنتر/مدير)، لازم يختار الفرع صراحة — بدون أي افتراضي صامت يحدد فرع غلط
-    if(!ME.branch_id && !_bsel){ toast('⚠️ اختر الفرع المسؤول عن الطلب — إجباري'); $('btnSave').disabled=false; return; }
     const branch_id = ME.branch_id || _bsel || null;
-    if(!branch_id){ toast('⚠️ اختر الفرع أولاً'); $('btnSave').disabled=false; return; }
 
     try {
       const { error: checkError } = await db.from('cash_shifts').select('id').limit(1);
@@ -2230,7 +2230,13 @@
     try{
       const customer_id = await upsertCustomer();
       const branchSel = document.getElementById('branchSel');
-      const branch_id = ME.branch_id || (branchSel ? branchSel.value : null) || BRANCHES[0]?.id;
+      const _selBranch = branchSel ? branchSel.value : null;
+      if(!ME.branch_id && !_selBranch){
+        toast('⚠️ اختر فرع الطلب — إجباري قبل الطباعة/الحفظ');
+        if (btnSave) btnSave.disabled = false;
+        return;
+      }
+      const branch_id = ME.branch_id || _selBranch;
       const orderNote = document.getElementById('orderNote');
 
       const rec = {
@@ -2296,15 +2302,18 @@
 
       // الطلب انحفظ بنجاح بقاعدة البيانات — أي خطأ من هون ورايح هو خطأ طباعة بس، مش خطأ حفظ
       toast(editingOrder ? `✓ تعدّل طلب #${ord.order_number}` : `✓ طلب #${ord.order_number} — انحفظ`);
-      if(print && !isCallCenter()) {
+      // نطبع محليًا فقط لو هاد الجهاز فعليًا بنفس فرع الطلب — أي شخص بدون فرع ثابت (مدير/كول سنتر)
+      // يختار فرع تاني، ما لازم يطبع عندو محليًا — الطباعة بتصير تلقائيًا على جهاز الفرع المستهدف
+      const shouldPrintLocally = print && (ME.branch_id === branch_id);
+      if(shouldPrintLocally) {
         try{
           await printSmart(ord, cartCopy, t, custInfo);
         }catch(printErr){
           console.error('طباعة فشلت (الطلب محفوظ فعليًا):', printErr);
           toast('⚠️ الطلب #'+ord.order_number+' محفوظ، لكن الطباعة فشلت — راجع الطابعة/الوكيل');
         }
-      } else if(isCallCenter()) {
-        toast('📨 الطلب انبعت لفرع ' + (BRANCHES.find(b=>b.id===branch_id)?.name_ar||'') + ' وبيطبع تلقائيًا هناك');
+      } else if(print) {
+        toast('📨 الطلب انبعت لفرع ' + (BRANCHES.find(b=>b.id===branch_id)?.name_ar||'') + ' وبيطبع تلقائيًا هناك — مش عندك');
       }
 
       clearCart();
