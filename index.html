@@ -1526,7 +1526,67 @@
                         del: +o.delivery_fee,
                         total: +o.total
                     }, cust);
-                    triggerRawbtIntent(text);
+                    function triggerRawbtIntent(text) {
+    // 🔥 محاولة الطباعة عبر الجسر الأصلي (PrinterBridge) أولاً
+    if (window.SJSPrinter) {
+        try {
+            console.log('📱 محاولة الطباعة عبر الجسر الأصلي...');
+            const b64 = textToEscPosBase64(text);
+            const btAddress = localStorage.getItem('sjs_printer_bt_address') || '';
+            
+            if (btAddress) {
+                window.SJSPrinter.printBluetooth(btAddress, b64);
+                toast('📲 جاري الطباعة عبر الجسر الأصلي (بلوتوث)');
+                console.log('✅ تم إرسال الطباعة عبر الجسر الأصلي');
+                return;
+            } else {
+                // إذا ما في عنوان بلوتوث، جرب الشبكة
+                const ip = localStorage.getItem('sjs_printer_ip') || '';
+                const port = parseInt(localStorage.getItem('sjs_printer_port') || '9100');
+                if (ip) {
+                    window.SJSPrinter.printNetwork(ip, port, b64);
+                    toast('📡 جاري الطباعة عبر الجسر الأصلي (شبكة)');
+                    console.log('✅ تم إرسال الطباعة عبر الجسر الأصلي (شبكة)');
+                    return;
+                }
+                console.log('⚠️ لا يوجد عنوان بلوتوث ولا IP للجسر الأصلي');
+            }
+        } catch(e) {
+            console.error('❌ SJSPrinter failed:', e);
+            toast('⚠️ فشل الجسر الأصلي: ' + (e.message || 'خطأ غير معروف'));
+        }
+    }
+    
+    // 📲 RawBT كبديل (الطريقة القديمة)
+    try {
+        console.log('📲 محاولة الطباعة عبر RawBT (بديل)...');
+        const old = document.getElementById('rawbtFrame');
+        if (old) old.remove();
+        
+        const fr = document.createElement('iframe');
+        fr.id = 'rawbtFrame';
+        fr.style.cssText = 'position:fixed;width:0;height:0;border:0;visibility:hidden;opacity:0';
+        document.body.appendChild(fr);
+        
+        fr.src = 'intent:' + encodeURIComponent(text) + '#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;';
+        
+        setTimeout(() => {
+            try { 
+                fr.remove(); 
+                console.log('✅ RawBT iframe removed');
+            } catch(e) { 
+                console.log('⚠️ RawBT iframe removal error:', e);
+            }
+        }, 4000);
+        
+        toast('📲 انبعت للطابعة عبر RawBT');
+        console.log('✅ تم إرسال الطباعة عبر RawBT');
+        
+    } catch(e) { 
+        console.error('❌ RawBT intent trigger failed:', e);
+        toast('⚠️ فشل RawBT: ' + (e.message || 'خطأ غير معروف'));
+    }
+}(text);
                     console.log(`✅ Printed #${o.order_number} via RawBT fallback`);
                 } catch (rawbtErr) {
                     console.error(`❌ RawBT fallback failed for #${o.order_number}:`, rawbtErr);
@@ -2317,7 +2377,67 @@
       catch(e) { console.error('web bluetooth print failed:', e); toast('⚠️ فشل البلوتوث: '+(e.message||'تأكد اخترت الجهاز')); }
     }
     if (method === 'rawbt' || (method === 'auto' && isAndroid)) {
-      triggerRawbtIntent(text);
+      function triggerRawbtIntent(text) {
+    // 🔥 محاولة الطباعة عبر الجسر الأصلي (PrinterBridge) أولاً
+    if (window.SJSPrinter) {
+        try {
+            console.log('📱 محاولة الطباعة عبر الجسر الأصلي...');
+            const b64 = textToEscPosBase64(text);
+            const btAddress = localStorage.getItem('sjs_printer_bt_address') || '';
+            
+            if (btAddress) {
+                window.SJSPrinter.printBluetooth(btAddress, b64);
+                toast('📲 جاري الطباعة عبر الجسر الأصلي (بلوتوث)');
+                console.log('✅ تم إرسال الطباعة عبر الجسر الأصلي');
+                return;
+            } else {
+                // إذا ما في عنوان بلوتوث، جرب الشبكة
+                const ip = localStorage.getItem('sjs_printer_ip') || '';
+                const port = parseInt(localStorage.getItem('sjs_printer_port') || '9100');
+                if (ip) {
+                    window.SJSPrinter.printNetwork(ip, port, b64);
+                    toast('📡 جاري الطباعة عبر الجسر الأصلي (شبكة)');
+                    console.log('✅ تم إرسال الطباعة عبر الجسر الأصلي (شبكة)');
+                    return;
+                }
+                console.log('⚠️ لا يوجد عنوان بلوتوث ولا IP للجسر الأصلي');
+            }
+        } catch(e) {
+            console.error('❌ SJSPrinter failed:', e);
+            toast('⚠️ فشل الجسر الأصلي: ' + (e.message || 'خطأ غير معروف'));
+        }
+    }
+    
+    // 📲 RawBT كبديل (الطريقة القديمة)
+    try {
+        console.log('📲 محاولة الطباعة عبر RawBT (بديل)...');
+        const old = document.getElementById('rawbtFrame');
+        if (old) old.remove();
+        
+        const fr = document.createElement('iframe');
+        fr.id = 'rawbtFrame';
+        fr.style.cssText = 'position:fixed;width:0;height:0;border:0;visibility:hidden;opacity:0';
+        document.body.appendChild(fr);
+        
+        fr.src = 'intent:' + encodeURIComponent(text) + '#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;';
+        
+        setTimeout(() => {
+            try { 
+                fr.remove(); 
+                console.log('✅ RawBT iframe removed');
+            } catch(e) { 
+                console.log('⚠️ RawBT iframe removal error:', e);
+            }
+        }, 4000);
+        
+        toast('📲 انبعت للطابعة عبر RawBT');
+        console.log('✅ تم إرسال الطباعة عبر RawBT');
+        
+    } catch(e) { 
+        console.error('❌ RawBT intent trigger failed:', e);
+        toast('⚠️ فشل RawBT: ' + (e.message || 'خطأ غير معروف'));
+    }
+}(text);
       toast('📲 انبعت التقرير للطابعة');
       return;
     }
@@ -2343,7 +2463,67 @@
     fallbackPrint(htmlFallback);
   }
 
-  function triggerRawbtIntent(text){
+  function function triggerRawbtIntent(text) {
+    // 🔥 محاولة الطباعة عبر الجسر الأصلي (PrinterBridge) أولاً
+    if (window.SJSPrinter) {
+        try {
+            console.log('📱 محاولة الطباعة عبر الجسر الأصلي...');
+            const b64 = textToEscPosBase64(text);
+            const btAddress = localStorage.getItem('sjs_printer_bt_address') || '';
+            
+            if (btAddress) {
+                window.SJSPrinter.printBluetooth(btAddress, b64);
+                toast('📲 جاري الطباعة عبر الجسر الأصلي (بلوتوث)');
+                console.log('✅ تم إرسال الطباعة عبر الجسر الأصلي');
+                return;
+            } else {
+                // إذا ما في عنوان بلوتوث، جرب الشبكة
+                const ip = localStorage.getItem('sjs_printer_ip') || '';
+                const port = parseInt(localStorage.getItem('sjs_printer_port') || '9100');
+                if (ip) {
+                    window.SJSPrinter.printNetwork(ip, port, b64);
+                    toast('📡 جاري الطباعة عبر الجسر الأصلي (شبكة)');
+                    console.log('✅ تم إرسال الطباعة عبر الجسر الأصلي (شبكة)');
+                    return;
+                }
+                console.log('⚠️ لا يوجد عنوان بلوتوث ولا IP للجسر الأصلي');
+            }
+        } catch(e) {
+            console.error('❌ SJSPrinter failed:', e);
+            toast('⚠️ فشل الجسر الأصلي: ' + (e.message || 'خطأ غير معروف'));
+        }
+    }
+    
+    // 📲 RawBT كبديل (الطريقة القديمة)
+    try {
+        console.log('📲 محاولة الطباعة عبر RawBT (بديل)...');
+        const old = document.getElementById('rawbtFrame');
+        if (old) old.remove();
+        
+        const fr = document.createElement('iframe');
+        fr.id = 'rawbtFrame';
+        fr.style.cssText = 'position:fixed;width:0;height:0;border:0;visibility:hidden;opacity:0';
+        document.body.appendChild(fr);
+        
+        fr.src = 'intent:' + encodeURIComponent(text) + '#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;';
+        
+        setTimeout(() => {
+            try { 
+                fr.remove(); 
+                console.log('✅ RawBT iframe removed');
+            } catch(e) { 
+                console.log('⚠️ RawBT iframe removal error:', e);
+            }
+        }, 4000);
+        
+        toast('📲 انبعت للطابعة عبر RawBT');
+        console.log('✅ تم إرسال الطباعة عبر RawBT');
+        
+    } catch(e) { 
+        console.error('❌ RawBT intent trigger failed:', e);
+        toast('⚠️ فشل RawBT: ' + (e.message || 'خطأ غير معروف'));
+    }
+}(text){
     // ⚠️ إصلاح حرج: لا نستخدم window.location.href أبدًا لروابط intent:// —
     // هذا بينقل الصفحة الرئيسية كاملة، ولو الـWebView ما عالج intent:// صح،
     // بتطلع شاشة خطأ كاملة (net::ERR_UNKNOWN_URL_SCHEME) وتضيع كل التطبيق.
@@ -2365,7 +2545,67 @@
     // أندرويد: طباعة مباشرة بدون أي نافذة عبر تطبيق RawBT (بلوتوث/شبكة)
     if (method === 'rawbt' || (method === 'auto' && isAndroid)) {
       const text = generateReceiptText(ord, lines, t, cust);
-      triggerRawbtIntent(text);
+      function triggerRawbtIntent(text) {
+    // 🔥 محاولة الطباعة عبر الجسر الأصلي (PrinterBridge) أولاً
+    if (window.SJSPrinter) {
+        try {
+            console.log('📱 محاولة الطباعة عبر الجسر الأصلي...');
+            const b64 = textToEscPosBase64(text);
+            const btAddress = localStorage.getItem('sjs_printer_bt_address') || '';
+            
+            if (btAddress) {
+                window.SJSPrinter.printBluetooth(btAddress, b64);
+                toast('📲 جاري الطباعة عبر الجسر الأصلي (بلوتوث)');
+                console.log('✅ تم إرسال الطباعة عبر الجسر الأصلي');
+                return;
+            } else {
+                // إذا ما في عنوان بلوتوث، جرب الشبكة
+                const ip = localStorage.getItem('sjs_printer_ip') || '';
+                const port = parseInt(localStorage.getItem('sjs_printer_port') || '9100');
+                if (ip) {
+                    window.SJSPrinter.printNetwork(ip, port, b64);
+                    toast('📡 جاري الطباعة عبر الجسر الأصلي (شبكة)');
+                    console.log('✅ تم إرسال الطباعة عبر الجسر الأصلي (شبكة)');
+                    return;
+                }
+                console.log('⚠️ لا يوجد عنوان بلوتوث ولا IP للجسر الأصلي');
+            }
+        } catch(e) {
+            console.error('❌ SJSPrinter failed:', e);
+            toast('⚠️ فشل الجسر الأصلي: ' + (e.message || 'خطأ غير معروف'));
+        }
+    }
+    
+    // 📲 RawBT كبديل (الطريقة القديمة)
+    try {
+        console.log('📲 محاولة الطباعة عبر RawBT (بديل)...');
+        const old = document.getElementById('rawbtFrame');
+        if (old) old.remove();
+        
+        const fr = document.createElement('iframe');
+        fr.id = 'rawbtFrame';
+        fr.style.cssText = 'position:fixed;width:0;height:0;border:0;visibility:hidden;opacity:0';
+        document.body.appendChild(fr);
+        
+        fr.src = 'intent:' + encodeURIComponent(text) + '#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;';
+        
+        setTimeout(() => {
+            try { 
+                fr.remove(); 
+                console.log('✅ RawBT iframe removed');
+            } catch(e) { 
+                console.log('⚠️ RawBT iframe removal error:', e);
+            }
+        }, 4000);
+        
+        toast('📲 انبعت للطابعة عبر RawBT');
+        console.log('✅ تم إرسال الطباعة عبر RawBT');
+        
+    } catch(e) { 
+        console.error('❌ RawBT intent trigger failed:', e);
+        toast('⚠️ فشل RawBT: ' + (e.message || 'خطأ غير معروف'));
+    }
+}(text);
       toast('📲 انبعتت للطابعة');
       return;
     }
