@@ -1222,6 +1222,13 @@
   /* ================= الشيفتات ================= */
   async function checkShift(){
     try {
+      // المدير العام (حسابه مش مربوط بفرع) ما إله علاقة بالشيفتات/الدرج أبداً — بيراقب كل الفروع بس
+      if (isAdmin() && !ME.branch_id) {
+        const badge = document.getElementById('shiftBadge');
+        if (badge) badge.classList.add('hidden');
+        currentShift = null;
+        return;
+      }
       const { data } = await db.from('cash_shifts')
         .select('*')
         .eq('staff_id', ME.id)
@@ -2565,12 +2572,13 @@
       const cc = isCallCenter();
       console.log('جاري تحميل الطلبات...');
 
-      // صف اختيار الفرع — كول سنتر فقط
+      // صف اختيار الفرع — للكول سنتر دايمًا، وللمدير لو حسابه مش مربوط بفرع معيّن (يشوف كل الفروع)
+      const showBranchPicker = cc || (adm && !ME.branch_id);
       const ccRow = document.getElementById('ccBranchRow');
-      if (ccRow) ccRow.classList.toggle('hidden', !cc);
+      if (ccRow) ccRow.classList.toggle('hidden', !showBranchPicker);
       const ccSel = document.getElementById('dayBranchSel');
-      if (cc && ccSel && ccSel.options.length<=1 && BRANCHES.length){
-        ccSel.innerHTML = '<option value="">كل الفروع (آخر 20 طلب)</option>' +
+      if (showBranchPicker && ccSel && ccSel.options.length<=1 && BRANCHES.length){
+        ccSel.innerHTML = '<option value="">' + (adm ? 'كل الفروع' : 'كل الفروع (آخر 20 طلب)') + '</option>' +
           BRANCHES.map(b=>`<option value="${b.id}">${esc(b.name_ar)}</option>`).join('');
       }
 
@@ -2593,6 +2601,7 @@
           setTimeout(()=>{ const lbl=document.getElementById('dayDateLabel'); if(lbl && !lbl.textContent) lbl.textContent='📅 اليوم — '+fd.label; },0);
         }
         if (ME.branch_id) q = q.eq('branch_id', ME.branch_id);
+        else if (ccSel?.value) q = q.eq('branch_id', ccSel.value); // فلتر فرع اختياري إضافي فوق فلتر التاريخ
       } else if (cc) {
         // كول سنتر: يقدر يختار فرع معيّن (آخر 20 طلب من هاد الفرع) أو يشوف آخر 20 طلب من كل الفروع
         const selBranch = ccSel?.value || '';
@@ -2628,7 +2637,7 @@
             <div class="stat">ملغي<b>${cancelled.length}</b></div>
             <button class="mini ok" onclick="loadDay()">🔄 تحديث</button>
             <button class="mini edit" onclick="switchView('admin')">⚙️ الإدارة</button>
-            <button class="mini del" onclick="window.endShift()">🔴 إنهاء الشيفت</button>
+            ${ME.branch_id ? `<button class="mini del" onclick="window.endShift()">🔴 إنهاء الشيفت</button>` : ''}
           `;
         } else {
           dayStats.innerHTML = `
