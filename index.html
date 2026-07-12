@@ -1037,12 +1037,29 @@
     const app = document.getElementById('app');
     if (loginScreen) loginScreen.classList.add('hidden');
     if (app) app.classList.remove('hidden');
-    // تنبيه لو فيه تعارض بين فرع حساب الموظف وفرع الجهاز المضبوط مسبقًا
+    // منع فعلي (مش بس تنبيه) لو فيه تعارض بين فرع حساب الموظف وفرع الجهاز
     const devBr = getDeviceBranchId();
     if(ME.branch_id && devBr && ME.branch_id !== devBr){
       const devBrName = BRANCHES.find(b=>b.id===devBr)?.name_ar || '؟';
       const meBrName = ME.branches?.name_ar || '؟';
-      setTimeout(()=>toast('⚠️ تنبيه: هاد الجهاز مضبوط لفرع "'+devBrName+'" لكن حسابك تبع فرع "'+meBrName+'" — تأكد إنك بالمكان الصح'), 800);
+      if (app) app.classList.add('hidden');
+      if (loginScreen) loginScreen.classList.add('hidden');
+      let blockBox = document.getElementById('branchMismatchBlock');
+      if(!blockBox){
+        blockBox = document.createElement('div');
+        blockBox.id = 'branchMismatchBlock';
+        blockBox.style.cssText = 'position:fixed;inset:0;z-index:99998;background:var(--maroon);display:flex;align-items:center;justify-content:center;padding:20px;text-align:center';
+        document.body.appendChild(blockBox);
+      }
+      blockBox.innerHTML = `
+        <div style="background:#fff;border-radius:20px;padding:30px;max-width:420px">
+          <div style="font-size:3rem;margin-bottom:10px">⛔</div>
+          <h2 style="color:var(--red);margin-bottom:14px">مكان غلط!</h2>
+          <div style="font-weight:800;font-size:1.05rem;margin-bottom:8px">هاد الجهاز خاص بـ<span style="color:var(--red)">"${esc(devBrName)}"</span></div>
+          <div style="font-weight:700;color:var(--muted);margin-bottom:20px">وحسابك (${esc(ME.full_name)}) تبع فرع <span style="color:var(--maroon)">"${esc(meBrName)}"</span></div>
+          <button onclick="sessionStorage.removeItem('sjs_me');location.reload()" style="width:100%;background:var(--red);color:#fff;padding:16px;border-radius:14px;font-weight:900;font-size:1.05rem">🚪 تسجيل خروج</button>
+        </div>`;
+      return; // إيقاف كامل — ما بيكمل دخول التطبيق
     }
     const whoName = document.getElementById('whoName');
     if (whoName) whoName.textContent = '👤 ' + ME.full_name + ' (' + (ROLE_AR[ME.role]||ME.role) + ')';
@@ -1122,6 +1139,10 @@
       </select></div>
       <div class="fld"><label>IP الطابعة (لو شبكة)</label><input id="dps_ip" value="${esc(SETTINGS.printer_ip||'')}" placeholder="192.168.1.100"></div>
       <div class="fld"><label>منفذ الطابعة</label><input id="dps_port" value="${esc(SETTINGS.printer_port||'9100')}"></div>
+      <div class="fld"><label>مقاس ورق الطابعة</label><select id="dps_paperWidth">
+        <option value="80" ${(localStorage.getItem('sjs_paper_width')||'80')==='80'?'selected':''}>80 مم (عادي)</option>
+        <option value="58" ${localStorage.getItem('sjs_paper_width')==='58'?'selected':''}>58 مم (صغير)</option>
+      </select></div>
       <label class="chk" style="display:flex;align-items:center;gap:8px;margin:10px 0">
         <input type="checkbox" id="dps_autoPrint" ${SETTINGS.auto_print_branch?'checked':''}> 🔔 طباعة تلقائية لطلبات فرع هاد الجهاز
       </label>
@@ -1138,6 +1159,7 @@
       printer_port: document.getElementById('dps_port').value.trim(),
       auto_print_branch: document.getElementById('dps_autoPrint').checked,
     });
+    localStorage.setItem('sjs_paper_width', document.getElementById('dps_paperWidth').value);
     closeModal();
     toast('✓ اتحفظت إعدادات الطابعة لهاد الجهاز');
   }
@@ -2079,9 +2101,12 @@
   /* ====== طباعة ذكية مع إغلاق تلقائي ====== */
   /* ---- تحويل الفاتورة لصورة (عربي مثالي) ثم ESC/POS راستر ---- */
   function receiptToCanvas(textContent){
-    const W = 576;                                  // عرض ورق 80mm بالنقاط
+    const paperSize = localStorage.getItem('sjs_paper_width') || '80';
+    const is58 = paperSize==='58';
+    const W = is58 ? 384 : 576;                      // 58mm≈384 نقطة، 80mm≈576 نقطة
+    const scale = is58 ? 0.72 : 1;                    // تصغير الخط تناسبيًا لورق 58مم
     const lines = textContent.split('\n');
-    const LH = 34, PAD = 8;
+    const LH = Math.round(34*scale), PAD = 8;
     const cv = document.createElement('canvas');
     cv.width = W; cv.height = PAD*2 + lines.length*LH + 20;
     const ctx = cv.getContext('2d');
@@ -2092,7 +2117,7 @@
       const sep = /^[═─-]{5,}/.test(line.trim());
       if(sep){ ctx.fillRect(8, y+LH/2-1, W-16, 2); y += LH; return; }
       const big = /SABER|إجمالي|تقرير/.test(line);
-      ctx.font = (big?'bold 30px':'bold 26px') + " 'Cairo', Arial, sans-serif";
+      ctx.font = "bold " + Math.round((big?30:26)*scale) + "px 'Cairo', Arial, sans-serif";
       const centered = /SABER|شكرًا|توقيع|طلب #|SJS/.test(line);
       if(centered){ ctx.textAlign = 'center'; ctx.fillText(line.trim(), W/2, y); }
       else { ctx.textAlign = 'right'; ctx.fillText(line, W-10, y); }
