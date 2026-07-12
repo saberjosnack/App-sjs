@@ -437,6 +437,13 @@
         <div><label style="font-weight:700;font-size:.82rem;color:var(--muted)">إلى تاريخ</label><br><input type="date" id="dayTo" class="dfield" style="width:auto"></div>
         <div style="display:flex;align-items:flex-end"><button class="mini ok" style="padding:9px 18px" onclick="loadDay()">عرض</button></div>
       </div>
+      <div id="ccBranchRow" class="hidden" style="gap:8px;flex-wrap:wrap;margin-bottom:8px;align-items:flex-end">
+        <div><label style="font-weight:700;font-size:.82rem;color:var(--muted)">🏪 الفرع</label><br>
+          <select id="dayBranchSel" class="dfield" style="width:auto;min-width:170px" onchange="loadDay()">
+            <option value="">كل الفروع (آخر 20 طلب)</option>
+          </select>
+        </div>
+      </div>
       <div id="dayDateLabel" style="font-weight:900;color:var(--maroon);margin-bottom:8px;font-size:.9rem"></div>
       <div class="search-bar hidden" id="invSearchBar">
         <input id="invSearch" placeholder="🔍 بحث عن فاتورة: رقم الطلب / رقم الهاتف / اسم العميل" onkeydown="if(event.key==='Enter')searchInvoices()">
@@ -1135,9 +1142,16 @@
         <option value="auto" ${SETTINGS.printer_method==='auto'?'selected':''}>تلقائي</option>
         <option value="network" ${SETTINGS.printer_method==='network'?'selected':''}>شبكة (وكيل الطباعة SJS-Print-Agent)</option>
         <option value="rawbt" ${SETTINGS.printer_method==='rawbt'?'selected':''}>أندرويد — RawBT (بلوتوث/شبكة)</option>
+        <option value="web_bluetooth" ${SETTINGS.printer_method==='web_bluetooth'?'selected':''}>🔵 بلوتوث مباشر من النظام (بدون RawBT)</option>
       </select></div>
       <div class="fld"><label>IP الطابعة (لو شبكة)</label><input id="dps_ip" value="${esc(SETTINGS.printer_ip||'')}" placeholder="192.168.1.100"></div>
       <div class="fld"><label>منفذ الطابعة</label><input id="dps_port" value="${esc(SETTINGS.printer_port||'9100')}"></div>
+      <div class="fld" style="background:#eef7ff;border-radius:10px;padding:10px 12px">
+        <label>🔵 اختيار طابعة بلوتوث مباشر (BLE فقط)</label>
+        <div style="color:var(--muted);font-size:.78rem;font-weight:600;margin-bottom:8px">⚠️ يشتغل بس مع طابعات بلوتوث حديثة (BLE). أغلب الطابعات الرخيصة بلوتوث كلاسيكي وما تشتغل هون — استخدم RawBT إلها بدل هذا الخيار.</div>
+        <button type="button" class="mini ok" onclick="pickWebBluetoothDevice()">🔍 اختيار جهاز بلوتوث</button>
+        <span id="webBtDeviceName" style="margin-right:8px;font-weight:800;color:var(--maroon)">${localStorage.getItem('sjs_webbt_name')?('✅ '+esc(localStorage.getItem('sjs_webbt_name'))):'ما في جهاز محدد'}</span>
+      </div>
       <div class="fld"><label>مقاس ورق الطابعة</label><select id="dps_paperWidth">
         <option value="80" ${(localStorage.getItem('sjs_paper_width')||'80')==='80'?'selected':''}>80 مم (عادي)</option>
         <option value="58" ${localStorage.getItem('sjs_paper_width')==='58'?'selected':''}>58 مم (صغير)</option>
@@ -2062,6 +2076,48 @@
   }
 
   /* ================= الطباعة الذكية ================= */
+  /* ================= بلوتوث ويب مباشر (بدون RawBT ولا تطبيق أصلي) ================= */
+  // ⚠️ قيد حقيقي بمعيار الويب: هذا بيشتغل بس مع طابعات بلوتوث BLE (Bluetooth Low Energy).
+  // أغلب الطابعات الحرارية الرخيصة تستخدم بلوتوث كلاسيكي (SPP) وما فيها اتصال متصفح مباشر إطلاقًا —
+  // هذا قيد بمعيار الويب نفسه (Web Bluetooth API) مش تقصير بالكود. جرب الزر تحت، ولو فشل الاتصال
+  // بسبب "ما لقيت خدمة" فطابعتك على الأغلب SPP كلاسيكي ولازم تستخدم RawBT بدلها.
+  const BLE_PRINTER_SERVICE = '000018f0-0000-1000-8000-00805f9b34fb';
+  const BLE_PRINTER_CHAR = '00002af1-0000-1000-8000-00805f9b34fb';
+  let _webBtDevice = null, _webBtServer = null, _webBtChar = null;
+  window.pickWebBluetoothDevice = async function(){
+    if(!navigator.bluetooth){ toast('⚠️ متصفحك ما بيدعم بلوتوث الويب — جرب Chrome على أندرويد'); return; }
+    try{
+      const device = await navigator.bluetooth.requestDevice({
+        filters: [{ services: [BLE_PRINTER_SERVICE] }],
+        optionalServices: [BLE_PRINTER_SERVICE]
+      });
+      _webBtDevice = device;
+      localStorage.setItem('sjs_webbt_name', device.name||'طابعة بلوتوث');
+      const nameEl = document.getElementById('webBtDeviceName');
+      if(nameEl) nameEl.textContent = '✅ '+(device.name||'طابعة متصلة');
+      toast('✅ اخترت: '+(device.name||'جهاز بلوتوث'));
+    }catch(e){
+      console.error('bluetooth pick failed:', e);
+      if(e.name === 'NotFoundError') toast('⚠️ ما لقيت طابعة BLE — طابعتك غالبًا بلوتوث كلاسيكي (SPP)، استخدم RawBT بدلها');
+      else toast('⚠️ '+(e.message||'فشل اختيار الجهاز'));
+    }
+  };
+  async function ensureWebBtConnected(){
+    if(!_webBtDevice) throw new Error('ما في جهاز بلوتوث محدد — اضغط "اختيار جهاز بلوتوث" بالإعدادات');
+    if(!_webBtServer || !_webBtServer.connected){
+      _webBtServer = await _webBtDevice.gatt.connect();
+      const service = await _webBtServer.getPrimaryService(BLE_PRINTER_SERVICE);
+      _webBtChar = await service.getCharacteristic(BLE_PRINTER_CHAR);
+    }
+    return _webBtChar;
+  }
+  async function printViaWebBluetooth(text) {
+    const characteristic = await ensureWebBtConnected();
+    const encoder = new EscPosEncoder();
+    const result = encoder.initialize().text(text).cut().encode();
+    await characteristic.writeValue(result);
+    return true;
+  }
   async function printViaBluetooth(text) {
     try {
       const device = await navigator.bluetooth.requestDevice({
@@ -2203,9 +2259,13 @@
   }
 
   async function printRaw(text, htmlFallback){
-    // موجّه طباعة عام: يستخدم نفس آلية الفواتير (RawBT / وكيل الشبكة) لأي نص أو تقرير
+    // موجّه طباعة عام: يستخدم نفس آلية الفواتير (RawBT / وكيل الشبكة / بلوتوث ويب) لأي نص أو تقرير
     const method = SETTINGS.printer_method || 'auto';
     const isAndroid = /Android/i.test(navigator.userAgent);
+    if (method === 'web_bluetooth') {
+      try { await printViaWebBluetooth(text); toast('✅ انطبع عبر البلوتوث'); return; }
+      catch(e) { console.error('web bluetooth print failed:', e); toast('⚠️ فشل البلوتوث: '+(e.message||'تأكد اخترت الجهاز')); }
+    }
     if (method === 'rawbt' || (method === 'auto' && isAndroid)) {
       try {
         window.location.href = 'intent:' + encodeURIComponent(text) + '#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;';
@@ -2551,7 +2611,18 @@
   async function loadDay(){
     try {
       const adm = isAdmin();
+      const cc = isCallCenter();
       console.log('جاري تحميل الطلبات...');
+
+      // صف اختيار الفرع — للكول سنتر دايمًا، وللمدير لو حسابه مش مربوط بفرع معيّن (يشوف كل الفروع)
+      const showBranchPicker = cc || (adm && !ME.branch_id);
+      const ccRow = document.getElementById('ccBranchRow');
+      if (ccRow) ccRow.classList.toggle('hidden', !showBranchPicker);
+      const ccSel = document.getElementById('dayBranchSel');
+      if (showBranchPicker && ccSel && ccSel.options.length<=1 && BRANCHES.length){
+        ccSel.innerHTML = '<option value="">' + (adm ? 'كل الفروع' : 'كل الفروع (آخر 20 طلب)') + '</option>' +
+          BRANCHES.map(b=>`<option value="${b.id}">${esc(b.name_ar)}</option>`).join('');
+      }
 
       let q = db.from('orders')
         .select('*, order_items(*), branches(name_ar), customers(name, phone, address, favorite_items, feedback, notes, flagged)')
@@ -2572,6 +2643,17 @@
           setTimeout(()=>{ const lbl=document.getElementById('dayDateLabel'); if(lbl && !lbl.textContent) lbl.textContent='📅 اليوم — '+fd.label; },0);
         }
         if (ME.branch_id) q = q.eq('branch_id', ME.branch_id);
+        else if (ccSel?.value) q = q.eq('branch_id', ccSel.value); // فلتر فرع اختياري إضافي فوق فلتر التاريخ
+      } else if (cc) {
+        // كول سنتر: اختار فرع معيّن = يشوف كل طلبات اليوم المالي لهاد الفرع (بدون سقف)
+        // ما اختار فرع = آخر 20 طلب من كل الفروع (مراجعة سريعة بدون تحميل زايد)
+        const selBranch = ccSel?.value || '';
+        const fd = getFinancialDay();
+        if (selBranch) {
+          q = q.eq('branch_id', selBranch).gte('created_at', fd.from).lte('created_at', fd.to);
+        } else {
+          q = q.limit(20);
+        }
       } else {
         // الموظف: آخر 6 فواتير فقط (ضد السرقة) ومن فرعه فقط
         if (ME.branch_id) q = q.eq('branch_id', ME.branch_id);
@@ -2590,19 +2672,21 @@
 
       const dayStats = document.getElementById('dayStats');
       if (dayStats) {
-        if(adm){
+        if(adm || cc){
           const ok = DAY.filter(o=>o.status!=='cancelled');
           const sum = ok.reduce((s,o)=>s + (+o.total), 0);
           const cancelled = DAY.filter(o=>o.status==='cancelled');
+          const ccSelBranch = document.getElementById('dayBranchSel')?.value;
           dayStats.innerHTML = `
-            <div class="stat">طلبات اليوم<b>${ok.length}</b></div>
+            ${cc && ccSelBranch ? '<div class="stat" style="color:var(--muted)">📅 كل طلبات اليوم لهاد الفرع</div>' : ''}
+            <div class="stat">طلبات ${cc?'':'اليوم'}<b>${ok.length}</b></div>
             <div class="stat">المبيعات<b>${fmt(sum)} ${CURRENCY}</b></div>
             <div class="stat">توصيل<b>${ok.filter(o=>o.order_type==='delivery').length}</b></div>
             <div class="stat">استلام<b>${ok.filter(o=>o.order_type==='takeaway').length}</b></div>
             <div class="stat">ملغي<b>${cancelled.length}</b></div>
             <button class="mini ok" onclick="loadDay()">🔄 تحديث</button>
-            <button class="mini edit" onclick="switchView('admin')">⚙️ الإدارة</button>
-            <button class="mini del" onclick="window.endShift()">🔴 إنهاء الشيفت</button>
+            ${adm?'<button class="mini edit" onclick="switchView(\'admin\')">⚙️ الإدارة</button>':''}
+            ${ME.branch_id?'<button class="mini del" onclick="window.endShift()">🔴 إنهاء الشيفت</button>':''}
           `;
         } else {
           dayStats.innerHTML = `
@@ -2621,7 +2705,7 @@
           return;
         }
 
-        dayList.innerHTML = `<table class="tbl"><tr><th>#</th><th>الوقت</th><th>⏱️</th><th>النوع</th>${adm?'<th>الفرع</th>':''}<th>العميل</th><th>الكاشير</th><th>الأصناف</th><th>الإجمالي</th><th>الحالة</th><th></th></tr>
+        dayList.innerHTML = `<table class="tbl"><tr><th>#</th><th>الوقت</th><th>⏱️</th><th>النوع</th>${(adm||cc)?'<th>الفرع</th>':''}<th>العميل</th><th>الكاشير</th><th>الأصناف</th><th>الإجمالي</th><th>الحالة</th><th></th></tr>
           ${DAY.map(o=>{
             const mins = Math.floor((Date.now()-new Date(o.created_at))/60000);
             const readyMins = o.status==='ready' ? Math.floor((Date.now()-new Date(o.updated_at||o.created_at))/60000) : 0;
@@ -2637,7 +2721,7 @@
             <td>${new Date(o.created_at).toLocaleTimeString('ar-JO',{hour:'2-digit',minute:'2-digit'})}</td>
             <td>${timer}</td>
             <td>${TYPE_AR[o.order_type]||''}</td>
-            ${adm?`<td>${esc(o.branches?.name_ar||'—')}</td>`:''}
+            ${(adm||cc)?`<td>${esc(o.branches?.name_ar||'—')}</td>`:''}
             <td>${esc(o.customers?.name||'—')}</td>
             <td>${esc(o.created_by_name||'—')}</td>
             <td>${(o.order_items||[]).map(l=>l.quantity+'× '+esc(l.item_name)).join('، ')}</td>
@@ -2676,6 +2760,17 @@
   function reprintDay(id){
     const o = DAY.find(x=>x.id===id);
     if(!o) return;
+    // نفس قاعدة الطباعة بالحفظ: نطبع محليًا بس لو هاد الجهاز/الحساب فعليًا بنفس فرع الطلب
+    // غير هيك (مدير/كول سنتر يشوف طلب فرع تاني) ما نفتح صفحة طباعة محلية عشوائية —
+    // نطلب من جهاز الفرع المستهدف يطبعها هو (بإعادة تصفيرها كـ "غير مطبوعة" ليلتقطها تلقائيًا)
+    const isLocalBranch = (ME.branch_id||getDeviceBranchId()) === o.branch_id;
+    if(!isLocalBranch){
+      if(!confirm('هاد الطلب لفرع "'+(BRANCHES.find(b=>b.id===o.branch_id)?.name_ar||'—')+'" — مش عندك.\nتريد ترسله يطبع هناك تلقائيًا (بدل ما يفتح صفحة طباعة هون)؟')) return;
+      db.from('orders').update({auto_printed:false}).eq('id',id).then(()=>{
+        toast('📨 انبعت لجهاز فرع '+(BRANCHES.find(b=>b.id===o.branch_id)?.name_ar||'—')+' ليطبعها');
+      });
+      return;
+    }
     const cust = o.customers ? { name: o.customers.name, phone: o.customers.phone, addr: o.customers.address||'' } : null;
     printSmart(o, o.order_items||[], { sub: +o.subtotal, disc: +o.discount, del: +o.delivery_fee, total: +o.total }, cust);
   }
