@@ -910,6 +910,7 @@
       shift_open: 'فتح شيفت',
       shift_close: 'إغلاق شيفت',
       shift_report: 'طباعة تقرير الشيفت',
+      drawer_open: 'فتح درج الكاش (سحب مبلغ)',
     },
     '🧾 الطلبات': {
       order_create: 'إنشاء طلب',
@@ -952,7 +953,7 @@
     },
   };
   const ROLE_DEFAULT_PERMS = {
-    cashier:    ['shift_open','shift_close','shift_report','order_create','order_takeaway','order_reprint','discount_code'],
+    cashier:    ['shift_open','shift_close','shift_report','drawer_open','order_create','order_takeaway','order_reprint','discount_code'],
     callcenter: ['shift_open','shift_close','shift_report','order_create','order_takeaway','order_delivery','order_platform','order_edit','order_reprint','discount_code','customers_view','customers_edit'],
     admin:      Object.values(PERMS).flatMap(g=>Object.keys(g)),
   };
@@ -1377,7 +1378,7 @@
       currentShift = (data && data.length) ? data[0] : null;
       const badge = document.getElementById('shiftBadge');
       const drawerBtn = document.getElementById('drawerBtn');
-      if (drawerBtn) drawerBtn.classList.toggle('hidden', !currentShift || isCallCenter());
+      if (drawerBtn) drawerBtn.classList.toggle('hidden', !currentShift || !perm('drawer_open'));
       if (badge) {
         if(currentShift){
           badge.classList.remove('hidden');
@@ -1684,6 +1685,7 @@
   }
   /* ================= فتح الدرج — سحب نقدي بسبب، بانتظار موافقة المدير ================= */
   function openDrawerRequest(){
+    if(!perm('drawer_open')){ toast('⛔ ما عندك صلاحية فتح الدرج'); return; }
     if(!currentShift){ toast('⚠️ لازم يكون عندك شيفت مفتوح'); return; }
     modal(`<h3>🔓 فتح الدرج — سحب مبلغ</h3>
       <div style="color:var(--muted);font-size:.82rem;font-weight:700;margin-bottom:10px">هاد المبلغ رح ينخصم من الكاش المتوقع بدرجك وقت الإغلاق، وبينضاف كمصروف بانتظار موافقة المدير.</div>
