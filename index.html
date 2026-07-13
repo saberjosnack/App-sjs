@@ -1992,12 +1992,24 @@
               custHint.className = 'found';
               custHint.textContent = `✓ عميل مسجل — ${matchedCustomer.orders_count||0} طلب سابق`;
             }
-            // 🍔 الأصناف المفضلة وفيدباك الأكل — تظهر دايمًا لو موجودة (بغض النظر عن الراية الحمراء)
+            // 🍔 الأصناف المفضلة وفيدباك الأكل + تقييم سابق + خصم VIP سابق — تظهر دايمًا لو موجودة
             const custInfoBox = document.getElementById('custInfoBox');
             if(custInfoBox){
               const parts = [];
               if(matchedCustomer.favorite_items) parts.push('💚 يحب: '+esc(matchedCustomer.favorite_items));
               if(matchedCustomer.feedback) parts.push('🗣️ ملاحظات الأكل: '+esc(matchedCustomer.feedback));
+              if(matchedCustomer.vip_discount_sent_at){
+                const d = new Date(matchedCustomer.vip_discount_sent_at).toLocaleDateString('ar-JO');
+                parts.push('🎁 اتبعتله خصم VIP بتاريخ '+d);
+              }
+              // تقييم العميل من طلباته السابقة (متوسط)
+              try{
+                const { data: rated } = await db.from('orders').select('customer_rating').eq('customer_id', matchedCustomer.id).not('customer_rating','is',null);
+                if(rated && rated.length){
+                  const avg = rated.reduce((a,o)=>a+o.customer_rating,0)/rated.length;
+                  parts.push('⭐ تقييمه: '+avg.toFixed(1)+' ('+rated.length+' طلب مقيّم)');
+                }
+              }catch(e){ console.error('fetch rating failed:', e); }
               if(parts.length){ custInfoBox.innerHTML = parts.join('<br>'); custInfoBox.classList.remove('hidden'); }
               else { custInfoBox.classList.add('hidden'); }
             }
@@ -3280,6 +3292,12 @@
     if(!rating){ toast('⚠️ اختر نجوم أول'); return; }
     try{
       await db.from('orders').update({ customer_rating: rating }).eq('id', orderId);
+      // تحديث متوسط تقييم العميل المخزّن (يظهر فورًا عند السنتر بالمرة الجاية)
+      const { data: allRatings } = await db.from('orders').select('customer_rating').eq('customer_id', customerId).not('customer_rating','is',null);
+      if(allRatings && allRatings.length){
+        const avg = allRatings.reduce((a,o)=>a+o.customer_rating,0) / allRatings.length;
+        await db.from('customers').update({ avg_rating: avg }).eq('id', customerId);
+      }
       await logActivity('rate_customer', 'تقييم عميل: '+rating+' نجوم');
       closeModal(); toast('✓ اتسجل التقييم');
     }catch(e){ toast('✗ '+e.message); console.error(e); }
@@ -5161,22 +5179,81 @@ window.__lastEmpMealsData = null;
     else TOP_CUST_DATA.sort((a,b)=>(b.avgRating||0)-(a.avgRating||0));
     renderTopCustomers(); // إعادة رسم بسيطة — بيانات محفوظة بالذاكرة فعليًا فما تكرار طلب فعلي
   }
-  function sendVipMessage(custId){
+  async function sendVipMessage(custId){
     const c = TOP_CUST_DATA.find(x=>x.id===custId) || CUSTOMERS.find(x=>x.id===custId);
     if(!c) return;
     CUST_SELECTED.clear();
     CUST_SELECTED.add(custId);
     if(!CUSTOMERS.length || !CUSTOMERS.find(x=>x.id===custId)) CUSTOMERS = [...CUSTOMERS, c];
     modal(`<h3>🎁 رسالة عميل مميز — ${esc(c.name)}</h3>
+      <div class="fld"><label>نسبة الخصم % (بتنحفظ على العميل وبتظهر للسنتر بأي طلب جاي)</label>
+        <input id="vip_disc_pct" type="number" min="0" max="100" value="${c.vip_discount_percent||10}" style="border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;width:100%"></div>
       <div class="fld"><label>نص الرسالة</label>
         <textarea id="bulk_msg" rows="5" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;font-family:inherit;font-size:1rem">مرحبا [الاسم] 🎉، إنت من عملائنا المميزين! خصم خاص إلك 10% على طلبك الجاي من صابر جو سناك 🍔 — بانتظارك!</textarea>
       </div>
-      <div class="m-act"><button class="save" onclick="startBulkWhatsapp()">📱 إرسال</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
+      <div class="m-act"><button class="save" onclick="confirmSendVip('${custId}')">📱 حفظ الخصم وإرسال</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
+  }
+  async function confirmSendVip(custId){
+    const pct = parseFloat(document.getElementById('vip_disc_pct')?.value);
+    if(isNaN(pct)||pct<0||pct>100){ toast('⚠️ نسبة الخصم يجب تكون بين 0 و100'); return; }
+    try{
+      await db.from('customers').update({ vip_discount_percent: pct }).eq('id', custId);
+      const cLocal = CUSTOMERS.find(x=>x.id===custId); if(cLocal) cLocal.vip_discount_percent = pct;
+    }catch(e){ console.error('save vip discount pct failed:', e); }
+    try{ await db.from('customers').update({ vip_discount_sent_at: new Date().toISOString() }).eq('id', custId); }
+    catch(e){ console.error('mark vip sent failed:', e); }
+    startBulkWhatsapp();
   }
 
   /* ================= الإتلاف (Waste Log) ================= */
   let WASTE_DATA = [];
+  function printWasteReceipt(ingId, qty, branchId, reason, note){
+    const ing = INGR.find(x=>x.id===ingId);
+    const br = BRANCHES.find(b=>b.id===branchId);
+    const text = 'سند إتلاف\n'+
+      '— Saber Jo Snack —\n'+
+      '════════════════\n'+
+      'الفرع: '+(br?.name_ar||'—')+'\n'+
+      'الموظف: '+ME.full_name+'\n'+
+      'التاريخ: '+new Date().toLocaleString('ar-JO')+'\n'+
+      '────────────────\n'+
+      'المادة: '+(ing?.name||'—')+'\n'+
+      'الكمية المتلفة: '+qty+' '+(ing?.unit||'')+'\n'+
+      'السبب: '+reason+'\n'+
+      (note?('ملاحظة: '+note+'\n'):'')+
+      '════════════════\n'+
+      'توقيع الموظف: ______________\n';
+    const html = `<html dir="rtl"><head><meta charset="UTF-8"><style>
+      @page{size:72mm auto;margin:0} body{font-family:Cairo,Arial;width:72mm;padding:4mm;font-size:12px}
+      h2{text-align:center;margin:2px 0;font-size:15px} .c{text-align:center}
+      hr{border:none;border-top:1px dashed #000;margin:5px 0}
+      table{width:100%;border-collapse:collapse} td{padding:2px 0} .tl{text-align:left}
+      </style></head><body>
+      <h2>سند إتلاف</h2><div class="c">Saber Jo Snack</div><hr>
+      <table>
+        <tr><td>الفرع</td><td class="tl">${esc(br?.name_ar||'—')}</td></tr>
+        <tr><td>الموظف</td><td class="tl">${esc(ME.full_name)}</td></tr>
+        <tr><td>التاريخ</td><td class="tl">${new Date().toLocaleString('ar-JO')}</td></tr>
+      </table><hr>
+      <table>
+        <tr><td>المادة</td><td class="tl">${esc(ing?.name||'—')}</td></tr>
+        <tr><td>الكمية</td><td class="tl">${qty} ${esc(ing?.unit||'')}</td></tr>
+        <tr><td>السبب</td><td class="tl">${esc(reason)}</td></tr>
+        ${note?`<tr><td>ملاحظة</td><td class="tl">${esc(note)}</td></tr>`:''}
+      </table><hr>
+      <div class="c">توقيع الموظف: ______________</div>
+      </body></html>`;
+    printRaw(text, html);
+  }
   async function renderWaste(){
+    // موظف عنده صلاحية الإتلاف بس (مو مدير عام) — بيشوف نموذج التسجيل بس، بدون سجل الإتلاف القديم
+    if(!isAdmin()){
+      const C = document.getElementById('admContent');
+      C.innerHTML = `<div style="color:var(--muted);font-weight:700;font-size:.85rem;margin-bottom:14px">تسجيل إتلاف مادة — بينخصم تلقائيًا من مخزون الفرع.</div>
+        <button class="add-btn" onclick="wasteForm()">+ تسجيل إتلاف جديد</button>`;
+      await loadIngredients();
+      return;
+    }
     const C = document.getElementById('admContent');
     if(!C) return;
     await loadIngredients();
@@ -5238,7 +5315,9 @@ window.__lastEmpMealsData = null;
       });
       if(error){ toast('✗ '+error.message); console.error(error); return; }
       await logActivity('waste_log', 'إتلاف: '+qty+' — '+reason);
-      closeModal(); toast('✓ اتسجل الإتلاف وانخصم من المخزون'); renderWaste();
+      closeModal(); toast('✓ اتسجل الإتلاف وانخصم من المخزون');
+      printWasteReceipt(ingId, qty, branchId, reason, note);
+      if(isAdmin()) renderWaste(); else wasteForm();
     }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
   async function runWasteReport(){
@@ -5254,14 +5333,49 @@ window.__lastEmpMealsData = null;
         .order('created_at', {ascending:false});
       if(error){ R.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message||'الجدول waste_log غير موجود — نفّذ SQL أولاً')}</div>`; return; }
       WASTE_DATA = data||[];
-      const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_cost||0)),0);
+const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_cost||0)),0);
+      // تجميع حسب الموظف — نجيب كل الموظفين النشطين عشان نوري "مين ما أتلف إطلاقًا" كمان (صفر)
+      const {data: allStaff} = await db.from('staff').select('id, full_name').eq('is_active', true);
       const byStaff = {};
-      WASTE_DATA.forEach(w=>{ byStaff[w.staff_name]=(byStaff[w.staff_name]||0)+1; });
+      (allStaff||[]).forEach(s=>{ byStaff[s.full_name] = { count:0, cost:0 }; });
+      WASTE_DATA.forEach(w=>{
+        const nm = w.staff_name||'—';
+        if(!byStaff[nm]) byStaff[nm] = { count:0, cost:0 };
+        byStaff[nm].count++;
+        byStaff[nm].cost += w.quantity*(w.ingredients?.unit_cost||0);
+      });
+      const staffRows = Object.entries(byStaff).sort((a,b)=>b[1].count-a[1].count);
+      // تجميع حسب الفرع — كل فرع شو أتلف لحاله
+      const byBranch = {};
+      WASTE_DATA.forEach(w=>{
+        const bn = w.branches?.name_ar||'—';
+        if(!byBranch[bn]) byBranch[bn] = { count:0, cost:0 };
+        byBranch[bn].count++;
+        byBranch[bn].cost += w.quantity*(w.ingredients?.unit_cost||0);
+      });
+      const branchRows = Object.entries(byBranch).sort((a,b)=>b[1].cost-a[1].cost);
+      window.__lastWasteData = { from, to, staffRows, branchRows, totalCost, count: WASTE_DATA.length };
       R.innerHTML = `
         <div class="day-head" style="margin:10px 0">
           <div class="stat">عدد عمليات الإتلاف<b>${WASTE_DATA.length}</b></div>
           <div class="stat">التكلفة التقديرية<b style="color:var(--red)">${fmt(totalCost)} ${CURRENCY}</b></div>
         </div>
+        <div style="font-weight:900;color:var(--maroon);margin-bottom:8px">🏪 حسب الفرع — كل فرع شو أتلف لحاله</div>
+        <div class="tbl-wrap" style="margin-bottom:16px"><table class="tbl">
+          <tr><th>الفرع</th><th>عدد مرات الإتلاف</th><th>التكلفة</th></tr>
+          ${branchRows.map(([bn,d])=>`<tr><td><b>${esc(bn)}</b></td><td>${d.count}</td><td style="color:var(--red)">${fmt(d.cost)}</td></tr>`).join('')||'<tr><td colspan="3" class="empty-note">ما في بيانات</td></tr>'}
+        </table></div>
+        <div style="font-weight:900;color:var(--maroon);margin-bottom:8px">👥 حسب الموظف — مين أتلف ومين لأ</div>
+        <div class="tbl-wrap" style="margin-bottom:16px"><table class="tbl">
+          <tr><th>الموظف</th><th>عدد مرات الإتلاف</th><th>التكلفة</th><th>الحالة</th></tr>
+          ${staffRows.map(([nm,d])=>`<tr class="${d.count===0?'':''}">
+            <td><b>${esc(nm)}</b></td>
+            <td>${d.count}</td>
+            <td style="color:var(--red)">${fmt(d.cost)}</td>
+            <td>${d.count===0?'<span style="color:var(--ok)">✅ ما أتلف شي</span>':'<span style="color:var(--warn)">⚠️ أتلف '+d.count+' مرة</span>'}</td>
+          </tr>`).join('')||'<tr><td colspan="4" class="empty-note">ما في موظفين</td></tr>'}
+        </table></div>
+        <div style="font-weight:900;color:var(--maroon);margin-bottom:8px">📋 التفاصيل الكاملة</div>
         <div class="tbl-wrap"><table class="tbl">
           <tr><th>التاريخ والساعة</th><th>المادة</th><th>الكمية</th><th>الفرع</th><th>السبب</th><th>الموظف</th><th>ملاحظة</th></tr>
           ${WASTE_DATA.map(w=>`<tr>
