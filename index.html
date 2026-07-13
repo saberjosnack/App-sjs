@@ -1259,7 +1259,20 @@
   initDeviceBranchGate();
 
   const saved = sessionStorage.getItem('sjs_me');
-  if(localStorage.getItem('sjs_device_branch_id') && saved){ try{ ME = JSON.parse(saved); enterApp(); }catch(e){ sessionStorage.removeItem('sjs_me'); } }
+  if(localStorage.getItem('sjs_device_branch_id') && saved){
+    try{
+      ME = JSON.parse(saved); enterApp();
+      // ⚠️ إصلاح: النسخة المحفوظة بالجهاز ممكن تكون قديمة (صلاحيات اتغيّرت من المدير بعد آخر تسجيل دخول)
+      // فنعيد جلب بيانات الموظف الحقيقية من القاعدة فورًا ونحدّث الصلاحيات المعروضة بدون ما ننتظر تسجيل خروج/دخول
+      db.from('staff').select('*, branches(name_ar)').eq('id', ME.id).limit(1).then(({data,error})=>{
+        if(error || !data || !data.length) return;
+        if(!data[0].is_active){ sessionStorage.removeItem('sjs_me'); location.reload(); return; }
+        ME = data[0];
+        sessionStorage.setItem('sjs_me', JSON.stringify(ME));
+        applyRoles();
+      }).catch(()=>{});
+    }catch(e){ sessionStorage.removeItem('sjs_me'); }
+  }
 
   // ⚠️ إصلاح حرج: شاشة التحميل لازم تنشال دايمًا بسرعة بغض النظر صار تسجيل دخول تلقائي أو لأ —
   // وإلا أي حدا لسا ما سجّل دخول (معظم الحالات) بيضل عالق خلفها للأبد وما بيشوف شاشة الـPIN إطلاقًا
@@ -1703,7 +1716,7 @@
         expense_date: new Date().toISOString().split('T')[0],
         category: 'سحب من الدرج', title: reason, description: reason,
         amount: amt, branch_id: ME.branch_id||null,
-        shift_id: currentShift.id, created_by: ME.full_name,
+        shift_id: currentShift.id, created_by: ME.id,
         approval_status: 'pending'
       });
       if(error){ toast('✗ '+error.message); console.error(error); return; }
@@ -4279,7 +4292,7 @@
         ${filtered.map(e=>`<tr class="${e.approval_status==='pending'?'late':''}">
           <td>${new Date(e.expense_date).toLocaleDateString('ar-JO')}</td>
           <td><span class="badge">${esc(e.category||'—')}</span>${e.approval_status==='pending'?' <b style="color:var(--warn)">⏳ بانتظار الموافقة</b>':e.approval_status==='approved'?' <b style="color:var(--ok)">✅ موافق</b>':e.approval_status==='rejected'?' <b style="color:var(--red)">✗ مرفوض</b>':''}</td>
-          <td>${esc(e.description||'—')}${e.created_by?'<br><small style="color:var(--muted)">بواسطة: '+esc(e.created_by)+'</small>':''}</td>
+          <td>${esc(e.description||'—')}${e.created_by?'<br><small style="color:var(--muted)">بواسطة: '+esc((STAFF.find(s=>s.id===e.created_by)||{}).full_name || e.created_by)+'</small>':''}</td>
           <td><b style="color:var(--red)">${fmt(e.amount)} ${CURRENCY}</b></td>
           <td>${esc(BRANCHES.find(b=>b.id===e.branch_id)?.name_ar||'كل الفروع')}</td>
           <td>
