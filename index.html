@@ -1259,6 +1259,10 @@
   const saved = sessionStorage.getItem('sjs_me');
   if(localStorage.getItem('sjs_device_branch_id') && saved){ try{ ME = JSON.parse(saved); enterApp(); }catch(e){ sessionStorage.removeItem('sjs_me'); } }
 
+  // ⚠️ إصلاح حرج: شاشة التحميل لازم تنشال دايمًا بسرعة بغض النظر صار تسجيل دخول تلقائي أو لأ —
+  // وإلا أي حدا لسا ما سجّل دخول (معظم الحالات) بيضل عالق خلفها للأبد وما بيشوف شاشة الـPIN إطلاقًا
+  setTimeout(()=>{ document.getElementById('loadingOverlay')?.remove(); }, 400);
+
   /* ================= إعدادات الطابعة (محلية لهاد الجهاز فقط — مو مشتركة) ================= */
   const LOCAL_PRINTER_KEYS = ['printer_method','printer_ip','printer_port','printer_bt_address','auto_print_branch'];
   function showDevicePrinterSettings(){
