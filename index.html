@@ -328,6 +328,7 @@
 </div>
 
 <!-- ============ التطبيق ============ -->
+<div id="loadingOverlay" style="position:fixed;inset:0;background:var(--cream);z-index:150;display:flex;align-items:center;justify-content:center;font-weight:900;color:var(--maroon);font-size:1.2rem">S<span style="color:var(--red)">J</span>S...</div>
 <div id="app" class="hidden">
   <header>
     <div class="brand">S<em>J</em>S <span style="font-weight:600;font-size:.85rem">POS</span></div>
@@ -1195,6 +1196,8 @@
     const whoBranch = document.getElementById('whoBranch');
     if (whoBranch) whoBranch.textContent = ME.branches ? '🏪 ' + ME.branches.name_ar : '🏪 كل الفروع';
     applyRoles();
+    const loadingOv = document.getElementById('loadingOverlay');
+    if(loadingOv) loadingOv.remove(); // نشيل شاشة التحميل بس بعد ما الصلاحيات كلها اتطبقت فعليًا
     bootData();
     setInterval(checkOverdue, 30000);
     setInterval(checkReadyAlerts, 30000);
@@ -2774,10 +2777,14 @@
         if (btnSave) btnSave.disabled = false;
         return;
       }
-      const branch_id = ME.branch_id || _selBranch;
-      // ⚠️ منع الإرسال لفرع ما فاتح شيفت — بس لو الحساب بدون فرع ثابت (كول سنتر/مدير) ومرسل لفرع تاني
+      // ⚠️ الكول سنتر تحديدًا: نفرض اختيار الفرع من القائمة دايمًا، حتى لو حسابه معه فرع
+      // مسجل بالغلط بقاعدة البيانات — عشان محدّ يقدر يتفادى فحص الشيفت بهاي الطريقة
+      const isCC = isCallCenter();
+      const branch_id = (ME.branch_id && !isCC) ? ME.branch_id : _selBranch;
+      if(isCC && !_selBranch){ toast('⚠️ اختر الفرع من القائمة — إجباري للكول سنتر'); if (btnSave) btnSave.disabled = false; return; }
+      // ⚠️ منع الإرسال لفرع ما فاتح شيفت — لأي حساب بدون فرع ثابت أو كول سنتر ومرسل لفرع تاني
       let remoteShiftId = null;
-      if(!ME.branch_id){
+      if(!ME.branch_id || isCC){
         const { data: targetShift } = await db.from('cash_shifts').select('id').eq('branch_id', branch_id).eq('status','open').limit(1);
         if(!targetShift || !targetShift.length){
           const brName = BRANCHES.find(b=>b.id===branch_id)?.name_ar||'الفرع';
@@ -3796,7 +3803,7 @@
     ingredients:'inventory_view', recipes:'inventory_view',
     inventory:'inventory_audit', transfers:'inventory_transfer',
     expenses:'expenses_view', purchases:'purchases_view',
-    platforms:'platforms_view', empmeals:'empmeals_view', topcust:'topcust_view', waste:'waste_log',
+    platforms:'platforms_view', empmeals:'empmeals_view', topcust:'topcust_view', waste:'waste_log', suppliers:'purchases_view',
   };
   function canAccessAdminTab(tabKey){
     if(isAdmin()) return true;
@@ -4439,12 +4446,19 @@
       <div class="trow total"><span>الإجمالي</span><b>${fmt(p.total)} ${CURRENCY}</b></div>
       <div class="m-act"><button class="cancel" onclick="closeModal()">إغلاق</button></div>`);
   }
-  function purchaseForm(){
+  async function purchaseForm(){
     piIdx=0; window.__purchaseBranchId=null;
+    if(!SUPPLIERS_DATA.length){ const {data} = await db.from('suppliers').select('*').order('name'); SUPPLIERS_DATA = data||[]; }
     const today=new Date().toISOString().split('T')[0];
     modal(`<h3>فاتورة شراء جديدة</h3>
       <div class="fld"><label>التاريخ</label><input type="date" id="fp_dt" value="${today}"></div>
-      <div class="fld"><label>المورد</label><input id="fp_sup" placeholder="اسم المورد"></div>
+      <div class="fld"><label>المورد</label>
+      <select id="fp_sup" onchange="if(this.value==='__new__'){document.getElementById('fp_sup_new').classList.remove('hidden')}else{document.getElementById('fp_sup_new').classList.add('hidden')}">
+        <option value="">اختر مورد...</option>
+        ${SUPPLIERS_DATA.map(s=>`<option value="${esc(s.name)}">${esc(s.name)}</option>`).join('')}
+        <option value="__new__">+ مورد جديد (اكتب اسمه تحت)</option>
+      </select>
+      <input id="fp_sup_new" class="hidden" placeholder="اسم المورد الجديد" style="margin-top:6px"></div>
       <div class="fld"><label>المواد المشتراة</label>
         <div id="pi_list">${piRow(0)}</div>
         <button type="button" class="mini ok" style="margin-top:6px" onclick="addPiRow()">＋ إضافة مادة</button></div>
@@ -4465,7 +4479,15 @@
   }
   function addPiRow(){document.getElementById('pi_list').insertAdjacentHTML('beforeend',piRow(++piIdx));}
   async function savePurchase(){
-    const dt=document.getElementById('fp_dt').value,sup=document.getElementById('fp_sup').value.trim();
+    const dt=document.getElementById('fp_dt').value;
+    let sup=document.getElementById('fp_sup').value.trim();
+    if(sup==='__new__'){
+      sup = document.getElementById('fp_sup_new').value.trim();
+      if(sup){
+        const exists = SUPPLIERS_DATA.find(s=>s.name===sup);
+        if(!exists) await db.from('suppliers').insert({name:sup});
+      }
+    }
     if(!dt||!sup){toast('⚠️ التاريخ والمورد مطلوبين');return;}
     if(!window.__purchaseBranchId){toast('⚠️ اختر الفرع المستلم');return;}
     const rows=[...document.querySelectorAll('#pi_list .two')];
@@ -5635,6 +5657,68 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
           </tr>`).join('')||'<tr><td colspan="7" class="empty-note">ما في إتلافات بهاي الفترة</td></tr>'}
         </table></div>`;
     }catch(e){ R.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
+  }
+
+  /* ================= الموردين ================= */
+  let SUPPLIERS_DATA = [];
+  async function renderSuppliers(){
+    const C = document.getElementById('admContent');
+    if(!C) return;
+    C.innerHTML = '<div class="empty-note">... جاري التحميل</div>';
+    try{
+      const { data, error } = await db.from('suppliers').select('*').order('name');
+      if(error){ C.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message||'الجدول suppliers غير موجود — نفّذ SQL أولاً')}</div>`; return; }
+      SUPPLIERS_DATA = data||[];
+      const { data: purchases } = await db.from('purchases').select('supplier, total, purchase_date');
+      const bySupplier = {};
+      (purchases||[]).forEach(p=>{
+        if(!p.supplier) return;
+        if(!bySupplier[p.supplier]) bySupplier[p.supplier] = {count:0, total:0, last:null};
+        bySupplier[p.supplier].count++;
+        bySupplier[p.supplier].total += parseFloat(p.total||0);
+        if(!bySupplier[p.supplier].last || p.purchase_date > bySupplier[p.supplier].last) bySupplier[p.supplier].last = p.purchase_date;
+      });
+      C.innerHTML = `
+        <button class="add-btn" onclick="supplierForm()">+ مورد جديد</button>
+        <div class="tbl-wrap"><table class="tbl">
+          <tr><th>الاسم</th><th>الهاتف</th><th>عدد الفواتير</th><th>إجمالي المشتريات</th><th>آخر شراء</th><th></th></tr>
+          ${SUPPLIERS_DATA.map(s=>{
+            const st = bySupplier[s.name] || {count:0,total:0,last:null};
+            return `<tr>
+              <td><b>${esc(s.name)}</b></td>
+              <td dir="ltr" style="text-align:right">${esc(s.phone||'—')}</td>
+              <td>${st.count}</td>
+              <td><b style="color:var(--red)">${fmt(st.total)} ${CURRENCY}</b></td>
+              <td>${st.last?new Date(st.last).toLocaleDateString('ar-JO'):'—'}</td>
+              <td><button class="mini edit" onclick="supplierForm('${s.id}')">تعديل</button>
+                  <button class="mini ok" onclick="window.__purFilterSup='${esc(s.name)}';admTab('purchases')">🛒 مشترياته</button>
+                  <button class="mini del" onclick="deleteSupplier('${s.id}','${esc(s.name)}')">حذف</button></td>
+            </tr>`;
+          }).join('')||'<tr><td colspan="6" class="empty-note">ما في موردين مضافين بعد</td></tr>'}
+        </table></div>`;
+    }catch(e){ C.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
+  }
+  function supplierForm(id){
+    const s = SUPPLIERS_DATA.find(x=>x.id===id) || {};
+    modal(`<h3>${id?'تعديل مورد':'مورد جديد'}</h3>
+      <div class="fld"><label>الاسم</label><input id="sup_name" value="${esc(s.name||'')}"></div>
+      <div class="fld"><label>الهاتف</label><input id="sup_phone" inputmode="tel" value="${esc(s.phone||'')}"></div>
+      <div class="fld"><label>ملاحظات</label><input id="sup_notes" value="${esc(s.notes||'')}"></div>
+      <div class="m-act"><button class="save" onclick="saveSupplier('${id||''}')">حفظ ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
+  }
+  async function saveSupplier(id){
+    const name = document.getElementById('sup_name').value.trim();
+    if(!name){ toast('⚠️ اسم المورد مطلوب'); return; }
+    const rec = { name, phone: document.getElementById('sup_phone').value.trim()||null, notes: document.getElementById('sup_notes').value.trim()||null };
+    const r = id ? await db.from('suppliers').update(rec).eq('id',id) : await db.from('suppliers').insert(rec);
+    if(r.error){ toast('✗ '+r.error.message); return; }
+    closeModal(); toast('✓ انحفظ'); renderSuppliers();
+  }
+  async function deleteSupplier(id, name){
+    if(!confirm('حذف المورد "'+name+'"؟ (فواتير الشراء القديمة بتضل موجودة باسمه كنص)')) return;
+    const r = await db.from('suppliers').delete().eq('id',id);
+    if(r.error){ toast('✗ '+r.error.message); return; }
+    toast('✓ انحذف'); renderSuppliers();
   }
 
   async function renderPlatforms(){
