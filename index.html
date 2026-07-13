@@ -375,6 +375,14 @@
               <option value="">بدون منصة (مباشر)</option>
             </select>
             <div id="platformNote" class="hidden" style="color:var(--warn);font-weight:900;font-size:.82rem;margin-bottom:6px">🛵 ذمم على المنصة — ما بتحاسب عليه كاش بآخر الشيفت</div>
+            <label style="display:flex;align-items:center;gap:8px;background:var(--cream);border:1px dashed var(--line);border-radius:10px;padding:8px 10px;margin-bottom:6px;font-weight:800;font-size:.9rem">
+              <input type="checkbox" id="empMealChk" onchange="onEmpMealToggle()" style="width:18px;height:18px">
+              🍽️ وجبة موظف (خصم 20% تلقائي — ذمم بالاسم)
+            </label>
+            <select class="dfield hidden" id="empMealName" style="margin-bottom:6px" onchange="onEmpMealNameChange()">
+              <option value="">اختر الاسم...</option>
+            </select>
+            <div id="empMealDiscInfo" class="hidden" style="color:var(--muted);font-weight:800;font-size:.8rem;margin-bottom:6px"></div>
             <div class="cust-box" id="custBox">
               <div class="lbl">👤 معلومات العميل <span id="custReq">(اختياري)</span></div>
               <input class="dfield" id="custPhone" placeholder="رقم الهاتف — اكتبه وبنجيب بياناته" inputmode="tel" autocomplete="off">
@@ -552,6 +560,7 @@
         <button data-a="expenses" onclick="admTab('expenses')">💸 المصاريف</button>
         <button data-a="purchases" onclick="admTab('purchases')">🛒 المشتريات</button>
         <button data-a="platforms" onclick="admTab('platforms')">🛵 منصات التوصيل</button>
+        <button data-a="empmeals" onclick="admTab('empmeals')">🍽️ وجبات الموظفين</button>
         <button data-a="devices" onclick="admTab('devices')">🖥️ الأجهزة</button>
         <button data-a="sett" onclick="admTab('sett')">🔧 إعدادات</button>
         <button data-a="shifts" onclick="admTab('shifts')">🔄 شيفتات</button>
@@ -591,6 +600,52 @@
   const PAY_AR = { cash:'كاش', card:'كرت', cliq:'كليك' };
   const ROLE_AR = { admin:'مدير', cashier:'كاشير', callcenter:'كول سنتر', kitchen:'مطبخ' };
   PAY_AR['platform'] = 'ذمم (تطبيق)';
+  PAY_AR['employee_tab'] = 'ذمم موظف';
+  let MEAL_NAMES_DATA = [];
+  async function loadEmpMealNames(){
+    try{
+      const sel = document.getElementById('empMealName');
+      const {data} = await db.from('meal_names').select('*').eq('is_active', true).order('name');
+      MEAL_NAMES_DATA = data||[];
+      if(!sel) return;
+      sel.innerHTML = '<option value="">اختر الاسم...</option>' +
+        MEAL_NAMES_DATA.map(n=>`<option value="${esc(n.name)}" data-disc="${n.discount_percent??20}">${esc(n.name)} (خصم ${n.discount_percent??20}%)</option>`).join('');
+    }catch(e){ console.error('loadEmpMealNames failed:', e); }
+  }
+  function onEmpMealNameChange(){
+    const sel = document.getElementById('empMealName');
+    const info = document.getElementById('empMealDiscInfo');
+    const opt = sel?.selectedOptions[0];
+    const disc = opt ? parseFloat(opt.dataset.disc||20) : 20;
+    if(info){
+      if(sel?.value){ info.textContent = '💸 نسبة الخصم لهاد الشخص: '+disc+'%'; info.classList.remove('hidden'); }
+      else info.classList.add('hidden');
+    }
+    renderCart();
+  }
+  function onEmpMealToggle(){
+    const chk = document.getElementById('empMealChk');
+    const nameInput = document.getElementById('empMealName');
+    const payBarEl = document.getElementById('payBar');
+    if(chk.checked){
+      nameInput.classList.remove('hidden');
+      payMethod = 'employee_tab';
+      if(payBarEl){
+        payBarEl.querySelectorAll('button').forEach(b=>b.classList.remove('on'));
+        payBarEl.style.opacity = '0.4';
+        payBarEl.style.pointerEvents = 'none';
+      }
+    } else {
+      if(payBarEl){ payBarEl.style.opacity = '1'; payBarEl.style.pointerEvents = 'auto'; }
+      nameInput.classList.add('hidden');
+      nameInput.value = '';
+      payMethod = 'cash';
+      const cashBtn = document.querySelector('#payBar [data-p="cash"]');
+      document.querySelectorAll('#payBar button').forEach(x=>x.classList.remove('on'));
+      if(cashBtn) cashBtn.classList.add('on');
+    }
+    renderCart();
+  }
   function onPlatformChange(){
     const sel = document.getElementById('orderPlatform');
     const payBarEl = document.getElementById('payBar');
@@ -1081,6 +1136,7 @@
     setTimeout(checkReadyAlerts, 3000);
     setTimeout(updateHeldCount, 1500);
     setTimeout(loadPlatformsList, 1000);
+    setTimeout(loadEmpMealNames, 1000);
     setTimeout(sendDeviceHeartbeat, 2000);
     setInterval(sendDeviceHeartbeat, 45000);
     setInterval(checkDevicesOffline, 60000);
@@ -1452,6 +1508,29 @@
 
   /* ================= طباعة تلقائية لطلبات الكول سنتر بجهاز الفرع ================= */
   const _autoPrintBusy = new Set();
+  /* ---- مراقبة "هل استلم الفرع الطلب فعليًا للطباعة" — تنبيه قوي للسنتر لو لأ ---- */
+  const PRINT_WATCH_TIMEOUT_MS = 75000; // 75 ثانية (وقت كافي: فحص كل 8ث + وقت طباعة) قبل ما ننبّه
+  function watchOrderPrintStatus(orderId, orderNumber, branchName){
+    setTimeout(async ()=>{
+      try{
+        const { data } = await db.from('orders').select('auto_printed').eq('id', orderId).maybeSingle();
+        if(data && data.auto_printed === false){
+          // 75 ثانية مرت وجهاز الفرع لسا ما التقط الطلب — احتمال الجهاز مقفول/بدون نت/الطباعة التلقائية موقوفة
+          showPrintFailAlert(orderNumber, branchName);
+        }
+      }catch(e){ console.error('watchOrderPrintStatus failed:', e); }
+    }, PRINT_WATCH_TIMEOUT_MS);
+  }
+  function showPrintFailAlert(orderNumber, branchName){
+    beep(4);
+    const box = document.createElement('div');
+    box.style.cssText = 'position:fixed;top:70px;left:50%;transform:translateX(-50%);background:var(--red);color:#fff;padding:16px 26px;border-radius:16px;font-weight:900;font-size:1.05rem;z-index:500;box-shadow:0 10px 30px rgba(0,0,0,.4);text-align:center;max-width:92vw';
+    box.innerHTML = '⚠️ الطلب #'+orderNumber+' ما انطبع بفرع "'+esc(branchName)+'"<br><span style="font-size:.9rem;font-weight:700">يرجى الاتصال بالفرع فورًا 📞</span>'
+      + '<br><button onclick="this.closest(\'div\').remove()" style="margin-top:8px;background:rgba(255,255,255,.25);color:#fff;border-radius:8px;padding:5px 16px;font-weight:900">إغلاق</button>';
+    document.body.appendChild(box);
+    // يضل ظاهر 60 ثانية على الأقل (المستخدم ممكن يسكره يدوي أبكر لو بدو، بس ما بيختفي لحاله قبل هيك)
+    setTimeout(()=>{ try{ box.remove(); }catch(e){} }, 60000);
+  }
   async function checkAutoPrintQueue(){
     try {
       if(!ME) return;
@@ -1699,6 +1778,10 @@
     });
     const platformSel = document.getElementById('orderPlatform');
     if(platformSel){ platformSel.value = ''; onPlatformChange(); }
+    const empChk = document.getElementById('empMealChk');
+    if(empChk){ empChk.checked = false; onEmpMealToggle(); }
+    const empNameSel = document.getElementById('empMealName');
+    if(empNameSel){ empNameSel.value = ''; onEmpMealNameChange(); }
     const custHint = document.getElementById('custHint');
     if (custHint) custHint.textContent = '';
     const codeMsg = document.getElementById('codeMsg');
@@ -1843,11 +1926,18 @@
   function totals(){
     const sub = cart.reduce((s,l)=>s + l.item.price*l.qty, 0);
     let disc = 0, lbl = '';
-    if(appliedCode){
+    const isEmpMeal = document.getElementById('empMealChk')?.checked;
+    if(isEmpMeal){
+      const sel = document.getElementById('empMealName');
+      const opt = sel?.selectedOptions[0];
+      const discPct = opt ? parseFloat(opt.dataset.disc||20) : 20;
+      disc = sub * discPct/100;
+      lbl = '(وجبة موظف '+discPct+'%)';
+    } else if(appliedCode){
       disc = appliedCode.kind==='percent' ? sub*appliedCode.value/100 : +appliedCode.value;
       lbl = '('+appliedCode.code+')';
     }
-    if(isAdmin()){
+    if(isAdmin() && !isEmpMeal){
       const discInput = document.getElementById('discInput');
       const manual = discInput ? parseFloat(discInput.value)||0 : 0;
       if(manual>0){ disc = manual; lbl='(يدوي)'; }
@@ -2235,8 +2325,14 @@
   }
 
   /* ====== طباعة عبر تطبيق أندرويد (جسر أصلي — بدون وكيل/RawBT) ====== */
+  let _pendingNativePrint = null; // { resolve, reject } للطباعة الجارية حاليًا
   window.__onNativePrintResult = function(ok, message){
     toast(ok ? '✅ '+message : '⚠️ '+message);
+    if(_pendingNativePrint){
+      if(ok) _pendingNativePrint.resolve(message);
+      else _pendingNativePrint.reject(new Error(message));
+      _pendingNativePrint = null;
+    }
   };
   window.__loadBtDevices = function(){
     const sel = document.getElementById('f_printerBT');
@@ -2248,15 +2344,30 @@
         : '<option value="">— ما في أجهزة مقرونة —</option>';
     }catch(e){ console.error(e); }
   };
+  function waitForNativePrintResult(timeoutMs=8000){
+    return new Promise((resolve, reject)=>{
+      _pendingNativePrint = { resolve, reject };
+      setTimeout(()=>{
+        if(_pendingNativePrint){
+          _pendingNativePrint = null;
+          reject(new Error('ما وصل رد من الطابعة خلال '+(timeoutMs/1000)+' ثانية — تأكد من الاتصال'));
+        }
+      }, timeoutMs);
+    });
+  }
   async function printViaAppNetwork(textContent){
     if(!SETTINGS.printer_ip) throw new Error('no ip');
     const b64 = textToEscPosBase64(textContent);
+    const resultPromise = waitForNativePrintResult();
     window.SJSPrinter.printNetwork(SETTINGS.printer_ip, parseInt(SETTINGS.printer_port||'9100'), b64);
+    await resultPromise; // ننتظر التأكيد الحقيقي من الجافا (نجاح أو فشل)
   }
   async function printViaAppBluetooth(textContent){
     if(!SETTINGS.printer_bt_address) throw new Error('no bt address');
     const b64 = textToEscPosBase64(textContent);
+    const resultPromise = waitForNativePrintResult();
     window.SJSPrinter.printBluetooth(SETTINGS.printer_bt_address, b64);
+    await resultPromise; // ننتظر التأكيد الحقيقي من الجافا (نجاح أو فشل)
   }
 
   async function printRaw(text, htmlFallback){
@@ -2315,21 +2426,22 @@
   async function printSmart(ord, lines, t, cust) {
     const method = SETTINGS.printer_method || 'auto';
     const isAndroid = /Android/i.test(navigator.userAgent);
-    // أندرويد: طباعة مباشرة بدون أي نافذة عبر تطبيق RawBT (بلوتوث/شبكة)
+    // ✅ الأولوية دايمًا: الجسر الأصلي (PrinterBridge) — أوثق بكثير من RawBT لأنه اتصال
+    // مباشر بلا وسيط ولا ألعاب intent://. نجربه أول شي كل ما يكون متوفر ومضبوط.
+    if ((method === 'app_bluetooth' || method === 'auto') && window.SJSPrinter && SETTINGS.printer_bt_address) {
+      try { await printViaAppBluetooth(generateReceiptText(ord, lines, t, cust)); return; }
+      catch(e) { console.error('App bluetooth print failed:', e); toast('⚠️ فشل البلوتوث الأصلي: '+(e.message||'')); if(method==='app_bluetooth') return; }
+    }
+    if ((method === 'app_network' || method === 'auto') && window.SJSPrinter && SETTINGS.printer_ip) {
+      try { await printViaAppNetwork(generateReceiptText(ord, lines, t, cust)); return; }
+      catch(e) { console.error('App network print failed:', e); toast('⚠️ فشل الشبكة الأصلية: '+(e.message||'')); if(method==='app_network') return; }
+    }
+    // احتياطي فقط: RawBT (لو ما في جسر أصلي مضبوط، أو الجسر فشل بوضع "تلقائي")
     if (method === 'rawbt' || (method === 'auto' && isAndroid)) {
       const text = generateReceiptText(ord, lines, t, cust);
       triggerRawbtIntent(text);
-      toast('📲 انبعتت للطابعة');
+      toast('📲 انبعتت لـ RawBT (احتياطي)');
       return;
-    }
-    // تطبيق أندرويد: طباعة مباشرة عبر شبكة أو بلوتوث بدون أي برنامج وسيط
-    if (method === 'app_network' && window.SJSPrinter) {
-      try { await printViaAppNetwork(generateReceiptText(ord, lines, t, cust)); return; }
-      catch(e) { console.error('App network print failed:', e); toast('⚠️ تأكد من IP الطابعة'); }
-    }
-    if (method === 'app_bluetooth' && window.SJSPrinter) {
-      try { await printViaAppBluetooth(generateReceiptText(ord, lines, t, cust)); return; }
-      catch(e) { console.error('App bluetooth print failed:', e); toast('⚠️ اختر طابعة بلوتوث من الإعدادات'); }
     }
     // شبكة: عبر وكيل الطباعة المحلي (SJS-Print-Agent) — فوري وبدون أي نافذة، عربي مثالي
     if (method === 'network' || (method === 'auto' && SETTINGS.printer_ip)) {
@@ -2376,6 +2488,30 @@
   }
 
   /* ================= حفظ الطلب ================= */
+  async function restoreInventoryForCancel(branchId, orderItems){
+    // عكس deductInventoryForSale بالضبط — يرجّع كل مادة لمخزون الفرع، كل مادة لحالها مقسّمة صح
+    if(!branchId || !orderItems?.length) return;
+    const itemIds = [...new Set(orderItems.map(l=>l.menu_item_id).filter(Boolean))];
+    if(!itemIds.length) return;
+    const {data: recipes} = await db.from('recipes')
+      .select('menu_item_id, recipe_items(ingredient_id, quantity)')
+      .in('menu_item_id', itemIds);
+    if(!recipes || !recipes.length) return; // ما في وصفات معبّاة — ما في شي نرجّعه
+    const restoration = {}; // ingredient_id -> total qty to restore
+    orderItems.forEach(line=>{
+      const recipe = recipes.find(r=>r.menu_item_id===line.menu_item_id);
+      if(!recipe) return;
+      (recipe.recipe_items||[]).forEach(ri=>{
+        const amt = (ri.quantity||0) * (line.quantity||1);
+        restoration[ri.ingredient_id] = (restoration[ri.ingredient_id]||0) + amt;
+      });
+    });
+    for(const [ingId, qty] of Object.entries(restoration)){
+      const {data:bi} = await db.from('branch_inventory').select('id,stock').eq('branch_id',branchId).eq('ingredient_id',ingId).maybeSingle();
+      if(bi) await db.from('branch_inventory').update({stock: (bi.stock||0)+qty}).eq('id', bi.id);
+      else await db.from('branch_inventory').insert({branch_id:branchId, ingredient_id:ingId, stock:qty, min_stock:0});
+    }
+  }
   async function deductInventoryForSale(branchId, cartItems){
     if(!branchId || !cartItems?.length) return;
     const itemIds = cartItems.map(l=>l.item.id).filter(Boolean);
@@ -2405,6 +2541,8 @@
     if(!perm(orderType==='delivery'?'order_delivery':'order_takeaway')){ toast('⛔ ما عندك صلاحية بيع '+(orderType==='delivery'?'التوصيل':'الاستلام')); return; }
     const platformValSel = document.getElementById('orderPlatform')?.value;
     if(platformValSel && !perm('order_platform')){ toast('⛔ ما عندك صلاحية البيع عبر التطبيقات/المنصات'); return; }
+    const empMealName = document.getElementById('empMealChk')?.checked ? (document.getElementById('empMealName')?.value.trim()||'') : '';
+    if(document.getElementById('empMealChk')?.checked && !empMealName){ toast('⚠️ اكتب اسم الموظف — إجباري لوجبة الموظف'); return; }
 
     const t = totals();
     const custPhone = document.getElementById('custPhone');
@@ -2449,6 +2587,7 @@
         notes: orderNote ? orderNote.value.trim() || null : null,
         discount_code: appliedCode ? appliedCode.code : null,
         platform_id: document.getElementById('orderPlatform')?.value || null,
+        employee_tab_name: empMealName || null,
         status: 'new',
         shift_id: currentShift ? currentShift.id : null,
         created_by: ME.id,
@@ -2512,7 +2651,10 @@
           toast('⚠️ الطلب #'+ord.order_number+' محفوظ، لكن الطباعة فشلت — راجع الطابعة/الوكيل');
         }
       } else if(print) {
-        toast('📨 الطلب انبعت لفرع ' + (BRANCHES.find(b=>b.id===branch_id)?.name_ar||'') + ' وبيطبع تلقائيًا هناك — مش عندك');
+        const targetBranchName = BRANCHES.find(b=>b.id===branch_id)?.name_ar||'';
+        toast('📨 الطلب انبعت لفرع ' + targetBranchName + ' وبيطبع تلقائيًا هناك — مش عندك');
+        // 🔔 مراقبة: لو جهاز الفرع المستهدف ما التقط الطلب خلال مهلة معقولة، ننبّه السنتر بقوة
+        watchOrderPrintStatus(ord.id, ord.order_number, targetBranchName);
       }
 
       clearCart();
@@ -2798,6 +2940,11 @@
     try {
       const { error } = await db.from('orders').update({ status:'cancelled', cancel_reason: reason.trim(), cancelled_at: new Date().toISOString() }).eq('id', id);
       if(error){ toast('✗ فشل الإلغاء: '+error.message); console.error(error); return; }
+      // إرجاع المكونات للمستودع — كل مادة لحالها مقسّمة صح حسب الوصفة
+      if(o && o.branch_id && o.order_items?.length){
+        try{ await restoreInventoryForCancel(o.branch_id, o.order_items); }
+        catch(e){ console.error('restore inventory on cancel failed:', e); }
+      }
       await logActivity('cancel_order', 'إلغاء طلب #'+(o?.order_number||id)+' — السبب: '+reason.trim());
       if(o){
         const cust = o.customers ? { name: o.customers.name, phone: o.customers.phone } : null;
@@ -3264,7 +3411,7 @@
     ingredients:'inventory_view', recipes:'inventory_view',
     inventory:'inventory_audit', transfers:'inventory_transfer',
     expenses:'expenses_view', purchases:'purchases_view',
-    platforms:'platforms_view',
+    platforms:'platforms_view', empmeals:'admin_only',
   };
   function canAccessAdminTab(tabKey){
     if(isAdmin()) return true;
@@ -3330,6 +3477,7 @@
     if(admView==='transfers'){ renderTransfers(); return; }
     if(admView==='platforms'){ renderPlatforms(); return; }
     if(admView==='devices'){ renderDevices(); return; }
+    if(admView==='empmeals'){ renderEmpMeals(); return; }
     if(admView==='sett'){
       C.innerHTML=`<div class="mbox" style="max-width:480px">
         <h3>🔧 إعدادات النظام</h3>
@@ -4012,15 +4160,18 @@
       id:i.id, ingId:i.ingredient_id, name:i.ingredients?.name||'—',
       unit:i.ingredients?.unit||'', stock:i.stock||0, min_stock:i.min_stock||0
     }));
+    // 🙈 جرد أعمى: الموظف العادي ما بيشوف الكمية المتوقعة إطلاقًا (عشان يعدّ فعليًا مش ينسخ الرقم)
+    // المالك بس (isAdmin) بيشوف المتوقع والفرق مباشرة أثناء الجرد
+    const blindCount = !isAdmin();
     modal(`<h3>📋 جرد احترافي — ${esc(branchName)}</h3>
-      <div style="font-weight:700;color:var(--muted);font-size:.85rem;margin-bottom:10px">النظام بيعرض الكمية المتوقعة (حسب المبيعات والمشتريات) — عدّ المخزون الفعلي واكتبه، وشوف الفرق تلقائيًا</div>
+      <div style="font-weight:700;color:var(--muted);font-size:.85rem;margin-bottom:10px">${blindCount ? '🙈 جرد أعمى — عدّ المخزون الفعلي واكتبه بدقة (النظام بيقارن تلقائيًا بعد الحفظ)' : 'النظام بيعرض الكمية المتوقعة (حسب المبيعات والمشتريات) — عدّ المخزون الفعلي واكتبه، وشوف الفرق تلقائيًا'}</div>
       <div style="max-height:380px;overflow-y:auto">
         <div class="two" style="font-weight:900;color:var(--maroon);font-size:.82rem;margin-bottom:4px">
-          <span style="flex:2">المادة</span><span style="flex:1">المتوقع</span><span style="flex:1">الفعلي (عدّه)</span>
+          <span style="flex:2">المادة</span>${blindCount?'':'<span style="flex:1">المتوقع</span>'}<span style="flex:1">الفعلي (عدّه)</span>
         </div>
         ${rows.map((r,idx)=>`<div class="two" style="margin-bottom:8px;align-items:center" id="audit_row_${idx}">
           <span style="flex:2;font-weight:700">${esc(r.name)} <small style="color:var(--muted)">(${esc(r.unit)})</small></span>
-          <span class="audit_expected" data-id="${r.id}" data-ingid="${r.ingId}" data-expected="${r.stock}" style="flex:1;font-weight:900;color:var(--muted)">${r.stock}</span>
+          <span class="audit_expected" data-id="${r.id}" data-ingid="${r.ingId}" data-expected="${r.stock}" style="flex:1;font-weight:900;color:var(--muted)${blindCount?';display:none':''}">${blindCount?'':r.stock}</span>
           <input class="inv_qty" data-id="${r.id}" type="number" step="0.01" placeholder="عدّ..."
             oninput="updateAuditVariance(${idx})"
             style="flex:1;border:1.5px solid var(--line);border-radius:10px;padding:7px 10px;min-width:80px">
@@ -4033,6 +4184,7 @@
       </div>`);
   }
   function updateAuditVariance(idx){
+    if(!isAdmin()) return; // 🙈 جرد أعمى — الموظف العادي ما بيشوف الفرق أثناء العدّ إطلاقًا
     const row = document.getElementById('audit_row_'+idx);
     const expected = parseFloat(row.querySelector('.audit_expected').dataset.expected)||0;
     const actualInput = row.querySelector('.inv_qty');
@@ -4521,6 +4673,148 @@
         }
       });
     }catch(e){ console.error('checkDevicesOffline failed:', e); }
+  }
+
+  /* ================= وجبات الموظفين (ذمم بالاسم) ================= */
+  async function renderEmpMeals(){
+    const C = document.getElementById('admContent');
+    if(!C) return;
+    await loadEmpMealNames();
+    const today = new Date().toISOString().split('T')[0];
+    const monthStart = new Date(); monthStart.setDate(1);
+    const monthStartStr = monthStart.toISOString().split('T')[0];
+    C.innerHTML = `
+      <div style="color:var(--muted);font-weight:700;font-size:.85rem;margin-bottom:10px">كل طلب "وجبة موظف" بينخصم حسب نسبة كل شخص ويتسجل ذمم باسمه — هون تشوف كم أكل كل واحد وكم عليه.</div>
+      <div style="background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:12px;margin-bottom:14px;box-shadow:var(--shadow)">
+        <div style="font-weight:900;color:var(--maroon);margin-bottom:8px">👥 إدارة الأسماء ونسب الخصم</div>
+        <button class="mini ok" onclick="mealNameForm()">+ إضافة اسم</button>
+        <div class="tbl-wrap" style="margin-top:8px"><table class="tbl">
+          <tr><th>الاسم</th><th>نسبة الخصم</th><th>الحالة</th><th></th></tr>
+          ${MEAL_NAMES_DATA.map(n=>`<tr class="${n.is_active?'':'off'}">
+            <td><b>${esc(n.name)}</b></td><td>${n.discount_percent??20}%</td>
+            <td>${n.is_active?'✅':'🚫'}</td>
+            <td><button class="mini edit" onclick="mealNameForm('${n.id}')">تعديل</button></td>
+          </tr>`).join('')||'<tr><td colspan="4" class="empty-note">ما في أسماء مضافة بعد</td></tr>'}
+        </table></div>
+      </div>
+      <div class="two">
+        <div style="flex:1"><label style="font-weight:700;font-size:.82rem;color:var(--muted)">من تاريخ</label>
+          <input type="date" id="em_from" value="${monthStartStr}" style="border:1.5px solid var(--line);border-radius:10px;padding:8px 10px;width:100%"></div>
+        <div style="flex:1"><label style="font-weight:700;font-size:.82rem;color:var(--muted)">إلى تاريخ</label>
+          <input type="date" id="em_to" value="${today}" style="border:1.5px solid var(--line);border-radius:10px;padding:8px 10px;width:100%"></div>
+      </div>
+      <div class="fld"><label>🔍 فلترة بالاسم</label><select id="em_filterName" onchange="runEmpMealsReport()" style="border:1.5px solid var(--line);border-radius:10px;padding:8px 10px;width:100%">
+        <option value="">كل الأسماء</option>
+        ${MEAL_NAMES_DATA.map(n=>`<option value="${esc(n.name)}">${esc(n.name)}</option>`).join('')}
+      </select></div>
+      <button class="mini ok" style="margin:8px 0" onclick="runEmpMealsReport()">📊 عرض التقرير</button>
+      <div id="em_result"></div>`;
+    runEmpMealsReport();
+  }
+  function mealNameForm(id){
+    const n = MEAL_NAMES_DATA.find(x=>x.id===id) || {};
+    modal(`<h3>${id?'تعديل اسم':'إضافة اسم جديد'}</h3>
+      <div class="fld"><label>الاسم</label><input id="mn_name" value="${esc(n.name||'')}" placeholder="مثال: أبو محمد (نظافة)"></div>
+      <div class="fld"><label>نسبة الخصم %</label><input id="mn_disc" type="number" step="1" min="0" max="100" value="${n.discount_percent??20}"></div>
+      ${id?`<div class="fld"><label class="chk"><input type="checkbox" id="mn_active" ${n.is_active!==false?'checked':''}> فعال</label></div>`:''}
+      <div class="m-act"><button class="save" onclick="saveMealName('${id||''}')">حفظ ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
+  }
+  async function saveMealName(id){
+    const name = document.getElementById('mn_name').value.trim();
+    const disc = parseFloat(document.getElementById('mn_disc').value);
+    if(!name){ toast('⚠️ الاسم مطلوب'); return; }
+    if(isNaN(disc)||disc<0||disc>100){ toast('⚠️ نسبة الخصم يجب أن تكون بين 0 و100'); return; }
+    const rec = { name, discount_percent: disc };
+    if(id) rec.is_active = document.getElementById('mn_active')?.checked ?? true;
+    const r = id ? await db.from('meal_names').update(rec).eq('id',id) : await db.from('meal_names').insert(rec);
+    if(r.error){ toast('✗ '+r.error.message); return; }
+    closeModal(); toast('✓ انحفظ'); renderEmpMeals();
+  }
+window.__lastEmpMealsData = null;
+  async function runEmpMealsReport(){
+    const from = document.getElementById('em_from')?.value;
+    const to = document.getElementById('em_to')?.value;
+    const filterName = document.getElementById('em_filterName')?.value || '';
+    const R = document.getElementById('em_result');
+    if(!from || !to || !R) return;
+    R.innerHTML = '<div class="empty-note">... جاري الحساب</div>';
+    try{
+      let q = db.from('orders')
+        .select('id, order_number, created_at, total, subtotal, discount, status, employee_tab_name, order_items(item_name, quantity, unit_price)')
+        .not('employee_tab_name','is',null)
+        .gte('created_at', from+'T00:00:00').lte('created_at', to+'T23:59:59')
+        .order('created_at', {ascending:false});
+      if(filterName) q = q.eq('employee_tab_name', filterName);
+      const { data: orders, error } = await q;
+      if(error){ R.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message)}</div>`; return; }
+      window.__empMealsRaw = orders||[];
+      const ok = (orders||[]).filter(o=>o.status!=='cancelled');
+      const byPerson = {};
+      ok.forEach(o=>{
+        const name = o.employee_tab_name;
+        if(!byPerson[name]) byPerson[name] = { orders:[], total:0, count:0 };
+        byPerson[name].orders.push(o);
+        byPerson[name].total += parseFloat(o.total||0);
+        byPerson[name].count++;
+      });
+      const people = Object.entries(byPerson).sort((a,b)=>b[1].total-a[1].total);
+      const grandTotal = ok.reduce((a,o)=>a+parseFloat(o.total||0),0);
+      window.__lastEmpMealsData = { from, to, people, grandTotal };
+      R.innerHTML = `
+        <div class="day-head" style="margin:10px 0">
+          <div class="stat">عدد الموظفين<b>${people.length}</b></div>
+          <div class="stat">عدد الوجبات<b>${ok.length}</b></div>
+          <div class="stat">إجمالي الذمم<b style="color:var(--red)">${fmt(grandTotal)} ${CURRENCY}</b></div>
+        </div>
+        ${people.map(([name, d])=>`
+          <div style="background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:12px;margin-bottom:10px;box-shadow:var(--shadow)">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+              <b style="font-size:1.05rem;color:var(--maroon)">👤 ${esc(name)}</b>
+              <b style="color:var(--red);font-size:1.1rem">${fmt(d.total)} ${CURRENCY} (${d.count} وجبة)</b>
+            </div>
+            <table class="tbl"><tr><th>#</th><th>التاريخ والساعة</th><th>الأصناف</th><th>الإجمالي</th><th></th></tr>
+              ${d.orders.map(o=>`<tr><td>${o.order_number}</td><td>${new Date(o.created_at).toLocaleString('ar-JO')}</td>
+                <td style="font-size:.82rem;color:var(--muted)">${(o.order_items||[]).map(i=>i.quantity+'×'+esc(i.item_name)).join('، ')}</td>
+                <td><b>${fmt(o.total)}</b></td>
+                <td><button class="mini del" title="إلغاء هاي الوجبة" onclick="cancelEmpMeal('${o.id}')">✕</button></td></tr>`).join('')}
+            </table>
+          </div>`).join('') || '<div class="empty-note">ما في وجبات موظفين بهاي الفترة</div>'}
+        ${people.length?'<button class="mini edit" style="width:100%" onclick="printEmpMealsReport()">🖨️ طباعة التقرير</button>':''}`;
+    }catch(e){ R.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
+  }
+  async function cancelEmpMeal(orderId){
+    const reason = prompt('سبب إلغاء الوجبة (اختياري):', 'إلغاء وجبة موظف') || 'إلغاء وجبة موظف';
+    try{
+      const o = (window.__empMealsRaw||[]).find(x=>x.id===orderId);
+      const { error } = await db.from('orders').update({ status:'cancelled', cancel_reason: reason, cancelled_at: new Date().toISOString() }).eq('id', orderId);
+      if(error){ toast('✗ '+error.message); return; }
+      if(o){
+        const branchRow = await db.from('orders').select('branch_id').eq('id', orderId).maybeSingle();
+        if(branchRow.data?.branch_id && o.order_items?.length){
+          try{ await restoreInventoryForCancel(branchRow.data.branch_id, o.order_items); }catch(e){ console.error(e); }
+        }
+      }
+      await logActivity('cancel_order', 'إلغاء وجبة موظف #'+(o?.order_number||orderId));
+      toast('✓ اتلغت الوجبة'); runEmpMealsReport();
+    }catch(e){ toast('✗ '+e.message); }
+  }
+  function printEmpMealsReport(){
+    const d = window.__lastEmpMealsData; if(!d) return;
+    const text = 'تقرير وجبات الموظفين\n'+
+      '— Saber Jo Snack —\n'+
+      'الفترة: '+d.from+' → '+d.to+'\n'+
+      '════════════════\n'+
+      d.people.map(([name,p])=>name+': '+p.count+' وجبة — '+fmt(p.total)+' '+CURRENCY).join('\n')+'\n'+
+      '════════════════\n'+
+      'الإجمالي: '+fmt(d.grandTotal)+' '+CURRENCY+'\n';
+    const html = `<html dir="rtl"><head><meta charset="UTF-8"><style>body{font-family:Cairo,Arial;padding:16px}table{width:100%;border-collapse:collapse}td,th{padding:6px;border:1px solid #ccc;text-align:right}</style></head><body>
+      <h2>تقرير وجبات الموظفين</h2><div>الفترة: ${d.from} إلى ${d.to}</div>
+      <table><tr><th>الموظف</th><th>عدد الوجبات</th><th>الإجمالي</th></tr>
+      ${d.people.map(([name,p])=>`<tr><td>${esc(name)}</td><td>${p.count}</td><td>${fmt(p.total)}</td></tr>`).join('')}
+      </table>
+      <h3>الإجمالي الكلي: ${fmt(d.grandTotal)} ${CURRENCY}</h3>
+      </body></html>`;
+    printRaw(text, html);
   }
 
   async function renderPlatforms(){
@@ -5281,7 +5575,9 @@
     // حراسة الأدوار — منع الوصول نهائيًا بغض النظر عن الأزرار الظاهرة
     const adm = isAdmin();
     const cc = ME && ME.role==='callcenter';
-    if((v==='admin' || v==='dash' || v==='sales') && !adm){ toast('⛔ صلاحية المدير فقط'); v='pos'; }
+    const hasAnyAdminAccess = adm || ['inventory_view','inventory_audit','inventory_transfer','expenses_view','purchases_view','platforms_view'].some(k=>perm(k));
+    if((v==='dash' || v==='sales') && !adm){ toast('⛔ صلاحية المدير فقط'); v='pos'; }
+    if(v==='admin' && !hasAnyAdminAccess){ toast('⛔ ما عندك صلاحية الوصول'); v='pos'; }
     if(v==='cust' && !perm('customers_view')){ toast('⛔ غير مصرح'); v='pos'; }
     ['pos','day','cust','dash','sales','admin'].forEach(x=>{
       const el = document.getElementById('v-'+x);
