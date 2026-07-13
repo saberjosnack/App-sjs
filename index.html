@@ -289,6 +289,7 @@
     <div style="color:var(--muted);font-size:.82rem;font-weight:700;margin-bottom:16px">اختره مرة وحدة بس — بيتحدد فيه الطباعة تلقائيًا لهاد الجهاز بغض النظر مين بيسجل دخول</div>
     <select id="deviceBranchSelect" style="width:100%;padding:14px;border:2px solid var(--maroon);border-radius:12px;font-size:1.05rem;font-weight:800;margin-bottom:16px">
       <option value="">اختر الفرع...</option>
+      <option value="__none__">🚫 بدون فرع (كول سنتر / جهاز إداري)</option>
     </select>
     <button class="pk-alt" style="width:100%;background:var(--red);color:#fff;padding:14px;border-radius:12px;font-weight:900;font-size:1.05rem" onclick="confirmDeviceBranch()">تأكيد ✓</button>
   </div>
@@ -468,6 +469,11 @@
       <div class="search-bar">
         <input id="custSearch" placeholder="🔍 ابحث بالاسم أو رقم الهاتف..." oninput="renderCustomers()">
         <button class="add-btn" style="margin:0" onclick="custForm()">＋ عميل جديد</button>
+      </div>
+      <div id="custBulkBar" class="hidden" style="display:flex;gap:8px;align-items:center;margin-bottom:10px;background:#e6f7ec;border:1.5px solid var(--ok);border-radius:10px;padding:8px 12px">
+        <b id="custBulkCount" style="color:var(--ok)"></b>
+        <button class="mini ok" onclick="openBulkWhatsapp()">📢 إرسال رسالة واتساب للمختارين</button>
+        <button class="mini tog" onclick="clearCustSelection()">إلغاء التحديد</button>
       </div>
       <div class="tbl-wrap" id="custList"></div>
     </section>
@@ -1152,7 +1158,10 @@
   };
 
   /* ---- فرع الجهاز (ثابت لهاد الجهاز، مستقل عن مين بيسجل دخول) ---- */
-  function getDeviceBranchId(){ return localStorage.getItem('sjs_device_branch_id') || null; }
+  function getDeviceBranchId(){
+    const v = localStorage.getItem('sjs_device_branch_id');
+    return (v && v!=='NONE') ? v : null; // 'NONE' = جهاز بدون فرع عمدًا (كول سنتر/إداري) — نرجع null لكل الأغراض
+  }
   async function initDeviceBranchGate(){
     if(getDeviceBranchId()) return; // مضبوط من قبل — نكمل عادي
     const screen = document.getElementById('deviceBranchScreen');
@@ -1168,10 +1177,11 @@
   window.confirmDeviceBranch = function(){
     const val = document.getElementById('deviceBranchSelect')?.value;
     if(!val){ toast('⚠️ اختر الفرع'); return; }
-    localStorage.setItem('sjs_device_branch_id', val);
+    // "بدون فرع" = نخزن علامة خاصة تفرق عن "لسا ما اختار" — عشان initDeviceBranchGate ما يرجع يسأل من جديد
+    localStorage.setItem('sjs_device_branch_id', val==='__none__' ? 'NONE' : val);
     document.getElementById('deviceBranchScreen')?.classList.add('hidden');
     document.getElementById('loginScreen')?.classList.remove('hidden');
-    toast('✓ اتحدد فرع الجهاز');
+    toast(val==='__none__' ? '✓ جهاز بدون فرع محدد (كول سنتر/إداري)' : '✓ اتحدد فرع الجهاز');
   };
   window.changeDeviceBranch = function(){
     if(!confirm('تغيير فرع هاد الجهاز؟')) return;
@@ -1181,7 +1191,7 @@
   initDeviceBranchGate();
 
   const saved = sessionStorage.getItem('sjs_me');
-  if(getDeviceBranchId() && saved){ try{ ME = JSON.parse(saved); enterApp(); }catch(e){ sessionStorage.removeItem('sjs_me'); } }
+  if(localStorage.getItem('sjs_device_branch_id') && saved){ try{ ME = JSON.parse(saved); enterApp(); }catch(e){ sessionStorage.removeItem('sjs_me'); } }
 
   /* ================= إعدادات الطابعة (محلية لهاد الجهاز فقط — مو مشتركة) ================= */
   const LOCAL_PRINTER_KEYS = ['printer_method','printer_ip','printer_port','printer_bt_address','auto_print_branch'];
@@ -1191,7 +1201,7 @@
       <div style="color:var(--muted);font-size:.8rem;font-weight:700;margin-bottom:10px">هاي الإعدادات محفوظة بهاد الجهاز تحديدًا — أي حدا يسجل دخول فيه بياخذ نفس الإعدادات.</div>
       <div class="fld"><label>🏪 فرع هاد الجهاز</label>
         <div style="display:flex;gap:8px;align-items:center">
-          <b style="flex:1">${deviceBr?esc(deviceBr.name_ar):'⚠️ غير محدد'}</b>
+          <b style="flex:1">${deviceBr?esc(deviceBr.name_ar):(localStorage.getItem('sjs_device_branch_id')==='NONE'?'🚫 بدون فرع (كول سنتر/إداري)':'⚠️ غير محدد')}</b>
           <button type="button" class="mini del" onclick="changeDeviceBranch()">تغيير</button>
         </div></div>
       <hr style="margin:12px 0">
@@ -3009,6 +3019,61 @@
   }
 
   /* ================= العملاء ================= */
+  function toggleCustSelect(id, checked){
+    if(checked) CUST_SELECTED.add(id); else CUST_SELECTED.delete(id);
+    updateCustBulkBar();
+  }
+  function clearCustSelection(){
+    CUST_SELECTED.clear();
+    updateCustBulkBar();
+    renderCustomers();
+  }
+  function updateCustBulkBar(){
+    const bar = document.getElementById('custBulkBar');
+    const cnt = document.getElementById('custBulkCount');
+    if(!bar) return;
+    bar.classList.toggle('hidden', CUST_SELECTED.size===0);
+    if(cnt) cnt.textContent = '✓ '+CUST_SELECTED.size+' عميل محدد';
+  }
+  let __bulkWaQueue = [];
+  function openBulkWhatsapp(){
+    if(!CUST_SELECTED.size){ toast('⚠️ حدد عميل واحد على الأقل'); return; }
+    modal(`<h3>📢 رسالة واتساب جماعية</h3>
+      <div style="color:var(--muted);font-size:.82rem;font-weight:700;margin-bottom:10px">هيك بتحدد لكل عميل واحد لحاله (واتساب ما بيسمح إرسال جماعي تلقائي بدون تطبيق رسمي) — بس هي أسرع طريقة: رسالة جاهزة، تفتح واتساب لكل عميل، تضغط إرسال، وننتقل للتالي.</div>
+      <div class="fld"><label>نص الرسالة</label>
+        <textarea id="bulk_msg" rows="5" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;font-family:inherit;font-size:1rem" placeholder="مرحبا [الاسم]، شو رأيك بطلبك الأخير من صابر جو سناك؟ رأيك بهمنا 🙏">مرحبا، شو رأيك بطلبك الأخير من صابر جو سناك؟ رأيك بهمنا كتير وبساعدنا نتحسن 🙏</textarea>
+        <div style="color:var(--muted);font-size:.78rem;margin-top:4px">💡 اكتب <b>[الاسم]</b> بأي مكان بالرسالة وبينحط اسم كل عميل تلقائيًا</div>
+      </div>
+      <div class="m-act"><button class="save" onclick="startBulkWhatsapp()">🚀 ابدأ الإرسال (${CUST_SELECTED.size})</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
+  }
+  function startBulkWhatsapp(){
+    const msg = document.getElementById('bulk_msg').value.trim();
+    if(!msg){ toast('⚠️ اكتب نص الرسالة'); return; }
+    __bulkWaQueue = [...CUST_SELECTED].map(id=>CUSTOMERS.find(c=>c.id===id)).filter(Boolean);
+    window.__bulkWaMsg = msg;
+    window.__bulkWaIdx = 0;
+    closeModal();
+    sendNextBulkWhatsapp();
+  }
+  function sendNextBulkWhatsapp(){
+    if(window.__bulkWaIdx >= __bulkWaQueue.length){
+      toast('✅ خلصت — أرسلت لكل العملاء المحددين');
+      clearCustSelection();
+      return;
+    }
+    const c = __bulkWaQueue[window.__bulkWaIdx];
+    const personalMsg = window.__bulkWaMsg.replace(/\[الاسم\]/g, c.name||'');
+    const phone = (c.phone||'').replace(/\D/g,'');
+    const waPhone = phone.startsWith('0') ? '962'+phone.slice(1) : phone; // تحويل صفر البداية لكود الأردن
+    modal(`<h3>📤 إرسال ${window.__bulkWaIdx+1} من ${__bulkWaQueue.length}</h3>
+      <div style="font-weight:900;font-size:1.1rem;margin-bottom:8px">👤 ${esc(c.name)} — <span dir="ltr">${esc(c.phone)}</span></div>
+      <div style="background:var(--cream);border-radius:10px;padding:10px;margin-bottom:12px;white-space:pre-wrap">${esc(personalMsg)}</div>
+      <div class="m-act">
+        <button class="save" onclick="window.open('https://wa.me/${waPhone}?text=${encodeURIComponent(personalMsg)}','_blank');window.__bulkWaIdx++;sendNextBulkWhatsapp()">📱 فتح واتساب وإرسال</button>
+        <button class="cancel" onclick="window.__bulkWaIdx++;sendNextBulkWhatsapp()">⏭️ تخطي</button>
+      </div>
+      <div style="text-align:center;margin-top:10px"><button class="mini del" onclick="closeModal();clearCustSelection()">✕ إيقاف الإرسال كليًا</button></div>`);
+  }
   async function loadCustomers(){
     try {
       const { data } = await db.from('customers').select('*').order('created_at', {ascending:false}).limit(500);
@@ -3016,14 +3081,16 @@
       renderCustomers();
     } catch(e) { console.error(e); }
   }
+  let CUST_SELECTED = new Set();
   function renderCustomers(){
     const custSearch = document.getElementById('custSearch');
     const q = custSearch ? (custSearch.value||'').trim() : '';
     const list = q ? CUSTOMERS.filter(c=>(c.name||'').includes(q) || (c.phone||'').includes(q)) : CUSTOMERS;
     const custList = document.getElementById('custList');
     if (!custList) return;
-    custList.innerHTML = `<table class="tbl"><tr><th>الاسم</th><th>الهاتف</th><th>العنوان</th><th>الطلبات</th><th>ملاحظات</th><th></th></tr>
+    custList.innerHTML = `<table class="tbl"><tr><th></th><th>الاسم</th><th>الهاتف</th><th>العنوان</th><th>الطلبات</th><th>ملاحظات</th><th></th></tr>
       ${list.map(c=>`<tr>
+        <td><input type="checkbox" ${CUST_SELECTED.has(c.id)?'checked':''} onchange="toggleCustSelect('${c.id}',this.checked)" style="width:18px;height:18px"></td>
         <td>${c.flagged?'🚩 ':''}${esc(c.name)}</td><td dir="ltr" style="text-align:right">${esc(c.phone)}</td>
         <td>${esc(c.address||'—')}</td><td>${c.orders_count||0}</td>
         <td>${esc(c.notes||'—')}</td>
