@@ -607,6 +607,19 @@
   let READY_WAIT_MIN = 7;  // قابلة للتعديل من الإعدادات
   let _readyAlertsSent = new Set();
   let overdueRingInterval = null, readyRingInterval = null;
+  if (typeof supabase === 'undefined') {
+    // ⚠️ فشل تحميل مكتبة Supabase من الإنترنت (غالبًا بسبب نت ضعيف/متقطع بهاد الجهاز وقت الرفريش)
+    // من دون هاد الفحص، السكربت كله كان ينهار بصمت ويضل المستخدم عالق بشاشة الـPIN بدون أي تفسير
+    document.addEventListener('DOMContentLoaded', ()=>{
+      document.getElementById('loadingOverlay')?.remove();
+      document.body.innerHTML = '<div style="position:fixed;inset:0;background:#4a1010;color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:24px;font-family:sans-serif;gap:16px">'
+        + '<div style="font-size:3rem">📡</div>'
+        + '<div style="font-weight:900;font-size:1.2rem">فشل تحميل البرنامج — تأكد من الإنترنت على هاد الجهاز</div>'
+        + '<div style="opacity:.8;font-size:.9rem">النت متقطع أو ضعيف وقت الرفريش، فما قدر البرنامج يحمّل كامل</div>'
+        + '<button onclick="location.reload()" style="background:#F60100;color:#fff;border:none;padding:14px 30px;border-radius:12px;font-weight:900;font-size:1.05rem">إعادة المحاولة</button></div>';
+    });
+    throw new Error('supabase-js failed to load — aborting app init');
+  }
   const db = supabase.createClient(SB_URL, SB_KEY);
 
   let ME = null;
@@ -1260,18 +1273,19 @@
 
   const saved = sessionStorage.getItem('sjs_me');
   if(localStorage.getItem('sjs_device_branch_id') && saved){
-    try{
-      ME = JSON.parse(saved); enterApp();
-      // ⚠️ إصلاح: النسخة المحفوظة بالجهاز ممكن تكون قديمة (صلاحيات اتغيّرت من المدير بعد آخر تسجيل دخول)
-      // فنعيد جلب بيانات الموظف الحقيقية من القاعدة فورًا ونحدّث الصلاحيات المعروضة بدون ما ننتظر تسجيل خروج/دخول
+    try{ ME = JSON.parse(saved); enterApp(); }catch(e){ sessionStorage.removeItem('sjs_me'); ME = null; }
+    // ⚠️ إصلاح: النسخة المحفوظة بالجهاز ممكن تكون قديمة (صلاحيات اتغيّرت من المدير بعد آخر تسجيل دخول)
+    // فنعيد جلب بيانات الموظف الحقيقية من القاعدة بالخلفية ونحدّث الصلاحيات المعروضة، بدون ما ننتظر تسجيل خروج/دخول.
+    // مفصولة تمامًا عن الـ try/catch فوق — أي فشل بالشبكة هون (نت ضعيف مثلًا) ما لازم يمسح جلسة شغالة أو يطلع المستخدم عالشاشة الرئيسية.
+    if(ME && ME.id){
       db.from('staff').select('*, branches(name_ar)').eq('id', ME.id).limit(1).then(({data,error})=>{
-        if(error || !data || !data.length) return;
-        if(!data[0].is_active){ sessionStorage.removeItem('sjs_me'); location.reload(); return; }
+        if(error || !data || !data.length) return; // فشل الشبكة أو أي خطأ — نتجاهل ونضل عالجلسة المحفوظة، ما بنعمل logout أبدًا هون
+        if(data[0].is_active === false){ sessionStorage.removeItem('sjs_me'); location.reload(); return; } // بس لو صراحة معطّل
         ME = data[0];
         sessionStorage.setItem('sjs_me', JSON.stringify(ME));
         applyRoles();
       }).catch(()=>{});
-    }catch(e){ sessionStorage.removeItem('sjs_me'); }
+    }
   }
 
   // ⚠️ إصلاح حرج: شاشة التحميل لازم تنشال دايمًا بسرعة بغض النظر صار تسجيل دخول تلقائي أو لأ —
@@ -1368,6 +1382,7 @@
       const salesBranch = document.getElementById('salesBranch');
       if (salesBranch) salesBranch.innerHTML = '<option value="">كل الفروع</option>' + BRANCHES.map(x=>`<option value="${x.id}">${esc(x.name_ar)}</option>`).join('');
       renderCats(); renderItems(); renderCart();
+      document.getElementById('bootRetryBar')?.remove();
       const today = new Date().toISOString().split('T')[0];
       const salesFrom = document.getElementById('salesFrom');
       const salesTo = document.getElementById('salesTo');
@@ -1376,6 +1391,16 @@
     } catch(e) {
       console.error('خطأ في تحميل البيانات:', e);
       toast('⚠️ خطأ في الاتصال بقاعدة البيانات');
+      // ⚠️ بدل ما تضل شاشة الأصناف فاضية للأبد لو النت انقطع لحظة الرفريش — نطلع شريط ثابت فيه زر "إعادة المحاولة"
+      let bar = document.getElementById('bootRetryBar');
+      if(!bar){
+        bar = document.createElement('div');
+        bar.id = 'bootRetryBar';
+        bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:600;background:var(--warn);color:#fff;padding:12px;text-align:center;font-weight:900;display:flex;gap:10px;align-items:center;justify-content:center;flex-wrap:wrap';
+        document.body.appendChild(bar);
+      }
+      bar.innerHTML = '📡 تعذّر تحميل الأصناف — تأكد من الإنترنت'
+        + '<button style="background:#fff;color:var(--warn);border-radius:8px;padding:6px 16px;font-weight:900" onclick="this.parentElement.remove();bootData()">إعادة المحاولة</button>';
     }
   }
 
@@ -1585,6 +1610,9 @@
       'طلبات ملغية: '+r.cancelled+'\n'+
       '────────────────\n'+
       Object.entries(r.byPay).map(([k,v])=>(PAY_AR[k]||k)+': '+fmt(v)).join('\n')+'\n'+
+      (r.withdrawalsTotal>0?('────────────────\n'+
+        'سحوبات من الدرج (إجمالي '+fmt(r.withdrawalsTotal)+'):\n'+
+        r.drawerWithdrawals.map(w=>'  • '+(w.title||w.description||'—')+': −'+fmt(w.amount)+' '+CURRENCY+' — '+(w.approval_status==='approved'?'موافق عليه':w.approval_status==='rejected'?'مرفوض':'بانتظار الموافقة')).join('\n')+'\n'):'')+
       'إجمالي المبيعات: '+fmt(r.total)+' '+CURRENCY+'\n'+
       '────────────────\n'+
       'افتتاحي الدرج: '+fmt(r.opening)+'\n'+
@@ -1722,7 +1750,50 @@
       if(error){ toast('✗ '+error.message); console.error(error); return; }
       await logActivity('drawer_withdraw', 'سحب '+fmt(amt)+' — '+reason);
       closeModal(); toast('✓ اتسجل السحب — بانتظار موافقة المدير');
+      printDrawerSlip(amt, reason);
     }catch(e){ toast('✗ '+e.message); console.error(e); }
+  }
+  /* ---- سند سحب من الدرج — يطبع فيش صغير لإرفاقه مع الفاتورة الأصلية (إثبات إنه المبلغ خرج من الدرج فعليًا) ---- */
+  function printDrawerSlip(amt, reason){
+    const br = BRANCHES.find(b=>b.id===ME.branch_id);
+    const now = new Date().toLocaleString('ar-JO');
+    const html = `<html dir="rtl"><head><meta charset="UTF-8"><style>
+      @page{size:72mm auto;margin:0} body{font-family:Cairo,Arial;width:72mm;padding:4mm;font-size:12px}
+      h2{text-align:center;margin:2px 0;font-size:15px} .c{text-align:center}
+      hr{border:none;border-top:1px dashed #000;margin:5px 0}
+      table{width:100%;border-collapse:collapse} td{padding:2px 0} .tl{text-align:left}
+      .big td{font-size:16px;font-weight:900}
+      </style></head><body>
+      <h2>🔓 سند سحب من الدرج</h2>
+      <div class="c">Saber Jo Snack — ${br?esc(br.name_ar):''}</div>
+      <hr>
+      <table>
+        <tr><td>التاريخ والوقت</td><td class="tl">${now}</td></tr>
+        <tr><td>الموظف</td><td class="tl">${esc(ME.full_name)}</td></tr>
+      </table>
+      <hr>
+      <table class="big"><tr><td>المبلغ المسحوب</td><td class="tl">${fmt(amt)} ${CURRENCY}</td></tr></table>
+      <hr>
+      <table><tr><td>السبب</td></tr><tr><td class="tl" style="font-weight:800">${esc(reason)}</td></tr></table>
+      <hr>
+      <div class="c" style="font-weight:800">⏳ بانتظار موافقة المدير</div>
+      <div class="c" style="font-size:.75rem;margin-top:4px">أرفق هاد السند مع الفاتورة الأصلية</div>
+      <hr><div class="c">توقيع الموظف: ______________</div>
+      </body></html>`;
+    const text = '🔓 سند سحب من الدرج\n'+
+      '— Saber Jo Snack — '+(br?br.name_ar:'')+'\n'+
+      '════════════════\n'+
+      'التاريخ: '+now+'\n'+
+      'الموظف: '+ME.full_name+'\n'+
+      '────────────────\n'+
+      'المبلغ المسحوب: '+fmt(amt)+' '+CURRENCY+'\n'+
+      'السبب: '+reason+'\n'+
+      '────────────────\n'+
+      '⏳ بانتظار موافقة المدير\n'+
+      'أرفق هاد السند مع الفاتورة الأصلية\n'+
+      '════════════════\n'+
+      'توقيع الموظف: ______________\n';
+    printRaw(text, html);
   }
   async function checkAutoPrintQueue(){
     try {
@@ -4097,11 +4168,14 @@
     const opening = parseFloat(sh.opening_balance||0);
     const expected = sh.expected_balance!==null ? parseFloat(sh.expected_balance) : opening + (byPay['cash']||0);
     const counted = sh.closing_balance!==null ? parseFloat(sh.closing_balance) : 0;
+    const { data: drawerWithdrawals } = await db.from('expenses').select('amount, title, description, approval_status').eq('shift_id', sh.id).eq('category','سحب من الدرج');
+    const withdrawalsTotal = (drawerWithdrawals||[]).reduce((a,w)=>a+parseFloat(w.amount||0),0);
     const saveME = ME.full_name; // اسم الطابع الحالي — التقرير باسم صاحب الشيفت
     const rep = { count: ok.length, total: sum('total'), discount: sum('discount'), delivery: sum('delivery_fee'), byPay,
       cancelled: all.length-ok.length, delCount: ok.filter(o=>o.order_type==='delivery').length,
       takeCount: ok.filter(o=>o.order_type==='takeaway').length,
-      opening, cashSales: byPay['cash']||0, expected, counted, diff: counted-expected };
+      opening, cashSales: byPay['cash']||0, expected, counted, diff: counted-expected,
+      drawerWithdrawals: drawerWithdrawals||[], withdrawalsTotal };
     const realName = ME.full_name; ME.full_name = sh.staff?.full_name || realName;
     printZReport(sh, rep);
     ME.full_name = realName;
