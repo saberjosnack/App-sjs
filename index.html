@@ -469,6 +469,7 @@
       <div class="search-bar">
         <input id="custSearch" placeholder="🔍 ابحث بالاسم أو رقم الهاتف..." oninput="renderCustomers()">
         <button class="add-btn" style="margin:0" onclick="custForm()">＋ عميل جديد</button>
+        <button class="mini ok" style="padding:10px 18px" onclick="selectAllCustomers()">☑️ تحديد الكل</button>
       </div>
       <div id="custBulkBar" class="hidden" style="display:flex;gap:8px;align-items:center;margin-bottom:10px;background:#e6f7ec;border:1.5px solid var(--ok);border-radius:10px;padding:8px 12px">
         <b id="custBulkCount" style="color:var(--ok)"></b>
@@ -699,6 +700,32 @@
     urgent:  { wave:'square',   freq:1500 },
     bell:    { wave:'triangle', freq:1000 },
   };
+  function playUrgentPattern(){
+    try{
+      audioCtx = audioCtx || new (window.AudioContext||window.webkitAudioContext)();
+      if(audioCtx.state === 'suspended'){ audioCtx.resume().catch(()=>{}); }
+      const pattern = [1800, 900, 1800, 900, 1800, 900, 1800, 900]; // نغمة صاعدة/هابطة سريعة ومزعجة
+      pattern.forEach((freq, i)=>{
+        const o = audioCtx.createOscillator();
+        const g = audioCtx.createGain();
+        o.connect(g); g.connect(audioCtx.destination);
+        o.type = 'square'; // موجة حادة = أكتر إزعاجًا من sine
+        o.frequency.value = freq;
+        const t0 = audioCtx.currentTime + i*0.18;
+        g.gain.setValueAtTime(1.0, t0); // صوت أقصى دايمًا، بغض النظر عن إعداد المستخدم
+        g.gain.exponentialRampToValueAtTime(0.4, t0+0.16);
+        o.start(t0); o.stop(t0+0.18);
+      });
+    }catch(e){ console.error('playUrgentPattern failed:', e); }
+  }
+  function beepUrgentIncoming(){
+    // 🔊 نغمة خاصة عالية ومزعجة جدًا لطلب وصل من السنتر — بصوت أقصى دايمًا (بتجاهل إعداد
+    // مستوى الصوت العادي عمدًا) عشان محدّ يفوّت طلب السنتر حتى لو الجهاز بمكان صاخب
+    playUrgentPattern();
+    setTimeout(playUrgentPattern, 2000);
+    setTimeout(playUrgentPattern, 4000);
+    setTimeout(playUrgentPattern, 6000);
+  }
   function beep(times=5, frequency=null){
     try{
       audioCtx = audioCtx || new (window.AudioContext||window.webkitAudioContext)();
@@ -1572,7 +1599,7 @@
             continue;
           }
           const cust = o.customers ? { name:o.customers.name, phone:o.customers.phone, addr:o.customers.address||'' } : null;
-          beep(6);
+          beepUrgentIncoming(); // 🔊 نغمة عالية ومزعجة خاصة — طلب وصل من السنتر
           await printSmart(o, o.order_items||[], { sub:+o.subtotal, disc:+o.discount, del:+o.delivery_fee, total:+o.total }, cust);
         } catch(e){ console.error('auto print failed:', e); }
         finally { _autoPrintBusy.delete(o.id); }
@@ -3027,6 +3054,20 @@
     CUST_SELECTED.clear();
     updateCustBulkBar();
     renderCustomers();
+  }
+  function selectAllCustomers(){
+    const custSearch = document.getElementById('custSearch');
+    const q = custSearch ? (custSearch.value||'').trim() : '';
+    const list = q ? CUSTOMERS.filter(c=>(c.name||'').includes(q) || (c.phone||'').includes(q)) : CUSTOMERS;
+    if(CUST_SELECTED.size === list.length && list.length>0){
+      // كله محدد أصلاً — الضغطة هاي بتلغي التحديد
+      clearCustSelection();
+      return;
+    }
+    list.forEach(c=>CUST_SELECTED.add(c.id));
+    updateCustBulkBar();
+    renderCustomers();
+    toast('✓ اتحدد '+list.length+' عميل');
   }
   function updateCustBulkBar(){
     const bar = document.getElementById('custBulkBar');
