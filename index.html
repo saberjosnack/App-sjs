@@ -569,6 +569,8 @@
         <button data-a="purchases" onclick="admTab('purchases')">🛒 المشتريات</button>
         <button data-a="platforms" onclick="admTab('platforms')">🛵 منصات التوصيل</button>
         <button data-a="empmeals" onclick="admTab('empmeals')">🍽️ وجبات الموظفين</button>
+        <button data-a="topcust" onclick="admTab('topcust')">🏆 أفضل العملاء</button>
+        <button data-a="waste" onclick="admTab('waste')">🗑️ الإتلاف</button>
         <button data-a="devices" onclick="admTab('devices')">🖥️ الأجهزة</button>
         <button data-a="sett" onclick="admTab('sett')">🔧 إعدادات</button>
         <button data-a="shifts" onclick="admTab('shifts')">🔄 شيفتات</button>
@@ -587,8 +589,8 @@
   const SB_URL = "https://hwucmlixvqouvwvqeshh.supabase.co";
   const SB_KEY = "sb_publishable_jkJOc57GfQXVN1HHwI_2cA_lziCOInd";
   const CURRENCY = "د.أ";
-  const LATE_MIN = 20;
-  const READY_WAIT_MIN = 7;
+  let LATE_MIN = 20;       // قابلة للتعديل من الإعدادات
+  let READY_WAIT_MIN = 7;  // قابلة للتعديل من الإعدادات
   let _readyAlertsSent = new Set();
   let overdueRingInterval = null, readyRingInterval = null;
   const db = supabase.createClient(SB_URL, SB_KEY);
@@ -908,12 +910,24 @@
       inventory_view: 'عرض المخزون',
       inventory_audit: 'تنفيذ وعرض الجرد',
       inventory_transfer: 'نقل بضاعة بين الفروع',
+      waste_log: 'تسجيل وعرض الإتلاف',
     },
     '📊 التقارير والمالية': {
       reports_view: 'عرض التقارير والمبيعات',
       platforms_view: 'عرض منصات التوصيل وكشوف الحساب',
       expenses_view: 'عرض وإضافة المصاريف',
       purchases_view: 'عرض وإضافة المشتريات',
+      empmeals_view: 'إدارة وجبات الموظفين',
+      topcust_view: 'عرض تقرير أفضل العملاء وإرسال رسائل',
+    },
+    '⚙️ إدارة النظام (حساسة)': {
+      items_manage: 'إدارة الأصناف',
+      cats_manage: 'إدارة التصنيفات',
+      codes_manage: 'إدارة أكواد الخصم',
+      staff_manage: 'إدارة الموظفين وصلاحياتهم',
+      branches_manage: 'إدارة الفروع',
+      devices_manage: 'إدارة الأجهزة',
+      settings_manage: 'إدارة إعدادات النظام',
     },
   };
   const ROLE_DEFAULT_PERMS = {
@@ -1019,7 +1033,7 @@
     const adminBtn = document.querySelector('[data-v="admin"]');
     const custBtn = document.querySelector('[data-v="cust"]');
     const salesBtn = document.querySelector('[data-v="sales"]');
-    const hasAnyAdminAccess = adm || ['inventory_view','inventory_audit','inventory_transfer','expenses_view','purchases_view','platforms_view'].some(k=>perm(k));
+    const hasAnyAdminAccess = adm || Object.values(ADMIN_TAB_PERM).some(k=>k!=='admin_only' && perm(k));
     if (adminBtn) adminBtn.style.display = hasAnyAdminAccess ? '' : 'none';
     if (custBtn) custBtn.style.display = perm('customers_view') ? '' : 'none';
     if (salesBtn) salesBtn.style.display = adm ? '' : 'none';
@@ -1305,6 +1319,8 @@
       applyLocalPrinterSettings();
       FIN_START_H = parseInt(SETTINGS.fin_start_hour) ?? 10; if(isNaN(FIN_START_H)) FIN_START_H = 10;
       FIN_END_H = parseInt(SETTINGS.fin_end_hour) ?? 3; if(isNaN(FIN_END_H)) FIN_END_H = 3;
+      LATE_MIN = parseInt(SETTINGS.late_min); if(isNaN(LATE_MIN)||LATE_MIN<=0) LATE_MIN = 20;
+      READY_WAIT_MIN = parseInt(SETTINGS.ready_wait_min); if(isNaN(READY_WAIT_MIN)||READY_WAIT_MIN<=0) READY_WAIT_MIN = 7;
       if(ME && ME.role==='custom') await loadCustomRoles();
       const branchSel = document.getElementById('branchSel');
       if (branchSel) branchSel.innerHTML = '<option value="">⚠️ اختر الفرع...</option>' + BRANCHES.map(x=>`<option value="${x.id}">🏪 ${esc(x.name_ar)}</option>`).join('');
@@ -3669,11 +3685,11 @@
   function admTab(v){ admView=v; document.querySelectorAll('.adm-tabs button').forEach(b=>b.classList.toggle('on', b.dataset.a===v)); renderAdmin(); }
 
   const ADMIN_TAB_PERM = {
-    items:'admin_only', cats:'admin_only', codes:'admin_only', staff:'admin_only', roles:'admin_only', branches:'admin_only', sett:'admin_only', devices:'admin_only',
+    items:'items_manage', cats:'cats_manage', codes:'codes_manage', staff:'staff_manage', roles:'admin_only', branches:'branches_manage', sett:'settings_manage', devices:'devices_manage',
     ingredients:'inventory_view', recipes:'inventory_view',
     inventory:'inventory_audit', transfers:'inventory_transfer',
     expenses:'expenses_view', purchases:'purchases_view',
-    platforms:'platforms_view', empmeals:'admin_only',
+    platforms:'platforms_view', empmeals:'empmeals_view', topcust:'topcust_view', waste:'waste_log',
   };
   function canAccessAdminTab(tabKey){
     if(isAdmin()) return true;
@@ -3740,6 +3756,8 @@
     if(admView==='platforms'){ renderPlatforms(); return; }
     if(admView==='devices'){ renderDevices(); return; }
     if(admView==='empmeals'){ renderEmpMeals(); return; }
+    if(admView==='topcust'){ renderTopCustomers(); return; }
+    if(admView==='waste'){ renderWaste(); return; }
     if(admView==='sett'){
       C.innerHTML=`<div class="mbox" style="max-width:480px">
         <h3>🔧 إعدادات النظام</h3>
@@ -3754,6 +3772,14 @@
             <input type="number" id="f_finEnd" min="0" max="23" value="${FIN_END_H}" style="border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;width:100%"></div>
         </div>
         <div style="color:var(--muted);font-size:.78rem;font-weight:600;margin-bottom:4px">مثال حالي: اليوم المالي يبدأ الساعة ${FIN_START_H}:00 وينتهي ${FIN_END_H}:00 اليوم التالي</div>
+        <hr style="margin:16px 0"><h4 style="color:var(--maroon)">⏰ عدّادات التأخير</h4>
+        <div class="two">
+          <div style="flex:1"><label>تأخير التجهيز (دقيقة)</label>
+            <input type="number" id="f_lateMin" min="1" value="${LATE_MIN}" style="border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;width:100%"></div>
+          <div style="flex:1"><label>انتظار التسليم بعد الجاهزية (دقيقة)</label>
+            <input type="number" id="f_readyWait" min="1" value="${READY_WAIT_MIN}" style="border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;width:100%"></div>
+        </div>
+        <div style="font-size:.78rem;color:var(--muted);font-weight:600;margin-bottom:4px">أول رقم: بعد كم دقيقة يعتبر الطلب "متأخر بالتجهيز". ثاني رقم: بعد كم دقيقة من الجاهزية يعتبر "متأخر بالتسليم" (زبون/مندوب ما استلم).</div>
         <hr style="margin:16px 0"><h4 style="color:var(--maroon)">🖨️ الطابعة</h4>
         <div class="fld"><label>طريقة الطباعة</label>
           <select id="f_printMethod">
@@ -5079,6 +5105,178 @@ window.__lastEmpMealsData = null;
     printRaw(text, html);
   }
 
+  /* ================= أفضل العملاء (أكثر طلبات + أفضل تقييم) ================= */
+  let TOP_CUST_DATA = [];
+  async function renderTopCustomers(){
+    const C = document.getElementById('admContent');
+    if(!C) return;
+    C.innerHTML = '<div class="empty-note">... جاري التحميل</div>';
+    try{
+      const { data: customers } = await db.from('customers').select('*').order('orders_count',{ascending:false}).limit(100);
+      // متوسط تقييم كل عميل من طلباته
+      const custIds = (customers||[]).map(c=>c.id);
+      const { data: ratedOrders } = custIds.length ? await db.from('orders').select('customer_id, customer_rating').in('customer_id', custIds).not('customer_rating','is',null) : {data:[]};
+      const ratingMap = {};
+      (ratedOrders||[]).forEach(o=>{
+        if(!ratingMap[o.customer_id]) ratingMap[o.customer_id] = {sum:0,count:0};
+        ratingMap[o.customer_id].sum += o.customer_rating;
+        ratingMap[o.customer_id].count++;
+      });
+      TOP_CUST_DATA = (customers||[]).map(c=>{
+        const r = ratingMap[c.id];
+        return {...c, avgRating: r ? (r.sum/r.count) : null, ratingCount: r?.count||0};
+      });
+      C.innerHTML = `
+        <div style="color:var(--muted);font-weight:700;font-size:.85rem;margin-bottom:10px">مرتبين حسب عدد الطلبات — استخدم الفلتر لترتيب حسب التقييم بدل هيك.</div>
+        <div style="display:flex;gap:8px;margin-bottom:12px">
+          <button class="mini ok" onclick="sortTopCust('orders')">🔢 الأكثر طلبات</button>
+          <button class="mini edit" onclick="sortTopCust('rating')">⭐ الأفضل تقييم</button>
+        </div>
+        <div class="tbl-wrap"><table class="tbl">
+          <tr><th></th><th>الاسم</th><th>الهاتف</th><th>عدد الطلبات</th><th>متوسط التقييم</th><th></th></tr>
+          ${TOP_CUST_DATA.map(c=>`<tr>
+            <td><input type="checkbox" onchange="toggleCustSelect('${c.id}',this.checked);updateCustBulkBarTop()" style="width:18px;height:18px"></td>
+            <td><b>${c.flagged?'🚩 ':''}${esc(c.name)}</b></td>
+            <td dir="ltr" style="text-align:right">${esc(c.phone)}</td>
+            <td><b style="color:var(--red)">${c.orders_count||0}</b></td>
+            <td>${c.avgRating?('⭐ '+c.avgRating.toFixed(1)+' ('+c.ratingCount+')'):'—'}</td>
+            <td><button class="mini ok" onclick="sendVipMessage('${c.id}')">🎁 رسالة VIP</button></td>
+          </tr>`).join('')||'<tr><td colspan="6" class="empty-note">ما في عملاء بعد</td></tr>'}
+        </table></div>
+        <div id="topCustBulkBar" class="hidden" style="margin-top:10px;background:#e6f7ec;border:1.5px solid var(--ok);border-radius:10px;padding:8px 12px">
+          <b id="topCustBulkCount" style="color:var(--ok)"></b>
+          <button class="mini ok" onclick="openBulkWhatsapp()">📢 إرسال رسالة جماعية للمختارين</button>
+        </div>`;
+    }catch(e){ C.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
+  }
+  function updateCustBulkBarTop(){
+    const bar = document.getElementById('topCustBulkBar');
+    const cnt = document.getElementById('topCustBulkCount');
+    if(!bar) return;
+    bar.classList.toggle('hidden', CUST_SELECTED.size===0);
+    if(cnt) cnt.textContent = '✓ '+CUST_SELECTED.size+' عميل محدد';
+  }
+  function sortTopCust(mode){
+    if(mode==='orders') TOP_CUST_DATA.sort((a,b)=>(b.orders_count||0)-(a.orders_count||0));
+    else TOP_CUST_DATA.sort((a,b)=>(b.avgRating||0)-(a.avgRating||0));
+    renderTopCustomers(); // إعادة رسم بسيطة — بيانات محفوظة بالذاكرة فعليًا فما تكرار طلب فعلي
+  }
+  function sendVipMessage(custId){
+    const c = TOP_CUST_DATA.find(x=>x.id===custId) || CUSTOMERS.find(x=>x.id===custId);
+    if(!c) return;
+    CUST_SELECTED.clear();
+    CUST_SELECTED.add(custId);
+    if(!CUSTOMERS.length || !CUSTOMERS.find(x=>x.id===custId)) CUSTOMERS = [...CUSTOMERS, c];
+    modal(`<h3>🎁 رسالة عميل مميز — ${esc(c.name)}</h3>
+      <div class="fld"><label>نص الرسالة</label>
+        <textarea id="bulk_msg" rows="5" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;font-family:inherit;font-size:1rem">مرحبا [الاسم] 🎉، إنت من عملائنا المميزين! خصم خاص إلك 10% على طلبك الجاي من صابر جو سناك 🍔 — بانتظارك!</textarea>
+      </div>
+      <div class="m-act"><button class="save" onclick="startBulkWhatsapp()">📱 إرسال</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
+  }
+
+  /* ================= الإتلاف (Waste Log) ================= */
+  let WASTE_DATA = [];
+  async function renderWaste(){
+    const C = document.getElementById('admContent');
+    if(!C) return;
+    await loadIngredients();
+    const today = new Date().toISOString().split('T')[0];
+    const monthStart = new Date(); monthStart.setDate(1);
+    C.innerHTML = `
+      <div style="color:var(--muted);font-weight:700;font-size:.85rem;margin-bottom:10px">تسجيل إتلاف مادة (تلف، كسر، انتهاء صلاحية...) — بينخصم تلقائيًا من مخزون الفرع ويترجل بتقرير مفصل باسم الموظف والسبب.</div>
+      <button class="add-btn" onclick="wasteForm()">+ تسجيل إتلاف جديد</button>
+      <div class="two" style="margin-top:14px">
+        <div style="flex:1"><label style="font-weight:700;font-size:.82rem;color:var(--muted)">من تاريخ</label>
+          <input type="date" id="wl_from" value="${monthStart.toISOString().split('T')[0]}" style="border:1.5px solid var(--line);border-radius:10px;padding:8px 10px;width:100%"></div>
+        <div style="flex:1"><label style="font-weight:700;font-size:.82rem;color:var(--muted)">إلى تاريخ</label>
+          <input type="date" id="wl_to" value="${today}" style="border:1.5px solid var(--line);border-radius:10px;padding:8px 10px;width:100%"></div>
+      </div>
+      <button class="mini ok" style="margin:8px 0" onclick="runWasteReport()">📊 عرض التقرير</button>
+      <div id="wl_result"></div>`;
+    runWasteReport();
+  }
+  function wasteForm(){
+    modal(`<h3>🗑️ تسجيل إتلاف</h3>
+      <div class="fld"><label>المادة</label><select id="wf_ing">
+        <option value="">اختر المادة...</option>
+        ${INGR.map(i=>`<option value="${i.id}">${esc(i.name)} (${esc(i.unit)})</option>`).join('')}
+      </select></div>
+      <div class="fld"><label>الكمية المتلفة</label><input id="wf_qty" type="number" step="0.01" placeholder="مثال: 2.5"></div>
+      <div class="fld"><label>الفرع</label><select id="wf_branch">
+        <option value="">اختر الفرع...</option>
+        ${BRANCHES.map(b=>`<option value="${b.id}" ${ME.branch_id===b.id?'selected':''}>${esc(b.name_ar)}</option>`).join('')}
+      </select></div>
+      <div class="fld"><label>سبب الإتلاف *</label><select id="wf_reason">
+        <option>تلف/فساد</option><option>كسر</option><option>انتهاء صلاحية</option>
+        <option>خطأ تحضير</option><option>سقط أرض</option><option>أخرى</option>
+      </select></div>
+      <div class="fld"><label>ملاحظة إضافية (اختياري)</label><input id="wf_note" placeholder="تفاصيل إضافية..."></div>
+      <div class="m-act"><button class="save" onclick="saveWaste()">تسجيل ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
+  }
+  async function saveWaste(){
+    const ingId = document.getElementById('wf_ing').value;
+    const qty = parseFloat(document.getElementById('wf_qty').value);
+    const branchId = document.getElementById('wf_branch').value;
+    const reason = document.getElementById('wf_reason').value;
+    const note = document.getElementById('wf_note').value.trim();
+    if(!ingId){ toast('⚠️ اختر المادة'); return; }
+    if(isNaN(qty)||qty<=0){ toast('⚠️ اكتب كمية صحيحة'); return; }
+    if(!branchId){ toast('⚠️ اختر الفرع'); return; }
+    try{
+      // خصم من مخزون الفرع
+      const {data:bi} = await db.from('branch_inventory').select('id,stock').eq('branch_id',branchId).eq('ingredient_id',ingId).maybeSingle();
+      if(!bi || (bi.stock||0) < qty){
+        if(!confirm('⚠️ المخزون المتاح ('+((bi?.stock)||0)+') أقل من الكمية المتلفة — تكمل بالتسجيل؟ (المخزون رح ينزل لصفر)')) return;
+      }
+      const newStock = Math.max(0, (bi?.stock||0) - qty);
+      if(bi) await db.from('branch_inventory').update({stock:newStock}).eq('id',bi.id);
+      else await db.from('branch_inventory').insert({branch_id:branchId, ingredient_id:ingId, stock:0, min_stock:0});
+      // تسجيل بجدول الإتلاف
+      const { error } = await db.from('waste_log').insert({
+        branch_id: branchId, ingredient_id: ingId, quantity: qty,
+        staff_id: ME.id, staff_name: ME.full_name, reason, notes: note||null
+      });
+      if(error){ toast('✗ '+error.message); console.error(error); return; }
+      await logActivity('waste_log', 'إتلاف: '+qty+' — '+reason);
+      closeModal(); toast('✓ اتسجل الإتلاف وانخصم من المخزون'); renderWaste();
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
+  }
+  async function runWasteReport(){
+    const from = document.getElementById('wl_from')?.value;
+    const to = document.getElementById('wl_to')?.value;
+    const R = document.getElementById('wl_result');
+    if(!from||!to||!R) return;
+    R.innerHTML = '<div class="empty-note">... جاري التحميل</div>';
+    try{
+      const { data, error } = await db.from('waste_log')
+        .select('*, ingredients(name,unit,unit_cost), branches(name_ar)')
+        .gte('created_at', from+'T00:00:00').lte('created_at', to+'T23:59:59')
+        .order('created_at', {ascending:false});
+      if(error){ R.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message||'الجدول waste_log غير موجود — نفّذ SQL أولاً')}</div>`; return; }
+      WASTE_DATA = data||[];
+      const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_cost||0)),0);
+      const byStaff = {};
+      WASTE_DATA.forEach(w=>{ byStaff[w.staff_name]=(byStaff[w.staff_name]||0)+1; });
+      R.innerHTML = `
+        <div class="day-head" style="margin:10px 0">
+          <div class="stat">عدد عمليات الإتلاف<b>${WASTE_DATA.length}</b></div>
+          <div class="stat">التكلفة التقديرية<b style="color:var(--red)">${fmt(totalCost)} ${CURRENCY}</b></div>
+        </div>
+        <div class="tbl-wrap"><table class="tbl">
+          <tr><th>التاريخ والساعة</th><th>المادة</th><th>الكمية</th><th>الفرع</th><th>السبب</th><th>الموظف</th><th>ملاحظة</th></tr>
+          ${WASTE_DATA.map(w=>`<tr>
+            <td>${new Date(w.created_at).toLocaleString('ar-JO')}</td>
+            <td><b>${esc(w.ingredients?.name||'—')}</b></td>
+            <td>${w.quantity} ${esc(w.ingredients?.unit||'')}</td>
+            <td>${esc(w.branches?.name_ar||'—')}</td>
+            <td><span style="color:var(--warn);font-weight:800">${esc(w.reason||'—')}</span></td>
+            <td><b style="color:var(--maroon)">${esc(w.staff_name||'—')}</b></td>
+            <td style="font-size:.82rem;color:var(--muted)">${esc(w.notes||'—')}</td>
+          </tr>`).join('')||'<tr><td colspan="7" class="empty-note">ما في إتلافات بهاي الفترة</td></tr>'}
+        </table></div>`;
+    }catch(e){ R.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
+  }
+
   async function renderPlatforms(){
     const C = document.getElementById('admContent');
     if(!C) return;
@@ -5470,12 +5668,16 @@ window.__lastEmpMealsData = null;
       invoice_extra_info: f_extraInfo ? f_extraInfo.value.trim() : '',
       fin_start_hour: f_finStart ? f_finStart.value : '10',
       fin_end_hour: f_finEnd ? f_finEnd.value : '3',
+      late_min: document.getElementById('f_lateMin') ? document.getElementById('f_lateMin').value : '20',
+      ready_wait_min: document.getElementById('f_readyWait') ? document.getElementById('f_readyWait').value : '7',
       alert_tone: f_alertTone ? f_alertTone.value : 'classic',
       alert_volume: f_alertVolume ? f_alertVolume.value : '0.5',
     };
     if(window.__logoImg !== undefined) settings.invoice_logo = window.__logoImg || '';
     FIN_START_H = parseInt(settings.fin_start_hour)||10;
     FIN_END_H = parseInt(settings.fin_end_hour)||3;
+    LATE_MIN = parseInt(settings.late_min)||20;
+    READY_WAIT_MIN = parseInt(settings.ready_wait_min)||7;
     try {
       for(const[key,value]of Object.entries(settings)){ await db.from('settings').upsert({key,value}); SETTINGS[key]=value; }
       window.__logoImg = undefined;
@@ -5837,7 +6039,7 @@ window.__lastEmpMealsData = null;
     // حراسة الأدوار — منع الوصول نهائيًا بغض النظر عن الأزرار الظاهرة
     const adm = isAdmin();
     const cc = ME && ME.role==='callcenter';
-    const hasAnyAdminAccess = adm || ['inventory_view','inventory_audit','inventory_transfer','expenses_view','purchases_view','platforms_view'].some(k=>perm(k));
+    const hasAnyAdminAccess = adm || Object.values(ADMIN_TAB_PERM).some(k=>k!=='admin_only' && perm(k));
     if((v==='dash' || v==='sales') && !adm){ toast('⛔ صلاحية المدير فقط'); v='pos'; }
     if(v==='admin' && !hasAnyAdminAccess){ toast('⛔ ما عندك صلاحية الوصول'); v='pos'; }
     if(v==='cust' && !perm('customers_view')){ toast('⛔ غير مصرح'); v='pos'; }
