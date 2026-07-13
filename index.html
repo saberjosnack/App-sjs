@@ -584,6 +584,7 @@
         <button data-a="empmeals" onclick="admTab('empmeals')">🍽️ وجبات الموظفين</button>
         <button data-a="topcust" onclick="admTab('topcust')">🏆 أفضل العملاء</button>
         <button data-a="waste" onclick="admTab('waste')">🗑️ الإتلاف</button>
+        <button data-a="suppliers" onclick="admTab('suppliers')">🚚 الموردين</button>
         <button data-a="devices" onclick="admTab('devices')">🖥️ الأجهزة</button>
         <button data-a="sett" onclick="admTab('sett')">🔧 إعدادات</button>
         <button data-a="shifts" onclick="admTab('shifts')">🔄 شيفتات</button>
@@ -3876,6 +3877,7 @@
     if(admView==='empmeals'){ renderEmpMeals(); return; }
     if(admView==='topcust'){ renderTopCustomers(); return; }
     if(admView==='waste'){ renderWaste(); return; }
+    if(admView==='suppliers'){ renderSuppliers(); return; }
     if(admView==='sett'){
       C.innerHTML=`<div class="mbox" style="max-width:480px">
         <h3>🔧 إعدادات النظام</h3>
@@ -5695,7 +5697,7 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
               <td><b style="color:var(--red)">${fmt(st.total)} ${CURRENCY}</b></td>
               <td>${st.last?new Date(st.last).toLocaleDateString('ar-JO'):'—'}</td>
               <td><button class="mini edit" onclick="supplierForm('${s.id}')">تعديل</button>
-                  <button class="mini ok" onclick="window.__purFilterSup='${esc(s.name)}';admTab('purchases')">🛒 مشترياته</button>
+                  <button class="mini ok" onclick="showSupplierStatement('${s.id}','${esc(s.name)}')">📄 كشف حساب</button>
                   <button class="mini del" onclick="deleteSupplier('${s.id}','${esc(s.name)}')">حذف</button></td>
             </tr>`;
           }).join('')||'<tr><td colspan="6" class="empty-note">ما في موردين مضافين بعد</td></tr>'}
@@ -5718,6 +5720,79 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
     if(r.error){ toast('✗ '+r.error.message); return; }
     closeModal(); toast('✓ انحفظ'); renderSuppliers();
   }
+  /* ---- كشف حساب مفصّل لمورد بفترة محددة ---- */
+  async function showSupplierStatement(supplierId, supplierName){
+    const today = new Date().toISOString().split('T')[0];
+    const monthAgo = new Date(Date.now()-30*86400000).toISOString().split('T')[0];
+    modal(`<h3>📄 كشف حساب — ${esc(supplierName)}</h3>
+      <div class="two">
+        <div style="flex:1"><label style="font-weight:700;font-size:.82rem;color:var(--muted)">من تاريخ</label>
+          <input type="date" id="sup_stmt_from" value="${monthAgo}" style="border:1.5px solid var(--line);border-radius:10px;padding:8px 10px;width:100%"></div>
+        <div style="flex:1"><label style="font-weight:700;font-size:.82rem;color:var(--muted)">إلى تاريخ</label>
+          <input type="date" id="sup_stmt_to" value="${today}" style="border:1.5px solid var(--line);border-radius:10px;padding:8px 10px;width:100%"></div>
+      </div>
+      <button class="mini ok" style="margin:8px 0" onclick="runSupplierStatement('${supplierName}')">📊 عرض كشف الحساب</button>
+      <div id="sup_stmt_result"></div>
+      <div class="m-act"><button class="cancel" onclick="closeModal()">إغلاق</button></div>`);
+  }
+  window.__lastSupplierStmt = null;
+  async function runSupplierStatement(supplierName){
+    const from = document.getElementById('sup_stmt_from').value;
+    const to = document.getElementById('sup_stmt_to').value;
+    const R = document.getElementById('sup_stmt_result');
+    if(!from||!to) return;
+    R.innerHTML = '<div class="empty-note">... جاري الحساب</div>';
+    try{
+      const { data: purchases, error } = await db.from('purchases')
+        .select('*, purchase_items(*, ingredients(name,unit)), branches(name_ar)')
+        .eq('supplier', supplierName)
+        .gte('purchase_date', from).lte('purchase_date', to)
+        .order('purchase_date', {ascending:false});
+      if(error){ R.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message)}</div>`; return; }
+      const list = purchases||[];
+      const total = list.reduce((a,p)=>a+parseFloat(p.total||0),0);
+      // تجميع كل المواد المشتراة من هالمورد بهاي الفترة
+      const byItem = {};
+      list.forEach(p=>(p.purchase_items||[]).forEach(i=>{
+        const nm = i.ingredients?.name||'—';
+        if(!byItem[nm]) byItem[nm] = {qty:0, unit:i.ingredients?.unit||'', cost:0};
+        byItem[nm].qty += parseFloat(i.quantity||0);
+        byItem[nm].cost += (i.quantity||0)*(i.unit_cost||0);
+      }));
+      window.__lastSupplierStmt = { supplierName, from, to, list, total, byItem };
+      R.innerHTML = `
+        <div class="day-head" style="margin:10px 0">
+          <div class="stat">عدد الفواتير<b>${list.length}</b></div>
+          <div class="stat">إجمالي المشتريات<b style="color:var(--red)">${fmt(total)} ${CURRENCY}</b></div>
+        </div>
+        <div style="font-weight:900;color:var(--maroon);margin-bottom:8px">📦 المواد المشتراة (مجمّعة)</div>
+        <div class="tbl-wrap" style="margin-bottom:14px"><table class="tbl">
+          <tr><th>المادة</th><th>الكمية الإجمالية</th><th>التكلفة</th></tr>
+          ${Object.entries(byItem).map(([nm,d])=>`<tr><td><b>${esc(nm)}</b></td><td>${fmt(d.qty)} ${esc(d.unit)}</td><td>${fmt(d.cost)}</td></tr>`).join('')||'<tr><td colspan="3" class="empty-note">لا شي</td></tr>'}
+        </table></div>
+        <div style="font-weight:900;color:var(--maroon);margin-bottom:8px">🧾 كل فاتورة لحالها</div>
+        <div class="tbl-wrap"><table class="tbl">
+          <tr><th>التاريخ</th><th>الفرع</th><th>المواد</th><th>الإجمالي</th></tr>
+          ${list.map(p=>`<tr><td>${p.purchase_date}</td><td>${esc(p.branches?.name_ar||'—')}</td>
+            <td style="font-size:.82rem;color:var(--muted)">${(p.purchase_items||[]).map(i=>i.quantity+'×'+esc(i.ingredients?.name||'—')).join('، ')}</td>
+            <td><b>${fmt(p.total)}</b></td></tr>`).join('')||'<tr><td colspan="4" class="empty-note">ما في فواتير بهاي الفترة</td></tr>'}
+        </table></div>
+        <button class="mini edit" style="margin-top:10px;width:100%" onclick="printSupplierStatement()">🖨️ طباعة كشف الحساب</button>`;
+    }catch(e){ R.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
+  }
+  function printSupplierStatement(){
+    const d = window.__lastSupplierStmt; if(!d) return;
+    const text = 'كشف حساب مورد — '+d.supplierName+'\n— Saber Jo Snack —\n'+d.from+' → '+d.to+'\n════════════════\n'+
+      'عدد الفواتير: '+d.list.length+'\nالإجمالي: '+fmt(d.total)+' '+CURRENCY+'\n────────────────\n'+
+      Object.entries(d.byItem).map(([nm,x])=>nm+': '+fmt(x.qty)+' '+x.unit+' — '+fmt(x.cost)+' '+CURRENCY).join('\n')+'\n';
+    const html = `<html dir="rtl"><head><meta charset="UTF-8"><style>body{font-family:Cairo,Arial;padding:16px}table{width:100%;border-collapse:collapse}td,th{padding:6px;border:1px solid #ccc;text-align:right}</style></head><body>
+      <h2>كشف حساب — ${esc(d.supplierName)}</h2><div>${d.from} إلى ${d.to}</div>
+      <table><tr><th>المادة</th><th>الكمية</th><th>التكلفة</th></tr>
+      ${Object.entries(d.byItem).map(([nm,x])=>`<tr><td>${esc(nm)}</td><td>${fmt(x.qty)} ${esc(x.unit)}</td><td>${fmt(x.cost)}</td></tr>`).join('')}
+      </table><h3>الإجمالي: ${fmt(d.total)} ${CURRENCY}</h3></body></html>`;
+    printRaw(text, html);
+  }
+
   async function deleteSupplier(id, name){
     if(!confirm('حذف المورد "'+name+'"؟ (فواتير الشراء القديمة بتضل موجودة باسمه كنص)')) return;
     const r = await db.from('suppliers').delete().eq('id',id);
