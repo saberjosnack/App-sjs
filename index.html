@@ -332,6 +332,7 @@
   <header>
     <div class="brand">S<em>J</em>S <span style="font-weight:600;font-size:.85rem">POS</span></div>
     <div id="shiftBadge" class="hidden" onclick="if(!currentShift)startShift()">🔴 لا يوجد شيفت مفتوح - اضغط لفتح</div>
+    <button id="drawerBtn" class="hidden" onclick="openDrawerRequest()" style="background:var(--yellow);color:var(--maroon);border-radius:999px;padding:4px 12px;font-weight:900;font-size:.85rem">🔓 فتح الدرج</button>
     <div id="overdueBadge" class="hidden">⏰ طلبات متأخرة!</div>
     <div id="readyBadge" class="hidden" style="background:var(--warn);color:#fff;border-radius:999px;padding:4px 12px;font-weight:900;font-size:.85rem;animation:blink 1s infinite">📦 طلبات جاهزة!</div>
     <div class="who"><span id="whoName"></span><br><span id="whoBranch"></span></div>
@@ -414,6 +415,17 @@
               <button data-p="cash" class="on">💵 كاش</button>
               <button data-p="card">💳 كرت</button>
               <button data-p="cliq">📱 كليك</button>
+              <button data-p="split" onclick="toggleSplitPay()">✂️ حساب مقطوع</button>
+            </div>
+            <div id="splitPayBox" class="hidden" style="display:flex;gap:8px;margin-bottom:10px">
+              <select id="split_m1" style="flex:1;border:1.5px solid var(--line);border-radius:8px;padding:6px" onchange="renderCart()">
+                <option value="cash">كاش</option><option value="card">كرت</option><option value="cliq">كليك</option>
+              </select>
+              <input id="split_amt1" type="number" step="0.01" placeholder="المبلغ" style="flex:1;border:1.5px solid var(--line);border-radius:8px;padding:6px" oninput="renderCart()">
+              <select id="split_m2" style="flex:1;border:1.5px solid var(--line);border-radius:8px;padding:6px" onchange="renderCart()">
+                <option value="cliq">كليك</option><option value="cash">كاش</option><option value="card">كرت</option>
+              </select>
+              <div id="split_amt2_display" style="flex:1;padding:6px;font-weight:900;color:var(--red)"></div>
             </div>
             <div class="trow"><span>المجموع</span><span id="tSub">0.00</span></div>
             <div class="trow" id="tDelRow" style="display:none"><span>توصيل</span><span id="tDel">0.00</span></div>
@@ -611,6 +623,13 @@
   const ROLE_AR = { admin:'مدير', cashier:'كاشير', callcenter:'كول سنتر', kitchen:'مطبخ' };
   PAY_AR['platform'] = 'ذمم (تطبيق)';
   PAY_AR['employee_tab'] = 'ذمم موظف';
+  PAY_AR['split'] = 'حساب مقطوع';
+  function toggleSplitPay(){
+    payMethod = 'split';
+    document.querySelectorAll('#payBar button').forEach(b=>b.classList.toggle('on', b.dataset.p==='split'));
+    document.getElementById('splitPayBox')?.classList.remove('hidden');
+    renderCart();
+  }
   let MEAL_NAMES_DATA = [];
   async function loadEmpMealNames(){
     try{
@@ -1349,6 +1368,8 @@
         .limit(1);
       currentShift = (data && data.length) ? data[0] : null;
       const badge = document.getElementById('shiftBadge');
+      const drawerBtn = document.getElementById('drawerBtn');
+      if (drawerBtn) drawerBtn.classList.toggle('hidden', !currentShift || isCallCenter());
       if (badge) {
         if(currentShift){
           badge.classList.remove('hidden');
@@ -1435,23 +1456,37 @@
     } else if(!confirm('⏹️ إغلاق الشيفت؟')) return;
     try {
       const { data: orders } = await db.from('orders')
-        .select('total, subtotal, discount, delivery_fee, payment_method, order_type, status')
+        .select('total, subtotal, discount, delivery_fee, payment_method, order_type, status, split_details')
         .eq('shift_id', currentShift.id);
       const all = orders || [];
       const ok = all.filter(o=>o.status!=='cancelled');
       const cancelled = all.filter(o=>o.status==='cancelled');
       const sum = k => ok.reduce((a,o)=>a+parseFloat(o[k]||0),0);
-      const byPay = {}; ok.forEach(o=>{ byPay[o.payment_method]=(byPay[o.payment_method]||0)+parseFloat(o.total||0); });
+      // الحساب المقطوع: كل جزء يترحّل لطريقة دفعه الحقيقية (مش يتحسب كله كاش أو يضيع)
+      const byPay = {};
+      ok.forEach(o=>{
+        if(o.payment_method==='split' && o.split_details){
+          const d = o.split_details;
+          byPay[d.m1] = (byPay[d.m1]||0) + parseFloat(d.amt1||0);
+          byPay[d.m2] = (byPay[d.m2]||0) + parseFloat(d.amt2||0);
+        } else {
+          byPay[o.payment_method] = (byPay[o.payment_method]||0) + parseFloat(o.total||0);
+        }
+      });
       const opening = parseFloat(currentShift.opening_balance||0);
       const cashSales = byPay['cash']||0;
-      const expected = opening + cashSales;      // المتوقع بالدرج = الافتتاحي + مبيعات الكاش فقط
+      // سحوبات الدرج بهاد الشيفت (أي حالة موافقة — لأنها فعليًا طلعت من الدرج فورًا وقت السحب)
+      const { data: drawerWithdrawals } = await db.from('expenses').select('amount, title, description, approval_status').eq('shift_id', currentShift.id).eq('category','سحب من الدرج');
+      const withdrawalsTotal = (drawerWithdrawals||[]).reduce((a,w)=>a+parseFloat(w.amount||0),0);
+      const expected = opening + cashSales - withdrawalsTotal; // المتوقع بالدرج = الافتتاحي + مبيعات الكاش − السحوبات
       const diff = countedValue - expected;      // + زيادة / − عجز
       const rep = {
         count: ok.length, total: sum('total'), discount: sum('discount'), delivery: sum('delivery_fee'),
         byPay, cancelled: cancelled.length,
         delCount: ok.filter(o=>o.order_type==='delivery').length,
         takeCount: ok.filter(o=>o.order_type==='takeaway').length,
-        opening, cashSales, expected, counted: countedValue, diff
+        opening, cashSales, expected, counted: countedValue, diff,
+        drawerWithdrawals: drawerWithdrawals||[], withdrawalsTotal
       };
       const { error } = await db.from('cash_shifts').update({
         closing_balance: ccSkip ? null : countedValue,
@@ -1501,6 +1536,7 @@
       <hr>
       <table>
         ${Object.entries(r.byPay).map(([k,v])=>`<tr><td>${PAY_AR[k]||k}</td><td class="tl">${fmt(v)}</td></tr>`).join('')}
+        ${r.withdrawalsTotal>0?`<tr style="color:#c00"><td colspan="2"><b>سحوبات من الدرج:</b></td></tr>${r.drawerWithdrawals.map(w=>`<tr><td>${esc(w.title||w.description||'—')}</td><td class="tl">−${fmt(w.amount)} (${w.approval_status==='approved'?'موافق عليه':w.approval_status==='rejected'?'مرفوض':'بانتظار الموافقة'})</td></tr>`).join('')}`:''}
         <tr class="big"><td>إجمالي المبيعات</td><td class="tl">${fmt(r.total)} ${CURRENCY}</td></tr>
       </table>
       <hr>
@@ -1637,6 +1673,33 @@
       + '<br><button onclick="this.closest(\'div\').remove()" style="margin-top:8px;background:rgba(255,255,255,.25);color:#fff;border-radius:8px;padding:5px 16px;font-weight:900">إغلاق</button>';
     document.body.appendChild(box);
     setTimeout(()=>{ try{ box.remove(); }catch(e){} }, 60000);
+  }
+  /* ================= فتح الدرج — سحب نقدي بسبب، بانتظار موافقة المدير ================= */
+  function openDrawerRequest(){
+    if(!currentShift){ toast('⚠️ لازم يكون عندك شيفت مفتوح'); return; }
+    modal(`<h3>🔓 فتح الدرج — سحب مبلغ</h3>
+      <div style="color:var(--muted);font-size:.82rem;font-weight:700;margin-bottom:10px">هاد المبلغ رح ينخصم من الكاش المتوقع بدرجك وقت الإغلاق، وبينضاف كمصروف بانتظار موافقة المدير.</div>
+      <div class="fld"><label>المبلغ (${CURRENCY})</label><input id="dr_amt" type="number" step="0.01" placeholder="مثال: 10"></div>
+      <div class="fld"><label>السبب *</label><input id="dr_reason" placeholder="مثال: ثمن جرة غاز"></div>
+      <div class="m-act"><button class="save" onclick="saveDrawerRequest()">تأكيد السحب ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
+  }
+  async function saveDrawerRequest(){
+    const amt = parseFloat(document.getElementById('dr_amt').value);
+    const reason = document.getElementById('dr_reason').value.trim();
+    if(isNaN(amt)||amt<=0){ toast('⚠️ اكتب مبلغ صحيح'); return; }
+    if(!reason){ toast('⚠️ السبب إجباري'); return; }
+    try{
+      const { error } = await db.from('expenses').insert({
+        expense_date: new Date().toISOString().split('T')[0],
+        category: 'سحب من الدرج', title: reason, description: reason,
+        amount: amt, branch_id: ME.branch_id||null,
+        shift_id: currentShift.id, created_by: ME.full_name,
+        approval_status: 'pending'
+      });
+      if(error){ toast('✗ '+error.message); console.error(error); return; }
+      await logActivity('drawer_withdraw', 'سحب '+fmt(amt)+' — '+reason);
+      closeModal(); toast('✓ اتسجل السحب — بانتظار موافقة المدير');
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
   async function checkAutoPrintQueue(){
     try {
@@ -2109,6 +2172,13 @@
     if (tDel) tDel.textContent = fmt(t.del);
     const tTotal = document.getElementById('tTotal');
     if (tTotal) tTotal.textContent = fmt(t.total)+' '+CURRENCY;
+    // حساب مقطوع: المبلغ التاني = الإجمالي - المبلغ الأول تلقائيًا
+    if(payMethod==='split'){
+      const amt1 = parseFloat(document.getElementById('split_amt1')?.value)||0;
+      const amt2 = Math.max(0, t.total - amt1);
+      const disp = document.getElementById('split_amt2_display');
+      if(disp) disp.textContent = fmt(amt2)+' '+CURRENCY;
+    }
     const btnSave = document.getElementById('btnSave');
     if (btnSave) btnSave.disabled = !cart.length;
     renderUpsell();
@@ -2705,6 +2775,19 @@
         return;
       }
       const branch_id = ME.branch_id || _selBranch;
+      // ⚠️ منع الإرسال لفرع ما فاتح شيفت — بس لو الحساب بدون فرع ثابت (كول سنتر/مدير) ومرسل لفرع تاني
+      let remoteShiftId = null;
+      if(!ME.branch_id){
+        const { data: targetShift } = await db.from('cash_shifts').select('id').eq('branch_id', branch_id).eq('status','open').limit(1);
+        if(!targetShift || !targetShift.length){
+          const brName = BRANCHES.find(b=>b.id===branch_id)?.name_ar||'الفرع';
+          toast('⛔ '+brName+' لسا مغلق (ما في شيفت مفتوح) — ما بينرسل الطلب');
+          if (btnSave) btnSave.disabled = false;
+          return;
+        }
+        remoteShiftId = targetShift[0].id; // 💰 مهم: نربط الطلب بشيفت الفرع المستهدف، مش شيفت السنتر —
+        // هيك كاش التوصيل يلي بيرجعه المندوب للكاشير يترحّل صح على شيفت الكاشير نفسه، ومحدّ يطلع عنده فرق
+      }
       const orderNote = document.getElementById('orderNote');
 
       const rec = {
@@ -2720,8 +2803,14 @@
         discount_code: appliedCode ? appliedCode.code : null,
         platform_id: document.getElementById('orderPlatform')?.value || null,
         employee_tab_name: empMealName || null,
+        split_details: payMethod==='split' ? {
+          m1: document.getElementById('split_m1')?.value||'cash',
+          amt1: parseFloat(document.getElementById('split_amt1')?.value)||0,
+          m2: document.getElementById('split_m2')?.value||'cliq',
+          amt2: Math.max(0, t.total - (parseFloat(document.getElementById('split_amt1')?.value)||0))
+        } : null,
         status: 'new',
-        shift_id: currentShift ? currentShift.id : null,
+        shift_id: remoteShiftId || (currentShift ? currentShift.id : null),
         created_by: ME.id,
         created_by_name: ME.full_name,
         // auto_printed = صح فقط لو هاد الجهاز فعليًا بنفس فرع الطلب (بيطبعه محليًا فورًا).
@@ -3735,7 +3824,7 @@
       try {
         const {data}=await db.from('categories').select('*').order('sort_order');
         const allCats=data||[];
-        C.innerHTML=`<button class="add-btn" onclick="catForm()">＋ إضافة تصنيف</button><div class="tbl-wrap"><table class="tbl"><tr><th>التصنيف</th><th>الترتيب</th><th>الحالة</th><th></th></tr>${allCats.map(c=>`<tr class="${c.is_active?'':'off'}"><td>${esc(c.name_ar)}</td><td>${c.sort_order}</td><td>${c.is_active?'✅':'🚫'}</td><td style="white-space:nowrap"><button class="mini edit" onclick="catForm('${c.id}')">تعديل</button><button class="mini tog" onclick="toggleCat('${c.id}',${!c.is_active})">${c.is_active?'إخفاء':'إظهار'}</button></td></tr>`).join('')}</table></div>`;
+        C.innerHTML=`<button class="add-btn" onclick="catForm()">＋ إضافة تصنيف</button><div class="tbl-wrap"><table class="tbl"><tr><th>التصنيف</th><th>الترتيب</th><th>الحالة</th><th></th></tr>${allCats.map(c=>`<tr class="${c.is_active?'':'off'}"><td>${esc(c.name_ar)}</td><td>${c.sort_order}</td><td>${c.is_active?'✅':'🚫'}</td><td style="white-space:nowrap"><button class="mini edit" onclick="catForm('${c.id}')">تعديل</button><button class="mini tog" onclick="toggleCat('${c.id}',${!c.is_active})">${c.is_active?'إخفاء':'إظهار'}</button><button class="mini del" onclick="deleteCat('${c.id}','${esc(c.name_ar)}')">حذف</button></td></tr>`).join('')}</table></div>`;
         window.__ALLCATS=allCats;
       } catch(e) { console.error(e); }
     }
@@ -3751,7 +3840,7 @@
       try {
         const {data}=await db.from('staff').select('*, branches(name_ar)').order('created_at');
         STAFF=data||[];
-        C.innerHTML=`<button class="add-btn" onclick="staffForm()">＋ إضافة موظف</button><div class="tbl-wrap"><table class="tbl"><tr><th>الاسم</th><th>الدور</th><th>الفرع</th><th>PIN</th><th>الحالة</th><th></th></tr>${STAFF.map(s=>`<tr class="${s.is_active?'':'off'}"><td>${esc(s.full_name)}</td><td>${ROLE_AR[s.role]||esc(s.role)}</td><td>${esc(s.branches?.name_ar||'كل الفروع')}</td><td>${s.pin}</td><td>${s.is_active?'✅':'🚫'}</td><td style="white-space:nowrap"><button class="mini edit" onclick="staffForm('${s.id}')">تعديل</button>${s.id!==ME.id?`<button class="mini tog" onclick="toggleStaff('${s.id}',${!s.is_active})">${s.is_active?'تعطيل':'تفعيل'}</button>`:''}</td></tr>`).join('')}</table></div>`;
+        C.innerHTML=`<button class="add-btn" onclick="staffForm()">＋ إضافة موظف</button><div class="tbl-wrap"><table class="tbl"><tr><th>الاسم</th><th>الدور</th><th>الفرع</th><th>PIN</th><th>الحالة</th><th></th></tr>${STAFF.map(s=>`<tr class="${s.is_active?'':'off'}"><td>${esc(s.full_name)}</td><td>${ROLE_AR[s.role]||esc(s.role)}</td><td>${esc(s.branches?.name_ar||'كل الفروع')}</td><td>${s.pin}</td><td>${s.is_active?'✅':'🚫'}</td><td style="white-space:nowrap"><button class="mini edit" onclick="staffForm('${s.id}')">تعديل</button>${s.id!==ME.id?`<button class="mini tog" onclick="toggleStaff('${s.id}',${!s.is_active})">${s.is_active?'تعطيل/أرشفة':'تفعيل'}</button><button class="mini del" onclick="deleteStaff('${s.id}','${esc(s.full_name)}')">حذف نهائي</button>`:''}</td></tr>`).join('')}</table></div>`;
         const salesStaff = document.getElementById('salesStaff');
         if (salesStaff) salesStaff.innerHTML = '<option value="">كل الموظفين</option>' + STAFF.map(s=>`<option value="${s.id}">${esc(s.full_name)}</option>`).join('');
       } catch(e) { console.error(e); }
@@ -3760,7 +3849,7 @@
       try {
         const {data}=await db.from('branches').select('*').order('created_at');
         const allBr=data||[];
-        C.innerHTML=`<button class="add-btn" onclick="branchForm()">＋ إضافة فرع</button><div class="tbl-wrap"><table class="tbl"><tr><th>الفرع</th><th>الهاتف</th><th>الحالة</th><th></th></tr>${allBr.map(b=>`<tr class="${b.is_active?'':'off'}"><td>${esc(b.name_ar)}</td><td>${esc(b.phone||'—')}</td><td>${b.is_active?'✅':'🚫'}</td><td style="white-space:nowrap"><button class="mini edit" onclick="branchForm('${b.id}')">تعديل</button><button class="mini tog" onclick="toggleBranch('${b.id}',${!b.is_active})">${b.is_active?'تعطيل':'تفعيل'}</button></td></tr>`).join('')}</table></div>`;
+        C.innerHTML=`<button class="add-btn" onclick="branchForm()">＋ إضافة فرع</button><div class="tbl-wrap"><table class="tbl"><tr><th>الفرع</th><th>الهاتف</th><th>الحالة</th><th></th></tr>${allBr.map(b=>`<tr class="${b.is_active?'':'off'}"><td>${esc(b.name_ar)}</td><td>${esc(b.phone||'—')}</td><td>${b.is_active?'✅':'🚫'}</td><td style="white-space:nowrap"><button class="mini edit" onclick="branchForm('${b.id}')">تعديل</button><button class="mini tog" onclick="toggleBranch('${b.id}',${!b.is_active})">${b.is_active?'تعطيل':'تفعيل'}</button><button class="mini del" onclick="deleteBranch('${b.id}','${esc(b.name_ar)}')">حذف</button></td></tr>`).join('')}</table></div>`;
         window.__ALLBR=allBr;
       } catch(e) { console.error(e); }
     }
@@ -4085,7 +4174,23 @@
       <div class="trow"><span>التكلفة</span><b style="color:var(--red)">${fmt(cost)} ${CURRENCY}</b></div>
       <div class="trow"><span>سعر البيع</span><b>${fmt(price)} ${CURRENCY}</b></div>
       <div class="trow total"><span>Food Cost %</span><b>${price>0?Math.round(cost/price*100):0}%</b></div>
+      <div class="m-act">
+        <button class="mini ok" onclick="printRecipeSheet('${id}', true)">🖨️ طباعة بالمبالغ</button>
+        <button class="mini edit" onclick="printRecipeSheet('${id}', false)">🖨️ طباعة الكميات بس</button>
+      </div>
       <div class="m-act"><button class="cancel" onclick="closeModal()">إغلاق</button></div>`);
+  }
+  function printRecipeSheet(id, withPrices){
+    const r = RECIPES_DATA.find(x=>x.id===id); if(!r) return;
+    const itemName = r.menu_items?.name_ar||'—';
+    const text = 'ورقة وصفة — '+itemName+'\n— Saber Jo Snack —\n════════════════\n'+
+      (r.recipe_items||[]).map(ri=>ri.quantity+' '+(ri.ingredients?.unit||'')+' — '+(ri.ingredients?.name||'—')+(withPrices?(' — '+fmt((ri.quantity||0)*(ri.ingredients?.unit_cost||0))+' '+CURRENCY):'')).join('\n')+'\n';
+    const html = `<html dir="rtl"><head><meta charset="UTF-8"><style>body{font-family:Cairo,Arial;padding:20px}table{width:100%;border-collapse:collapse}td,th{padding:8px;border:1px solid #ccc;text-align:right;font-size:1rem}h2{text-align:center}</style></head><body>
+      <h2>ورقة وصفة — ${esc(itemName)}</h2>
+      <table><tr><th>المكون</th><th>الكمية</th>${withPrices?'<th>التكلفة</th>':''}</tr>
+      ${(r.recipe_items||[]).map(ri=>`<tr><td>${esc(ri.ingredients?.name||'—')}</td><td>${ri.quantity} ${esc(ri.ingredients?.unit||'')}</td>${withPrices?`<td>${fmt((ri.quantity||0)*(ri.ingredients?.unit_cost||0))}</td>`:''}</tr>`).join('')}
+      </table></body></html>`;
+    printRaw(text, html);
   }
   let riIdx=1;
   function recipeForm(id){
@@ -4133,22 +4238,57 @@
       return;
     }
     EXPENSES_DATA=data||[];
-    const total=EXPENSES_DATA.reduce((a,x)=>a+parseFloat(x.amount||0),0);
+    const filterCat = window.__expFilterCat||'';
+    const filterBr = window.__expFilterBr||'';
+    let filtered = EXPENSES_DATA;
+    if(filterCat) filtered = filtered.filter(e=>e.category===filterCat);
+    if(filterBr) filtered = filtered.filter(e=>e.branch_id===filterBr);
+    const total=filtered.reduce((a,x)=>a+parseFloat(x.amount||0),0);
     const C=document.getElementById('admContent');
     C.innerHTML=`<div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
       <button class="add-btn" style="margin:0" onclick="expenseForm()">＋ مصروف جديد</button>
-      <div class="stat">إجمالي المصاريف<b>${fmt(total)} ${CURRENCY}</b></div></div>
+      <div class="stat">إجمالي المصاريف (بعد الفلترة)<b>${fmt(total)} ${CURRENCY}</b></div></div>
+      <div class="two" style="margin-bottom:10px">
+        <select style="flex:1;border:1.5px solid var(--line);border-radius:10px;padding:8px" onchange="window.__expFilterCat=this.value;renderExpenses()">
+          <option value="">كل الأنواع</option>
+          ${EXP_CATS.map(c=>`<option value="${c}" ${filterCat===c?'selected':''}>${c}</option>`).join('')}
+        </select>
+        <select style="flex:1;border:1.5px solid var(--line);border-radius:10px;padding:8px" onchange="window.__expFilterBr=this.value;renderExpenses()">
+          <option value="">كل الفروع</option>
+          ${BRANCHES.map(b=>`<option value="${b.id}" ${filterBr===b.id?'selected':''}>${esc(b.name_ar)}</option>`).join('')}
+        </select>
+        <button class="mini edit" onclick="printExpensesReport()">🖨️ طباعة</button>
+      </div>
       <div class="tbl-wrap"><table class="tbl">
         <tr><th>التاريخ</th><th>النوع</th><th>البيان</th><th>المبلغ</th><th>الفرع</th><th></th></tr>
-        ${EXPENSES_DATA.map(e=>`<tr>
+        ${filtered.map(e=>`<tr class="${e.approval_status==='pending'?'late':''}">
           <td>${new Date(e.expense_date).toLocaleDateString('ar-JO')}</td>
-          <td><span class="badge">${esc(e.category||'—')}</span></td>
-          <td>${esc(e.description||'—')}</td>
+          <td><span class="badge">${esc(e.category||'—')}</span>${e.approval_status==='pending'?' <b style="color:var(--warn)">⏳ بانتظار الموافقة</b>':e.approval_status==='approved'?' <b style="color:var(--ok)">✅ موافق</b>':e.approval_status==='rejected'?' <b style="color:var(--red)">✗ مرفوض</b>':''}</td>
+          <td>${esc(e.description||'—')}${e.created_by?'<br><small style="color:var(--muted)">بواسطة: '+esc(e.created_by)+'</small>':''}</td>
           <td><b style="color:var(--red)">${fmt(e.amount)} ${CURRENCY}</b></td>
           <td>${esc(BRANCHES.find(b=>b.id===e.branch_id)?.name_ar||'كل الفروع')}</td>
-          <td><button class="mini edit" onclick="expenseForm('${e.id}')">تعديل</button> <button class="mini del" onclick="deleteExpense('${e.id}')">حذف</button></td>
+          <td>
+            ${e.approval_status==='pending'&&isAdmin()?`<button class="mini ok" onclick="approveExpense('${e.id}',true)">✅ موافقة</button><button class="mini del" onclick="approveExpense('${e.id}',false)">✗ رفض</button>`:''}
+            <button class="mini edit" onclick="expenseForm('${e.id}')">تعديل</button> <button class="mini del" onclick="deleteExpense('${e.id}')">حذف</button>
+          </td>
         </tr>`).join('')||'<tr><td colspan="6" class="empty-note">ما في مصاريف</td></tr>'}
       </table></div>`;
+  }
+  function printExpensesReport(){
+    const filterCat = window.__expFilterCat||'';
+    const filterBr = window.__expFilterBr||'';
+    let filtered = EXPENSES_DATA;
+    if(filterCat) filtered = filtered.filter(e=>e.category===filterCat);
+    if(filterBr) filtered = filtered.filter(e=>e.branch_id===filterBr);
+    const total = filtered.reduce((a,e)=>a+parseFloat(e.amount||0),0);
+    const text = 'تقرير المصاريف\n— Saber Jo Snack —\n════════════════\n'+
+      filtered.map(e=>e.expense_date+' — '+(e.category||'—')+' — '+fmt(e.amount)).join('\n')+'\n════════════════\nالإجمالي: '+fmt(total)+' '+CURRENCY+'\n';
+    const html = `<html dir="rtl"><head><meta charset="UTF-8"><style>body{font-family:Cairo,Arial;padding:16px}table{width:100%;border-collapse:collapse}td,th{padding:6px;border:1px solid #ccc;text-align:right}</style></head><body>
+      <h2>تقرير المصاريف</h2>
+      <table><tr><th>التاريخ</th><th>النوع</th><th>البيان</th><th>المبلغ</th></tr>
+      ${filtered.map(e=>`<tr><td>${e.expense_date}</td><td>${esc(e.category||'—')}</td><td>${esc(e.description||'—')}</td><td>${fmt(e.amount)}</td></tr>`).join('')}
+      </table><h3>الإجمالي: ${fmt(total)} ${CURRENCY}</h3></body></html>`;
+    printRaw(text, html);
   }
   function expenseForm(id){
     const e = id ? (EXPENSES_DATA.find(x=>x.id===id)||{}) : {};
@@ -4177,6 +4317,13 @@
     await logActivity(id?'edit_expense':'add_expense', 'مصروف: '+rec.category+' - '+fmt(rec.amount));
     closeModal();toast('✓ انحفظ');renderExpenses();
   }
+  async function approveExpense(id, approve){
+    const status = approve ? 'approved' : 'rejected';
+    const r = await db.from('expenses').update({ approval_status: status }).eq('id', id);
+    if(r.error){ toast('✗ '+r.error.message); return; }
+    await logActivity('expense_approval', (approve?'موافقة على':'رفض')+' مصروف');
+    toast(approve?'✓ تمت الموافقة':'✓ اترفض'); renderExpenses();
+  }
   async function deleteExpense(id){
     if(!confirm('حذف هاد المصروف؟'))return;
     await db.from('expenses').delete().eq('id',id);
@@ -4186,16 +4333,34 @@
   /* ---- المشتريات ---- */
   let piIdx=0;
   async function renderPurchases(){
-    const {data}=await db.from('purchases').select('*, purchase_items(*, ingredients(name,unit))').order('purchase_date',{ascending:false}).limit(100);
+    await loadIngredients();
+    const {data}=await db.from('purchases').select('*, purchase_items(*, ingredients(name,unit))').order('purchase_date',{ascending:false}).limit(200);
     PURCHASES_DATA=data||[];
-    const total=PURCHASES_DATA.reduce((a,x)=>a+parseFloat(x.total||0),0);
+    const suppliers=[...new Set(PURCHASES_DATA.map(p=>p.supplier).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ar'));
+    const filterSup = window.__purFilterSup||'';
+    const filterIng = window.__purFilterIng||'';
+    let filtered = PURCHASES_DATA;
+    if(filterSup) filtered = filtered.filter(p=>p.supplier===filterSup);
+    if(filterIng) filtered = filtered.filter(p=>(p.purchase_items||[]).some(i=>i.ingredient_id===filterIng));
+    const total=filtered.reduce((a,x)=>a+parseFloat(x.total||0),0);
     const C=document.getElementById('admContent');
     C.innerHTML=`<div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
       <button class="add-btn" style="margin:0" onclick="purchaseForm()">＋ فاتورة شراء</button>
-      <div class="stat">إجمالي المشتريات<b>${fmt(total)} ${CURRENCY}</b></div></div>
+      <div class="stat">إجمالي المشتريات (بعد الفلترة)<b>${fmt(total)} ${CURRENCY}</b></div></div>
+      <div class="two" style="margin-bottom:10px">
+        <select id="pur_filter_sup" style="flex:1;border:1.5px solid var(--line);border-radius:10px;padding:8px" onchange="window.__purFilterSup=this.value;renderPurchases()">
+          <option value="">كل الموردين</option>
+          ${suppliers.map(s=>`<option value="${esc(s)}" ${filterSup===s?'selected':''}>${esc(s)}</option>`).join('')}
+        </select>
+        <select id="pur_filter_ing" style="flex:1;border:1.5px solid var(--line);border-radius:10px;padding:8px" onchange="window.__purFilterIng=this.value;renderPurchases()">
+          <option value="">كل المنتجات</option>
+          ${INGR.map(i=>`<option value="${i.id}" ${filterIng===i.id?'selected':''}>${esc(i.name)}</option>`).join('')}
+        </select>
+        <button class="mini edit" onclick="printPurchasesReport()">🖨️ طباعة</button>
+      </div>
       <div class="tbl-wrap"><table class="tbl">
         <tr><th>التاريخ</th><th>المورد</th><th>المواد</th><th>الإجمالي</th><th></th></tr>
-        ${PURCHASES_DATA.map(p=>`<tr>
+        ${filtered.map(p=>`<tr>
           <td>${new Date(p.purchase_date).toLocaleDateString('ar-JO')}</td>
           <td><b>${esc(p.supplier||'—')}</b></td>
           <td>${(p.purchase_items||[]).map(i=>esc(i.ingredients?.name||'—')).join('، ')}</td>
@@ -4207,6 +4372,22 @@
           </td>
         </tr>`).join('')||'<tr><td colspan="5" class="empty-note">ما في مشتريات</td></tr>'}
       </table></div>`;
+  }
+  function printPurchasesReport(){
+    const filterSup = window.__purFilterSup||'';
+    const filterIng = window.__purFilterIng||'';
+    let filtered = PURCHASES_DATA;
+    if(filterSup) filtered = filtered.filter(p=>p.supplier===filterSup);
+    if(filterIng) filtered = filtered.filter(p=>(p.purchase_items||[]).some(i=>i.ingredient_id===filterIng));
+    const total = filtered.reduce((a,p)=>a+parseFloat(p.total||0),0);
+    const text = 'تقرير المشتريات\n— Saber Jo Snack —\n'+(filterSup?'المورد: '+filterSup+'\n':'')+'════════════════\n'+
+      filtered.map(p=>p.purchase_date+' — '+(p.supplier||'—')+' — '+fmt(p.total)).join('\n')+'\n════════════════\nالإجمالي: '+fmt(total)+' '+CURRENCY+'\n';
+    const html = `<html dir="rtl"><head><meta charset="UTF-8"><style>body{font-family:Cairo,Arial;padding:16px}table{width:100%;border-collapse:collapse}td,th{padding:6px;border:1px solid #ccc;text-align:right}</style></head><body>
+      <h2>تقرير المشتريات${filterSup?' — '+esc(filterSup):''}</h2>
+      <table><tr><th>التاريخ</th><th>المورد</th><th>المواد</th><th>الإجمالي</th></tr>
+      ${filtered.map(p=>`<tr><td>${p.purchase_date}</td><td>${esc(p.supplier||'—')}</td><td>${(p.purchase_items||[]).map(i=>esc(i.ingredients?.name||'—')).join('، ')}</td><td>${fmt(p.total)}</td></tr>`).join('')}
+      </table><h3>الإجمالي: ${fmt(total)} ${CURRENCY}</h3></body></html>`;
+    printRaw(text, html);
   }
   function editPurchaseInfo(id){
     const p = PURCHASES_DATA.find(x=>x.id===id); if(!p) return;
@@ -4834,20 +5015,62 @@
       from_branch_name: BRANCHES.find(b=>b.id===t.from_branch_id)?.name_ar || '—',
       to_branch_name: BRANCHES.find(b=>b.id===t.to_branch_id)?.name_ar || '—',
     }));
+    const staffNames=[...new Set(TRANSFERS_DATA.map(t=>t.created_by).filter(Boolean))];
+    const filterStaff = window.__trFilterStaff||'';
+    let filtered = TRANSFERS_DATA;
+    if(filterStaff) filtered = filtered.filter(t=>t.created_by===filterStaff);
     C.innerHTML = `
       <button class="add-btn" onclick="transferForm()">🔄 طلب نقل بضاعة</button>
+      <div class="two" style="margin-bottom:10px">
+        <select style="flex:1;border:1.5px solid var(--line);border-radius:10px;padding:8px" onchange="window.__trFilterStaff=this.value;renderTransfers()">
+          <option value="">كل الموظفين</option>
+          ${staffNames.map(n=>`<option value="${esc(n)}" ${filterStaff===n?'selected':''}>${esc(n)}</option>`).join('')}
+        </select>
+        <button class="mini edit" onclick="printTransfersReport()">🖨️ طباعة تقرير النقل</button>
+      </div>
       <div class="tbl-wrap"><table class="tbl">
-        <tr><th>التاريخ</th><th>المادة</th><th>الكمية</th><th>من</th><th>إلى</th><th>الحالة</th><th>ملاحظة</th></tr>
-        ${TRANSFERS_DATA.map(t=>`<tr>
-          <td>${new Date(t.created_at).toLocaleDateString('ar-JO')}</td>
+        <tr><th>التاريخ والساعة</th><th>المادة</th><th>الكمية</th><th>من</th><th>إلى</th><th>الموظف</th><th>الحالة</th><th>ملاحظة</th><th></th></tr>
+        ${filtered.map((t,idx)=>`<tr>
+          <td>${new Date(t.created_at).toLocaleString('ar-JO')}</td>
           <td><b>${esc(t.ingredients?.name||'—')}</b> <small style="color:var(--muted)">(${esc(t.ingredients?.unit||'')})</small></td>
           <td><b>${t.quantity}</b></td>
           <td>🏪 ${esc(t.from_branch_name)}</td>
           <td>🏪 ${esc(t.to_branch_name)}</td>
+          <td><b style="color:var(--maroon)">${esc(t.created_by||'—')}</b></td>
           <td>${t.status==='done'?'<span style="color:var(--ok);font-weight:900">✅ مكتمل</span>':'<span style="color:var(--warn);font-weight:900">⏳ معلق</span>'}</td>
           <td style="font-size:.85rem;color:var(--muted)">${esc(t.notes||'—')}</td>
-        </tr>`).join('')||'<tr><td colspan="7" class="empty-note">ما في نقل بضاعة مسجل</td></tr>'}
+          <td><button class="mini tog" onclick="showTransferFlow('${t.ingredient_id}','${t.from_branch_id}','${t.to_branch_id}')">📈 سير الصنف</button></td>
+        </tr>`).join('')||'<tr><td colspan="9" class="empty-note">ما في نقل بضاعة مسجل</td></tr>'}
       </table></div>`;
+  }
+  function printTransfersReport(){
+    const filterStaff = window.__trFilterStaff||'';
+    let filtered = TRANSFERS_DATA;
+    if(filterStaff) filtered = filtered.filter(t=>t.created_by===filterStaff);
+    const text = 'تقرير نقل البضاعة\n— Saber Jo Snack —\n════════════════\n'+
+      filtered.map(t=>new Date(t.created_at).toLocaleString('ar-JO')+' — '+(t.ingredients?.name||'—')+' × '+t.quantity+' — من '+t.from_branch_name+' إلى '+t.to_branch_name+' — بواسطة '+(t.created_by||'—')).join('\n')+'\n';
+    const html = `<html dir="rtl"><head><meta charset="UTF-8"><style>body{font-family:Cairo,Arial;padding:16px}table{width:100%;border-collapse:collapse}td,th{padding:6px;border:1px solid #ccc;text-align:right;font-size:.85rem}</style></head><body>
+      <h2>تقرير نقل البضاعة</h2>
+      <table><tr><th>التاريخ</th><th>المادة</th><th>الكمية</th><th>من</th><th>إلى</th><th>الموظف</th></tr>
+      ${filtered.map(t=>`<tr><td>${new Date(t.created_at).toLocaleString('ar-JO')}</td><td>${esc(t.ingredients?.name||'—')}</td><td>${t.quantity}</td><td>${esc(t.from_branch_name)}</td><td>${esc(t.to_branch_name)}</td><td>${esc(t.created_by||'—')}</td></tr>`).join('')}
+      </table></body></html>`;
+    printRaw(text, html);
+  }
+  async function showTransferFlow(ingId, fromBranchId, toBranchId){
+    // سير الصنف: كم كان بالمخزون الحالي بكل فرع الآن (لقطة حالية — سجل تاريخي كامل يحتاج جدول حركات مفصّل لاحقًا)
+    const ing = INGR.find(x=>x.id===ingId);
+    const {data: fromInv} = await db.from('branch_inventory').select('stock').eq('branch_id',fromBranchId).eq('ingredient_id',ingId).maybeSingle();
+    const {data: toInv} = await db.from('branch_inventory').select('stock').eq('branch_id',toBranchId).eq('ingredient_id',ingId).maybeSingle();
+    const fromBr = BRANCHES.find(b=>b.id===fromBranchId)?.name_ar||'—';
+    const toBr = BRANCHES.find(b=>b.id===toBranchId)?.name_ar||'—';
+    modal(`<h3>📈 سير الصنف — ${esc(ing?.name||'—')}</h3>
+      <table class="tbl">
+        <tr><th>الفرع</th><th>المخزون الحالي</th></tr>
+        <tr><td>🏪 ${esc(fromBr)} (المُرسِل)</td><td><b>${fromInv?.stock??0} ${esc(ing?.unit||'')}</b></td></tr>
+        <tr><td>🏪 ${esc(toBr)} (المُستلِم)</td><td><b>${toInv?.stock??0} ${esc(ing?.unit||'')}</b></td></tr>
+      </table>
+      <div style="color:var(--muted);font-size:.8rem;margin-top:10px">💡 هاي القيم الحالية اللحظية بعد كل الحركات المسجلة (بيع، شراء، نقل، إتلاف، جرد)</div>
+      <div class="m-act"><button class="cancel" onclick="closeModal()">إغلاق</button></div>`);
   }
   /* ================= منصات التوصيل الخارجية (اشياءي وغيرها) ================= */
   let PLATFORMS_DATA = [];
@@ -5207,6 +5430,18 @@ window.__lastEmpMealsData = null;
 
   /* ================= الإتلاف (Waste Log) ================= */
   let WASTE_DATA = [];
+  function printWasteReport(){
+    const d = window.__lastWasteData; if(!d) return;
+    const text = 'تقرير الإتلاف\n— Saber Jo Snack —\n'+d.from+' → '+d.to+'\n════════════════\n'+
+      'عدد العمليات: '+d.count+'\nالتكلفة: '+fmt(d.totalCost)+' '+CURRENCY+'\n────────────────\n'+
+      d.staffRows.map(([n,x])=>n+': '+x.count+' عملية — '+fmt(x.cost)+' '+CURRENCY).join('\n')+'\n';
+    const html = `<html dir="rtl"><head><meta charset="UTF-8"><style>body{font-family:Cairo,Arial;padding:16px}table{width:100%;border-collapse:collapse}td,th{padding:6px;border:1px solid #ccc;text-align:right}</style></head><body>
+      <h2>تقرير الإتلاف</h2><div>${d.from} إلى ${d.to}</div>
+      <table><tr><th>الموظف</th><th>عدد العمليات</th><th>التكلفة</th></tr>
+      ${d.staffRows.map(([n,x])=>`<tr><td>${esc(n)}</td><td>${x.count}</td><td>${fmt(x.cost)}</td></tr>`).join('')}
+      </table><h3>الإجمالي: ${fmt(d.totalCost)} ${CURRENCY}</h3></body></html>`;
+    printRaw(text, html);
+  }
   function printWasteReceipt(ingId, qty, branchId, reason, note){
     const ing = INGR.find(x=>x.id===ingId);
     const br = BRANCHES.find(b=>b.id===branchId);
@@ -5279,10 +5514,11 @@ window.__lastEmpMealsData = null;
         ${INGR.map(i=>`<option value="${i.id}">${esc(i.name)} (${esc(i.unit)})</option>`).join('')}
       </select></div>
       <div class="fld"><label>الكمية المتلفة</label><input id="wf_qty" type="number" step="0.01" placeholder="مثال: 2.5"></div>
-      <div class="fld"><label>الفرع</label><select id="wf_branch">
-        <option value="">اختر الفرع...</option>
-        ${BRANCHES.map(b=>`<option value="${b.id}" ${ME.branch_id===b.id?'selected':''}>${esc(b.name_ar)}</option>`).join('')}
-      </select></div>
+      <div class="fld"><label>الفرع</label>
+        ${ME.branch_id ? `<input type="text" readonly value="${esc(BRANCHES.find(b=>b.id===ME.branch_id)?.name_ar||'')}" style="border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;width:100%;background:#f0f0f0">
+          <input type="hidden" id="wf_branch" value="${ME.branch_id}">`
+        : `<select id="wf_branch"><option value="">اختر الفرع...</option>${BRANCHES.map(b=>`<option value="${b.id}">${esc(b.name_ar)}</option>`).join('')}</select>`}
+      </div>
       <div class="fld"><label>سبب الإتلاف *</label><select id="wf_reason">
         <option>تلف/فساد</option><option>كسر</option><option>انتهاء صلاحية</option>
         <option>خطأ تحضير</option><option>سقط أرض</option><option>أخرى</option>
@@ -5355,6 +5591,16 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
       });
       const branchRows = Object.entries(byBranch).sort((a,b)=>b[1].cost-a[1].cost);
       window.__lastWasteData = { from, to, staffRows, branchRows, totalCost, count: WASTE_DATA.length };
+      setTimeout(()=>{
+        const btnHolder = document.querySelector('#wl_result');
+        if(btnHolder && isAdmin() && !document.getElementById('wl_print_btn')){
+          const btn = document.createElement('button');
+          btn.id = 'wl_print_btn'; btn.className='mini edit'; btn.style.cssText='width:100%;margin-top:10px';
+          btn.textContent = '🖨️ طباعة تقرير الإتلاف';
+          btn.onclick = printWasteReport;
+          btnHolder.appendChild(btn);
+        }
+      }, 50);
       R.innerHTML = `
         <div class="day-head" style="margin:10px 0">
           <div class="stat">عدد عمليات الإتلاف<b>${WASTE_DATA.length}</b></div>
@@ -5806,19 +6052,34 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
     const confirmTxt = document.getElementById('f_resetConfirm')?.value.trim();
     if(confirmTxt !== 'تصفير'){ toast('⚠️ اكتب "تصفير" بالضبط للتأكيد'); return; }
     if(!confirm('⚠️ تأكيد أخير: هذا سيمسح كل البيانات نهائيًا ولا يمكن التراجع. متابع؟')) return;
-    try {
+try {
       toast('⏳ جاري التصفير...');
-      await db.from('order_items').delete().neq('id','00000000-0000-0000-0000-000000000000');
-      await db.from('orders').delete().neq('id','00000000-0000-0000-0000-000000000000');
-      await db.from('purchase_items').delete().neq('id','00000000-0000-0000-0000-000000000000');
-      await db.from('purchases').delete().neq('id','00000000-0000-0000-0000-000000000000');
-      await db.from('expenses').delete().neq('id','00000000-0000-0000-0000-000000000000');
-      await db.from('cash_shifts').delete().neq('id','00000000-0000-0000-0000-000000000000');
-      await db.from('customers').delete().neq('id','00000000-0000-0000-0000-000000000000');
-      await db.from('stock_transfers').delete().neq('id','00000000-0000-0000-0000-000000000000');
-      await db.from('inventory_audits').delete().neq('id','00000000-0000-0000-0000-000000000000');
+      // ⚠️ ترتيب حرج: أي جدول فيه foreign key يشاور على orders لازم ينحذف قبل orders نفسها،
+      // وإلا الحذف بيفشل بصمت من قيود المفتاح الأجنبي وتضل الطلبات والعملاء موجودين رغم "نجاح" التصفير
+      const resetSteps = [
+        ['print_requests', db.from('print_requests').delete().neq('id','00000000-0000-0000-0000-000000000000')],
+        ['order_items', db.from('order_items').delete().neq('id','00000000-0000-0000-0000-000000000000')],
+        ['orders', db.from('orders').delete().neq('id','00000000-0000-0000-0000-000000000000')],
+        ['purchase_items', db.from('purchase_items').delete().neq('id','00000000-0000-0000-0000-000000000000')],
+        ['purchases', db.from('purchases').delete().neq('id','00000000-0000-0000-0000-000000000000')],
+        ['expenses', db.from('expenses').delete().neq('id','00000000-0000-0000-0000-000000000000')],
+        ['cash_shifts', db.from('cash_shifts').delete().neq('id','00000000-0000-0000-0000-000000000000')],
+        ['customers', db.from('customers').delete().neq('id','00000000-0000-0000-0000-000000000000')],
+        ['stock_transfers', db.from('stock_transfers').delete().neq('id','00000000-0000-0000-0000-000000000000')],
+        ['inventory_audits', db.from('inventory_audits').delete().neq('id','00000000-0000-0000-0000-000000000000')],
+        ['waste_log', db.from('waste_log').delete().neq('id','00000000-0000-0000-0000-000000000000')],
+      ];
+      const failures = [];
+      for(const [name, promise] of resetSteps){
+        const r = await promise;
+        if(r.error){ console.error('reset failed for', name, r.error); failures.push(name+': '+r.error.message); }
+      }
       await db.from('branch_inventory').update({stock:0}).neq('id','00000000-0000-0000-0000-000000000000');
-      await logActivity('full_reset', 'تصفير كامل للنظام بواسطة '+ME.full_name);
+      if(failures.length){
+        toast('⚠️ التصفير انتهى بس فيه أخطاء: '+failures.join(' | '));
+        console.error('RESET FAILURES:', failures);
+      }
+      await logActivity('full_reset', 'تصفير كامل للنظام بواسطة '+ME.full_name+(failures.length?' (بأخطاء: '+failures.join(', ')+')':''));
       // تصفير أي فلاتر تاريخ عالقة بالذاكرة (احتياطًا حتى مع إعادة التحميل)
       window.__dayFrom = null; window.__dayTo = null;
       window.__dashFrom = null; window.__dashTo = null;
@@ -5887,6 +6148,12 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
       if(old&&old.name_ar!==rec.name_ar) await db.from('menu_items').update({category:rec.name_ar}).eq('category',old.name_ar);
       closeModal(); toast('✓ انحفظ'); renderAdmin(); bootData();
     } catch(e) { console.error(e); }
+  }
+  async function deleteCat(id, name){
+    if(!confirm('حذف تصنيف "'+name+'" نهائيًا؟')) return;
+    const r = await db.from('categories').delete().eq('id',id);
+    if(r.error){ toast('✗ فشل الحذف: '+r.error.message); return; }
+    toast('✓ انحذف التصنيف'); renderAdmin(); bootData();
   }
   async function toggleCat(id,v){ try { const r=await db.from('categories').update({is_active:v}).eq('id',id); if(r.error){toast('✗ '+r.error.message);console.error(r.error);return;} toast(v?'✓ ظاهر':'✓ مخفي'); renderAdmin(); bootData(); } catch(e) { toast('✗ '+e.message); console.error(e); } }
   async function staffForm(id){
@@ -5964,6 +6231,12 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
       closeModal(); toast('✓ انحفظ'); renderAdmin();
     } catch(e) { console.error(e); }
   }
+  async function deleteStaff(id, name){
+    if(!confirm('حذف الموظف "'+name+'" نهائيًا؟ لو عنده طلبات/شيفتات سابقة، الحذف رح يفشل — استخدم "تعطيل/أرشفة" بهاي الحالة بدل الحذف.')) return;
+    const r = await db.from('staff').delete().eq('id',id);
+    if(r.error){ toast('✗ ما قدر يحذف — على الأغلب عندو سجل طلبات/شيفتات سابقة. استخدم "تعطيل/أرشفة" بدلها.'); return; }
+    toast('✓ انحذف الموظف'); renderAdmin();
+  }
   async function toggleStaff(id,v){ try { const r=await db.from('staff').update({is_active:v}).eq('id',id); if(r.error){toast('✗ '+r.error.message);console.error(r.error);return;} toast(v?'✓ مفعّل':'✓ معطّل'); renderAdmin(); } catch(e) { toast('✗ '+e.message); console.error(e); } }
   function branchForm(id){ const list=window.__ALLBR||BRANCHES; const b=list.find(x=>x.id===id)||{}; modal(`<h3>${id?'تعديل فرع':'فرع جديد'}</h3><div class="fld"><label>الاسم (عربي)</label><input id="f_bn" value="${esc(b.name_ar||'')}"></div><div class="fld"><label>العنوان</label><input id="f_be" value="${esc(b.address||'')}"></div><div class="m-act"><button class="save" onclick="saveBranch('${id||''}')">حفظ</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`); }
   async function saveBranch(id){
@@ -5976,6 +6249,12 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
       if(r.error){ toast('✗ '+(r.error.message||'فشل الحفظ')); console.error('saveBranch error:', r.error); return; }
       closeModal(); toast('✓ انحفظ'); renderAdmin(); bootData();
     } catch(e) { toast('✗ خطأ: '+e.message); console.error(e); }
+  }
+  async function deleteBranch(id, name){
+    if(!confirm('حذف فرع "'+name+'" نهائيًا؟ (لازم ما يكون عليه طلبات أو موظفين مرتبطين)')) return;
+    const r = await db.from('branches').delete().eq('id',id);
+    if(r.error){ toast('✗ فشل الحذف — على الأغلب فيه بيانات مرتبطة (طلبات/موظفين): '+r.error.message); return; }
+    toast('✓ انحذف الفرع'); renderAdmin(); bootData();
   }
   async function toggleBranch(id,v){
     try {
