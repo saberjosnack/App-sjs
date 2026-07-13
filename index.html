@@ -2406,12 +2406,13 @@
   }
 
   function triggerRawbtIntent(text){
-    // ⚠️ الإطار المخفي (iframe) ما بيوصل لـRawBT بمعظم الـWebViews (بعض إصدارات أندرويد
-    // ما بتلتقط intent:// جوا iframe إطلاقًا). الطريقة الأوثق: رابط <a> حقيقي بالصفحة
-    // الرئيسية نفسها (مش iframe) — الـWebViewClient بيعترضه قبل أي تنقّل فعلي يصير،
-    // فما في خطر عالصفحة، وبنفس الوقت أكتر احتمال يوصل فعليًا لـRawBT.
+    // ✅ الطريقة الرسمية الموثقة من RawBT: نرسل صورة PNG جاهزة (rawbt:data:image/png;base64,...)
+    // بدل نص خام أو ESC/POS يدوي — RawBT بيسوي التحويل والطباعة هو بنفسه، وبكذا نتجنب
+    // نهائيًا مشاكل ترميز العربي (RTL، الحروف المتصلة) يلي كانت تطلع فاضية أو مشوّهة.
     try{
-      const url = 'intent:' + encodeURIComponent(text) + '#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;';
+      const cv = receiptToCanvas(text); // نفس الرسم يلي بيطلع عربي صحيح 100%
+      const b64 = cv.toDataURL('image/png').split(',')[1]; // نص base64 بدون الجزء الأول (data:image/png;base64,)
+      const url = 'rawbt:data:image/png;base64,' + b64;
       const old = document.getElementById('rawbtLink');
       if (old) old.remove();
       const a = document.createElement('a');
@@ -2421,7 +2422,7 @@
       document.body.appendChild(a);
       a.click();
       setTimeout(()=>{ try{ a.remove(); }catch(e){} }, 3000);
-    }catch(e){ console.error('RawBT intent trigger failed:', e); }
+    }catch(e){ console.error('RawBT image trigger failed:', e); }
   }
   async function printSmart(ord, lines, t, cust) {
     const method = SETTINGS.printer_method || 'auto';
