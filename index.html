@@ -1165,6 +1165,7 @@
     setInterval(checkOverdue, 30000);
     setInterval(checkReadyAlerts, 30000);
     setInterval(checkAutoPrintQueue, 8000);
+    setInterval(checkPrintRequests, 8000);
     setTimeout(checkOverdue, 2000);
     setTimeout(checkReadyAlerts, 3000);
     setTimeout(updateHeldCount, 1500);
@@ -1548,21 +1549,35 @@
   /* ---- مراقبة "هل استلم الفرع الطلب فعليًا للطباعة" — تنبيه قوي للسنتر لو لأ ---- */
   const PRINT_WATCH_TIMEOUT_MS = 75000; // 75 ثانية (وقت كافي: فحص كل 8ث + وقت طباعة) قبل ما ننبّه
   function watchOrderPrintStatus(orderId, orderNumber, branchName){
+    // فحص أول (75 ثانية): هل الجهاز حتى التقط الطلب أصلاً؟ (auto_printed لسا false = مقفول/بدون نت)
     setTimeout(async ()=>{
       try{
-        const { data } = await db.from('orders').select('auto_printed').eq('id', orderId).maybeSingle();
+        const { data } = await db.from('orders').select('auto_printed, status').eq('id', orderId).maybeSingle();
         if(data && data.auto_printed === false){
-          // 75 ثانية مرت وجهاز الفرع لسا ما التقط الطلب — احتمال الجهاز مقفول/بدون نت/الطباعة التلقائية موقوفة
           showPrintFailAlert(orderNumber, branchName);
         }
       }catch(e){ console.error('watchOrderPrintStatus failed:', e); }
     }, PRINT_WATCH_TIMEOUT_MS);
+    // فحص ثاني (3 دقايق): auto_printed ممكن تصير true حتى لو الطباعة الفعلية ما نجحت
+    // (RawBT ما بيرجع تأكيد حقيقي) — لو الطلب ضل بحالة "جديد" بدون أي تفاعل من الفرع،
+    // هاد مؤشر أقوى بكثير إنه حدا لازم ينتبه فعليًا
+    setTimeout(async ()=>{
+      try{
+        const { data } = await db.from('orders').select('status').eq('id', orderId).maybeSingle();
+        if(data && data.status === 'new'){
+          showPrintFailAlert(orderNumber, branchName, true);
+        }
+      }catch(e){ console.error('watchOrderPrintStatus (2nd check) failed:', e); }
+    }, 180000); // 3 دقايق
   }
-  function showPrintFailAlert(orderNumber, branchName){
-    beep(4);
+  function showPrintFailAlert(orderNumber, branchName, isSecondCheck){
+    beepUrgentIncoming();
     const box = document.createElement('div');
     box.style.cssText = 'position:fixed;top:70px;left:50%;transform:translateX(-50%);background:var(--red);color:#fff;padding:16px 26px;border-radius:16px;font-weight:900;font-size:1.05rem;z-index:500;box-shadow:0 10px 30px rgba(0,0,0,.4);text-align:center;max-width:92vw';
-    box.innerHTML = '⚠️ الطلب #'+orderNumber+' ما انطبع بفرع "'+esc(branchName)+'"<br><span style="font-size:.9rem;font-weight:700">يرجى الاتصال بالفرع فورًا 📞</span>'
+    const msg = isSecondCheck
+      ? '⚠️ الطلب #'+orderNumber+' ضل "قيد التجهيز" 3 دقايق بفرع "'+esc(branchName)+'" بدون أي رد فعل!'
+      : '⚠️ الطلب #'+orderNumber+' ما انطبع بفرع "'+esc(branchName)+'"';
+    box.innerHTML = msg+'<br><span style="font-size:.9rem;font-weight:700">يرجى الاتصال بالفرع فورًا 📞</span>'
       + '<br><button onclick="this.closest(\'div\').remove()" style="margin-top:8px;background:rgba(255,255,255,.25);color:#fff;border-radius:8px;padding:5px 16px;font-weight:900">إغلاق</button>';
     document.body.appendChild(box);
     // يضل ظاهر 60 ثانية على الأقل (المستخدم ممكن يسكره يدوي أبكر لو بدو، بس ما بيختفي لحاله قبل هيك)
@@ -2956,18 +2971,60 @@
     const o = DAY.find(x=>x.id===id);
     if(!o) return;
     // نفس قاعدة الطباعة بالحفظ: نطبع محليًا بس لو هاد الجهاز/الحساب فعليًا بنفس فرع الطلب
-    // غير هيك (مدير/كول سنتر يشوف طلب فرع تاني) ما نفتح صفحة طباعة محلية عشوائية —
-    // نطلب من جهاز الفرع المستهدف يطبعها هو (بإعادة تصفيرها كـ "غير مطبوعة" ليلتقطها تلقائيًا)
     const isLocalBranch = (ME.branch_id||getDeviceBranchId()) === o.branch_id;
     if(!isLocalBranch){
-      if(!confirm('هاد الطلب لفرع "'+(BRANCHES.find(b=>b.id===o.branch_id)?.name_ar||'—')+'" — مش عندك.\nتريد ترسله يطبع هناك تلقائيًا (بدل ما يفتح صفحة طباعة هون)؟')) return;
-      db.from('orders').update({auto_printed:false}).eq('id',id).then(()=>{
-        toast('📨 انبعت لجهاز فرع '+(BRANCHES.find(b=>b.id===o.branch_id)?.name_ar||'—')+' ليطبعها');
-      });
+      const branchName = BRANCHES.find(b=>b.id===o.branch_id)?.name_ar||'—';
+      if(!confirm('هاد الطلب لفرع "'+branchName+'" — مش عندك.\nتريد ترسله يطبع هناك تلقائيًا (بدل ما يفتح صفحة طباعة هون)؟')) return;
+      requestRemotePrint(o.id, o.order_number, o.branch_id, branchName);
       return;
     }
     const cust = o.customers ? { name: o.customers.name, phone: o.customers.phone, addr: o.customers.address||'' } : null;
     printSmart(o, o.order_items||[], { sub: +o.subtotal, disc: +o.discount, del: +o.delivery_fee, total: +o.total }, cust);
+  }
+  // ⚠️ إصلاح حرج: إعادة تعيين auto_printed=false ما بتشتغل إلا للطلبات بحالة "new" فقط
+  // (لأن قائمة الطباعة التلقائية بتفلتر status='new'). أي طلب خلص/صار جاهز (الحالة الشائعة
+  // لإعادة الطباعة لاحقًا) كان يضيع بصمت تام. الحل: جدول طلبات طباعة منفصل، مستقل عن حالة الطلب.
+  async function requestRemotePrint(orderId, orderNumber, targetBranchId, branchName){
+    try{
+      const { error } = await db.from('print_requests').insert({
+        order_id: orderId, target_branch_id: targetBranchId,
+        requested_by: ME.full_name, fulfilled: false
+      });
+      if(error){ toast('✗ فشل إرسال طلب الطباعة: '+error.message); console.error(error); return; }
+      toast('📨 انبعت لجهاز فرع '+branchName+' ليطبعها');
+      watchOrderPrintStatus(orderId, orderNumber, branchName);
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
+  }
+  /* ---- فحص طلبات إعادة الطباعة البعيدة (مستقل تمامًا عن حالة الطلب) ---- */
+  const _printReqBusy = new Set();
+  async function checkPrintRequests(){
+    try{
+      if(!ME) return;
+      const scopeBranchId = ME.branch_id || getDeviceBranchId();
+      if(!scopeBranchId) return;
+      if(!SETTINGS.auto_print_branch) return;
+      const { data, error } = await db.from('print_requests')
+        .select('id, order_id, orders(*, order_items(*), customers(name,phone,address))')
+        .eq('target_branch_id', scopeBranchId)
+        .eq('fulfilled', false)
+        .order('created_at', {ascending:true})
+        .limit(5);
+      if(error || !data || !data.length) return;
+      for(const req of data){
+        if(_printReqBusy.has(req.id)) continue;
+        _printReqBusy.add(req.id);
+        try{
+          const { data: claimed } = await db.from('print_requests').update({fulfilled:true}).eq('id', req.id).eq('fulfilled', false).select('id');
+          if(!claimed || !claimed.length) continue; // جهاز تاني حجزه قبلنا
+          const o = req.orders;
+          if(!o) continue;
+          const cust = o.customers ? { name:o.customers.name, phone:o.customers.phone, addr:o.customers.address||'' } : null;
+          beepUrgentIncoming();
+          await printSmart(o, o.order_items||[], { sub:+o.subtotal, disc:+o.discount, del:+o.delivery_fee, total:+o.total }, cust);
+        } catch(e){ console.error('print request fulfill failed:', e); }
+        finally { _printReqBusy.delete(req.id); }
+      }
+    }catch(e){ console.error('checkPrintRequests failed:', e); }
   }
 
   async function cancelDay(id){
