@@ -339,7 +339,7 @@
     <div id="readyBadge" class="hidden" style="background:var(--warn);color:#fff;border-radius:999px;padding:4px 12px;font-weight:900;font-size:.85rem;animation:blink 1s infinite">📦 طلبات جاهزة!</div>
     <div class="who"><span id="whoName"></span><br><span id="whoBranch"></span></div>
     <button onclick="showDevicePrinterSettings()" style="background:var(--yellow);color:var(--maroon);border-radius:999px;padding:6px 14px;font-weight:900;margin-left:6px">🖨️ الطابعة</button>
-    <button onclick="openCallDirectory()" style="background:var(--ok);color:#fff;border-radius:999px;padding:6px 14px;font-weight:900;margin-left:6px">📞 اتصال <span id="onlineCountBadge"></span></button>
+    <button onclick="openChatDirectory()" style="background:var(--ok);color:#fff;border-radius:999px;padding:6px 14px;font-weight:900;margin-left:6px">💬 شات <span id="chatUnreadBadge"></span></button>
     <button onclick="checkForUpdate()" style="background:rgba(255,255,255,.2);color:#fff;border-radius:999px;padding:6px 14px;font-weight:900;margin-left:6px">🔄 تحقق من تحديث</button>
     <button id="btnLogout" onclick="window.logout()">خروج</button>
   </header>
@@ -580,6 +580,7 @@
         <button data-a="warehouse" onclick="admTab('warehouse')" style="background:#d9c8ff;border-color:#7b2cbf">🏬 المستودع</button>
         <button data-a="treasury" onclick="admTab('treasury')" style="background:#c8f7d4;border-color:#1a9c4b">💰 المصاري</button>
         <button data-a="hr" onclick="admTab('hr')" style="background:#ffe0c2;border-color:#e8890c">🧑‍💼 HR</button>
+        <button data-a="chats" onclick="admTab('chats')" style="background:#d0ecff;border-color:#0d6efd">💬 المحادثات</button>
         <button data-a="ingredients" onclick="admTab('ingredients')">🥩 المكونات</button>
         <button data-a="recipes" onclick="admTab('recipes')">📋 الوصفات</button>
         <button data-a="transfers" onclick="admTab('transfers')">🔄 نقل بضاعة</button>
@@ -1271,9 +1272,8 @@
     setTimeout(sendDeviceHeartbeat, 2000);
     setInterval(sendDeviceHeartbeat, 45000);
     setInterval(checkDevicesOffline, 60000);
-    initCallSignaling();
-    setTimeout(updateOnlineCount, 2500);
-    setInterval(updateOnlineCount, 30000);
+    checkUnreadMessages();
+    setInterval(checkUnreadMessages, 12000);
     checkShift();
     if (shiftCheckInterval) clearInterval(shiftCheckInterval);
     shiftCheckInterval = setInterval(checkShift, 30000);
@@ -4196,7 +4196,7 @@
   const ADMIN_TAB_PERM = {
     items:'items_manage', cats:'cats_manage', codes:'codes_manage', staff:'staff_manage', roles:'admin_only', branches:'branches_manage', sett:'settings_manage', devices:'devices_manage',
     ingredients:'inventory_view', recipes:'inventory_view',
-    inventory:'inventory_audit', transfers:'inventory_transfer', warehouse:'admin_only', treasury:'admin_only', hr:'admin_only',
+    inventory:'inventory_audit', transfers:'inventory_transfer', warehouse:'admin_only', treasury:'admin_only', hr:'admin_only', chats:'admin_only',
     expenses:'expenses_view', purchases:'purchases_view',
     platforms:'platforms_view', empmeals:'empmeals_view', topcust:'topcust_view', waste:'waste_log', suppliers:'purchases_view',
   };
@@ -4265,6 +4265,7 @@
     if(admView==='warehouse'){ renderWarehouse(); return; }
     if(admView==='treasury'){ renderTreasury(); return; }
     if(admView==='hr'){ renderHR(); return; }
+    if(admView==='chats'){ renderChatAdmin(); return; }
     if(admView==='platforms'){ renderPlatforms(); return; }
     if(admView==='devices'){ renderDevices(); return; }
     if(admView==='empmeals'){ renderEmpMeals(); return; }
@@ -4423,25 +4424,101 @@
   async function renderShiftAdjustments(){
     const box = document.getElementById('shAdjustments'); if(!box) return;
     try{
-      const { data, error } = await db.from('shift_adjustments').select('*').eq('status','pending').order('created_at',{ascending:false});
+      const { data, error } = await db.from('shift_adjustments').select('*').order('created_at',{ascending:false});
       if(error){ box.innerHTML = `<div class="alert-red" style="margin-bottom:12px">⚠️ ${esc(error.message||'الجدول shift_adjustments غير موجود — نفّذ SQL أولاً')}</div>`; return; }
-      const list = data||[];
-      if(!list.length){ box.innerHTML=''; return; }
-      box.innerHTML = `<div class="panel" style="margin-bottom:14px;border:2px solid var(--warn)">
-        <h4 style="color:var(--warn);margin-bottom:8px">⏳ تسويات بانتظار الموافقة (${list.length}) — كلها تُخصم من الموظف</h4>
-        <div class="tbl-wrap"><table class="tbl">
-          <tr><th>الموظف</th><th>التاريخ</th><th>المبلغ المخصوم</th><th>السبب</th><th></th></tr>
-          ${list.map(a=>`<tr>
-            <td><b>${esc(a.staff_name)}</b></td>
-            <td>${new Date(a.created_at).toLocaleString('ar-JO')}</td>
-            <td><b style="color:var(--red)">− ${fmt(Math.abs(a.amount))} ${CURRENCY}</b></td>
-            <td>${a.note==='عجز'?'🔻 عجز بالدرج':'🟡 زيادة بالدرج (تُخصم كمان — خطأ بالتحاسيب)'}</td>
-            <td><button class="mini ok" onclick="approveShiftAdjustment('${a.id}')">✅ موافقة على الخصم</button></td>
-          </tr>`).join('')}
-        </table></div>
-      </div>`;
+      const all = data||[];
+      const pending = all.filter(a=>a.status==='pending');
+      const approved = all.filter(a=>a.status==='approved');
+      let html = '';
+      if(pending.length){
+        html += `<div class="panel" style="margin-bottom:14px;border:2px solid var(--warn)">
+          <h4 style="color:var(--warn);margin-bottom:8px">⏳ تسويات بانتظار الموافقة (${pending.length}) — كلها تُخصم من الموظف</h4>
+          <div class="tbl-wrap"><table class="tbl">
+            <tr><th>الموظف</th><th>التاريخ</th><th>المبلغ المخصوم</th><th>السبب</th><th></th></tr>
+            ${pending.map(a=>`<tr>
+              <td><b>${esc(a.staff_name)}</b></td>
+              <td>${new Date(a.created_at).toLocaleString('ar-JO')}</td>
+              <td><b style="color:var(--red)">− ${fmt(Math.abs(a.amount))} ${CURRENCY}</b></td>
+              <td>${a.note==='عجز'?'🔻 عجز بالدرج':'🟡 زيادة بالدرج (تُخصم كمان — خطأ بالتحاسيب)'}</td>
+              <td><button class="mini ok" onclick="approveShiftAdjustment('${a.id}')">✅ موافقة على الخصم</button></td>
+            </tr>`).join('')}
+          </table></div>
+        </div>`;
+      }
+      if(approved.length){
+        const bySt = {};
+        approved.forEach(a=>{ if(!bySt[a.staff_name]) bySt[a.staff_name]={total:0,count:0,staffId:a.staff_id}; bySt[a.staff_name].total += Math.abs(a.amount); bySt[a.staff_name].count++; });
+        window.__SHIFT_ADJ_ALL = all;
+        html += `<div class="panel" style="margin-bottom:14px">
+          <h4 style="color:var(--maroon);margin-bottom:8px">📊 ملخص الخصومات المعتمدة (تراكمي — كل الفترة)</h4>
+          <div class="tbl-wrap"><table class="tbl">
+            <tr><th>الموظف</th><th>عدد المرات</th><th>إجمالي المخصوم عليه</th><th></th></tr>
+            ${Object.entries(bySt).map(([nm,d])=>`<tr><td><b>${esc(nm)}</b></td><td>${d.count}</td><td><b style="color:var(--red)">${fmt(d.total)} ${CURRENCY}</b></td><td><button class="mini ok" onclick="staffAccountStatement('${d.staffId}','${esc(nm)}')">📋 كشف الحساب</button></td></tr>`).join('')}
+          </table></div>
+          <details style="margin-top:8px"><summary style="cursor:pointer;font-weight:800;color:var(--muted)">📜 عرض كل الحركات المعتمدة بالتفصيل</summary>
+            <div class="tbl-wrap" style="margin-top:8px"><table class="tbl">
+              <tr><th>الموظف</th><th>التاريخ</th><th>المبلغ</th><th>وافق عليه</th><th>تاريخ الموافقة</th></tr>
+              ${approved.map(a=>`<tr><td>${esc(a.staff_name)}</td><td>${new Date(a.created_at).toLocaleDateString('ar-JO')}</td><td style="color:var(--red)">− ${fmt(Math.abs(a.amount))}</td><td>${esc(a.approved_by||'—')}</td><td>${a.approved_at?new Date(a.approved_at).toLocaleString('ar-JO'):'—'}</td></tr>`).join('')}
+            </table></div>
+          </details>
+        </div>`;
+      }
+      box.innerHTML = html;
     }catch(e){ box.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
   }
+  async function staffAccountStatement(staffId, staffName){
+    modal(`<h3>📋 كشف حساب — ${esc(staffName)}</h3><div id="staffStmtBody" class="empty-note">... جاري التحميل</div>`);
+    try{
+      const [adjRes, shiftsRes] = await Promise.all([
+        db.from('shift_adjustments').select('*').eq('staff_id', staffId).order('created_at',{ascending:false}),
+        db.from('cash_shifts').select('id, start_time, end_time, status').eq('staff_id', staffId).eq('status','closed').order('start_time',{ascending:false}).limit(50),
+      ]);
+      const body = document.getElementById('staffStmtBody'); if(!body) return;
+      const adj = adjRes.data||[];
+      const shifts = shiftsRes.data||[];
+      const pending = adj.filter(a=>a.status==='pending');
+      const approved = adj.filter(a=>a.status==='approved');
+      const totalApproved = approved.reduce((a,x)=>a+Math.abs(x.amount),0);
+      const totalPending = pending.reduce((a,x)=>a+Math.abs(x.amount),0);
+      body.innerHTML = `
+        <div style="background:#fff8e1;border-radius:10px;padding:10px 12px;margin-bottom:10px">
+          <div style="font-weight:800">إجمالي الخصومات المعتمدة: <span style="color:var(--red)">${fmt(totalApproved)} ${CURRENCY}</span></div>
+          ${totalPending>0?`<div style="font-weight:700;color:var(--warn);margin-top:4px">⏳ فيه ${fmt(totalPending)} ${CURRENCY} لسا بانتظار الموافقة</div>`:''}
+          <div style="font-weight:700;color:var(--muted);margin-top:4px">عدد الشيفتات المغلقة (آخر 50): ${shifts.length}</div>
+        </div>
+        <div style="font-weight:900;color:var(--maroon);margin-bottom:6px">💰 كل حركات الخصم (عجز/زيادة)</div>
+        <div class="tbl-wrap"><table class="tbl">
+          <tr><th>التاريخ</th><th>المبلغ</th><th>السبب</th><th>الحالة</th></tr>
+          ${adj.map(a=>`<tr>
+            <td>${new Date(a.created_at).toLocaleString('ar-JO')}</td>
+            <td><b style="color:var(--red)">− ${fmt(Math.abs(a.amount))}</b></td>
+            <td>${esc(a.note||'—')}</td>
+            <td>${a.status==='approved'?'<b style="color:var(--ok)">✅ معتمد</b>':'<b style="color:var(--warn)">⏳ بالانتظار</b>'}</td>
+          </tr>`).join('')||'<tr><td colspan="4" class="empty-note">ما في خصومات مسجلة</td></tr>'}
+        </table></div>
+        <div class="m-act">
+          <button class="save" onclick="printStaffStatementPDF('${staffId}','${esc(staffName)}')">📄 طباعة كشف PDF</button>
+          <button class="cancel" onclick="closeModal()">إغلاق</button>
+        </div>`;
+      window.__staffStmtData = { staffName, adj, shifts, totalApproved, totalPending };
+    }catch(e){ const body=document.getElementById('staffStmtBody'); if(body) body.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
+  }
+  function printStaffStatementPDF(staffId, staffName){
+    const d = window.__staffStmtData; if(!d) return;
+    const html = `<html dir="rtl"><head><meta charset="UTF-8">
+      <style>body{font-family:Cairo,Arial;padding:28px}h1{color:#4a1010}table{width:100%;border-collapse:collapse;margin-top:14px}td,th{padding:8px 10px;border:1px solid #eadfd4;text-align:right;font-size:.85rem}th{background:#FFF8EE}.tot{font-weight:900;color:#F60100}@media print{.no-print{display:none}}</style>
+      </head><body>
+      <button class="no-print" onclick="window.print()" style="margin-bottom:16px;background:#4a1010;color:#FDE507;border:none;border-radius:10px;padding:10px 20px;font-weight:800;cursor:pointer">🖨️ طباعة / حفظ PDF</button>
+      <h1>📋 كشف حساب — ${esc(d.staffName)}</h1>
+      <div>تاريخ الطباعة: ${new Date().toLocaleString('ar-JO')}</div>
+      <h2>إجمالي الخصومات المعتمدة: <span class="tot">${fmt(d.totalApproved)} ${CURRENCY}</span></h2>
+      <table><tr><th>التاريخ</th><th>المبلغ</th><th>السبب</th><th>الحالة</th></tr>
+      ${d.adj.map(a=>`<tr><td>${new Date(a.created_at).toLocaleString('ar-JO')}</td><td>${fmt(Math.abs(a.amount))}</td><td>${esc(a.note||'—')}</td><td>${a.status==='approved'?'معتمد':'بالانتظار'}</td></tr>`).join('')}
+      </table></body></html>`;
+    const win = window.open('','_blank');
+    win.document.write(html); win.document.close();
+  }
+
   async function approveShiftAdjustment(id){
     if(!isAdmin()){ toast('⛔ صلاحية المالك فقط'); return; }
     if(!confirm('تأكيد الموافقة على هاد التسوية؟')) return;
@@ -5854,7 +5931,7 @@
       HR_FILTER.from = d.toISOString().split('T')[0];
       HR_FILTER.to = new Date().toISOString().split('T')[0];
     }
-    const [empRes, attRes, advRes, ordRes] = await Promise.all([
+    const [empRes, attRes, advRes, ordRes, shiftAdjRes] = await Promise.all([
       db.from('meal_names').select('*').eq('is_active', true).order('name'),
       db.from('hr_attendance').select('employee_id, work_date, hours')
         .gte('work_date', HR_FILTER.from).lte('work_date', HR_FILTER.to),
@@ -5862,6 +5939,9 @@
         .gte('created_at', HR_FILTER.from+'T00:00:00').lte('created_at', HR_FILTER.to+'T23:59:59'),
       db.from('orders').select('employee_tab_name, total, status')
         .not('employee_tab_name','is',null)
+        .gte('created_at', HR_FILTER.from+'T00:00:00').lte('created_at', HR_FILTER.to+'T23:59:59'),
+      db.from('shift_adjustments').select('staff_name, amount, status, created_at')
+        .eq('status','approved')
         .gte('created_at', HR_FILTER.from+'T00:00:00').lte('created_at', HR_FILTER.to+'T23:59:59'),
     ]);
     if(empRes.error){
@@ -5876,6 +5956,9 @@
     const attendance = attRes.data||[];
     const advances = advRes.data||[];
     const mealOrders = (ordRes.data||[]).filter(o=>o.status!=='cancelled');
+    // 🔗 خصومات الشيفتات (عجز/زيادة) بتتربط بموظف HR إذا كان اسمه مطابق تمامًا لاسم موظف تسجيل الدخول
+    // (يعني نفس الشخص كاشير ومسجّل بـHR كمان بنفس الاسم بالضبط)
+    const shiftAdjustments = shiftAdjRes.data||[];
 
     const rows = empList.map(e=>{
       const myAtt = attendance.filter(a=>a.employee_id===e.id);
@@ -5885,9 +5968,11 @@
       const myMeals = mealOrders.filter(o=>o.employee_tab_name===e.name);
       const mealsCount = myMeals.length;
       const mealsTotal = myMeals.reduce((a,o)=>a+parseFloat(o.total||0),0);
+      const myShiftAdj = shiftAdjustments.filter(a=>a.staff_name===e.name);
+      const shiftDeduction = myShiftAdj.reduce((a,x)=>a+Math.abs(x.amount||0),0);
       const gross = hours * (e.hourly_wage||0);
-      const net = gross - advTotal - mealsTotal;
-      return { emp:e, hours, days, advTotal, mealsCount, mealsTotal, gross, net };
+      const net = gross - advTotal - mealsTotal - shiftDeduction;
+      return { emp:e, hours, days, advTotal, mealsCount, mealsTotal, shiftDeduction, gross, net };
     });
     const totalNet = rows.reduce((a,r)=>a+r.net,0);
 
@@ -5907,7 +5992,7 @@
       <div class="panel">
         <div style="margin-bottom:10px;font-weight:800">إجمالي صافي المستحق بالفترة: <span style="color:var(--red)">${fmt(totalNet)} ${CURRENCY}</span></div>
         <div class="tbl-wrap"><table class="tbl">
-          <tr><th>الموظف</th><th>سعر الساعة</th><th>ساعات العمل</th><th>أيام الحضور</th><th>الوجبات</th><th>قيمة الوجبات</th><th>السلف</th><th>صافي المستحق</th><th></th></tr>
+          <tr><th>الموظف</th><th>سعر الساعة</th><th>ساعات العمل</th><th>أيام الحضور</th><th>الوجبات</th><th>قيمة الوجبات</th><th>السلف</th><th>خصم الشيفتات</th><th>صافي المستحق</th><th></th></tr>
           ${rows.map(r=>`<tr>
             <td><b>${esc(r.emp.name)}</b></td>
             <td>${fmt(r.emp.hourly_wage||0)}</td>
@@ -5916,6 +6001,7 @@
             <td>${r.mealsCount}</td>
             <td>${r.mealsTotal>0?`<b style="color:var(--warn)">${fmt(r.mealsTotal)}</b>`:'—'}</td>
             <td>${r.advTotal>0?`<b style="color:var(--warn)">${fmt(r.advTotal)}</b>`:'—'}</td>
+            <td>${r.shiftDeduction>0?`<b style="color:var(--red)">${fmt(r.shiftDeduction)}</b>`:'—'}</td>
             <td><b style="color:${r.net<0?'var(--red)':'var(--ok)'}">${fmt(r.net)} ${CURRENCY}</b></td>
             <td style="white-space:nowrap">
               <button class="mini edit" onclick="mealNameForm('${r.emp.id}')">✏️ تعديل</button>
@@ -5924,7 +6010,7 @@
               <button class="mini tog" onclick="hrStatement('${r.emp.id}')">📋 كشف</button>
               <button class="mini ok" style="background:var(--maroon)" onclick="printHrEmployeePDF('${r.emp.id}')">📄 طباعة كشف</button>
             </td>
-          </tr>`).join('')||'<tr><td colspan="9" class="empty-note">ما في موظفي HR بعد — ضيف واحد من الزر فوق</td></tr>'}
+          </tr>`).join('')||'<tr><td colspan="10" class="empty-note">ما في موظفي HR بعد — ضيف واحد من الزر فوق</td></tr>'}
         </table></div>
       </div>`;
     window.__HR_ROWS = rows;
@@ -5968,6 +6054,7 @@
         <tr><td>عدد الوجبات المسحوبة</td><td><b>${r.mealsCount}</b></td></tr>
         <tr><td>قيمة الوجبات (تُخصم من الراتب)</td><td><b style="color:var(--warn)">${fmt(r.mealsTotal)} ${CURRENCY}</b></td></tr>
         <tr><td>مجموع السلف المسحوبة بالفترة</td><td><b style="color:var(--warn)">${fmt(r.advTotal)} ${CURRENCY}</b></td></tr>
+        <tr><td>خصم عجز/زيادة الشيفتات (معتمد)</td><td><b style="color:var(--red)">${fmt(r.shiftDeduction)} ${CURRENCY}</b></td></tr>
         <tr><td><b>صافي المستحق له</b></td><td><b style="color:${r.net<0?'var(--red)':'var(--ok)'}">${fmt(r.net)} ${CURRENCY}</b></td></tr>
       </table></div>
       <div class="m-act">
@@ -5979,15 +6066,17 @@
   async function printHrEmployeePDF(empId){
     const r = (window.__HR_ROWS||[]).find(x=>x.emp.id===empId); if(!r) return;
     // جلب تفصيل الحضور والوجبات والسلف لهاد الموظف بالفترة المحددة
-    const [attRes, advRes, ordRes] = await Promise.all([
+    const [attRes, advRes, ordRes, shiftAdjRes] = await Promise.all([
       db.from('hr_attendance').select('work_date, hours, note').eq('employee_id', empId)
         .gte('work_date', HR_FILTER.from).lte('work_date', HR_FILTER.to).order('work_date'),
       db.from('hr_advances').select('created_at, amount, account, note, status').eq('employee_id', empId)
         .gte('created_at', HR_FILTER.from+'T00:00:00').lte('created_at', HR_FILTER.to+'T23:59:59').order('created_at'),
       db.from('orders').select('created_at, order_number, total').eq('employee_tab_name', r.emp.name).neq('status','cancelled')
         .gte('created_at', HR_FILTER.from+'T00:00:00').lte('created_at', HR_FILTER.to+'T23:59:59').order('created_at'),
+      db.from('shift_adjustments').select('created_at, amount, note').eq('staff_name', r.emp.name).eq('status','approved')
+        .gte('created_at', HR_FILTER.from+'T00:00:00').lte('created_at', HR_FILTER.to+'T23:59:59').order('created_at'),
     ]);
-    const att = attRes.data||[], adv = advRes.data||[], meals = ordRes.data||[];
+    const att = attRes.data||[], adv = advRes.data||[], meals = ordRes.data||[], shiftAdj = shiftAdjRes.data||[];
     const html = `<html dir="rtl"><head><meta charset="UTF-8">
       <style>
         body{font-family:Cairo,Arial;padding:28px;color:#241414}
@@ -6011,6 +6100,7 @@
         <tr><td>إجمالي الراتب (قبل الخصومات)</td><td><b>${fmt(r.gross)} ${CURRENCY}</b></td></tr>
         <tr><td>قيمة الوجبات المخصومة</td><td><b>${fmt(r.mealsTotal)} ${CURRENCY}</b></td></tr>
         <tr><td>السلف المخصومة</td><td><b>${fmt(r.advTotal)} ${CURRENCY}</b></td></tr>
+        <tr><td>خصم عجز/زيادة الشيفتات</td><td><b>${fmt(r.shiftDeduction)} ${CURRENCY}</b></td></tr>
         <tr><td><b>صافي المستحق له</b></td><td><b class="tot">${fmt(r.net)} ${CURRENCY}</b></td></tr>
       </table>
 
@@ -6028,6 +6118,11 @@
       <table><tr><th>التاريخ</th><th>المبلغ</th><th>من</th><th>الحالة</th><th>ملاحظة</th></tr>
       ${adv.map(a=>`<tr><td>${new Date(a.created_at).toLocaleDateString('ar-JO')}</td><td>${fmt(a.amount)}</td><td>${a.account==='cash'?'كاش':'بنك'}</td><td>${a.status==='open'?'قائمة':'متسددة'}</td><td>${esc(a.note||'—')}</td></tr>`).join('')||'<tr><td colspan="5">لا شي</td></tr>'}
       </table>
+
+      <h2>🔻 تفصيل خصومات الشيفتات (${shiftAdj.length})</h2>
+      <table><tr><th>التاريخ</th><th>المبلغ</th><th>السبب</th></tr>
+      ${shiftAdj.map(a=>`<tr><td>${new Date(a.created_at).toLocaleDateString('ar-JO')}</td><td>${fmt(Math.abs(a.amount))}</td><td>${esc(a.note||'—')}</td></tr>`).join('')||'<tr><td colspan="3">لا شي</td></tr>'}
+      </table>
       </body></html>`;
     const win = window.open('','_blank');
     win.document.write(html); win.document.close();
@@ -6041,8 +6136,8 @@
       <button class="no-print" onclick="window.print()" style="margin-bottom:16px;background:#4a1010;color:#FDE507;border:none;border-radius:10px;padding:10px 20px;font-weight:800;cursor:pointer">🖨️ طباعة / حفظ PDF</button>
       <h1>🧑‍💼 تقرير HR — Saber Jo Snack</h1>
       <div>الفترة: ${HR_FILTER.from} → ${HR_FILTER.to}</div>
-      <table><tr><th>الموظف</th><th>سعر الساعة</th><th>ساعات العمل</th><th>أيام الحضور</th><th>الوجبات</th><th>قيمة الوجبات</th><th>السلف</th><th>صافي المستحق</th></tr>
-      ${rows.map(r=>`<tr><td>${esc(r.emp.name)}</td><td>${fmt(r.emp.hourly_wage||0)}</td><td>${r.hours.toFixed(1)}</td><td>${r.days}</td><td>${r.mealsCount}</td><td>${fmt(r.mealsTotal)}</td><td>${fmt(r.advTotal)}</td><td>${fmt(r.net)}</td></tr>`).join('')}
+      <table><tr><th>الموظف</th><th>سعر الساعة</th><th>ساعات العمل</th><th>أيام الحضور</th><th>الوجبات</th><th>قيمة الوجبات</th><th>السلف</th><th>خصم الشيفتات</th><th>صافي المستحق</th></tr>
+      ${rows.map(r=>`<tr><td>${esc(r.emp.name)}</td><td>${fmt(r.emp.hourly_wage||0)}</td><td>${r.hours.toFixed(1)}</td><td>${r.days}</td><td>${r.mealsCount}</td><td>${fmt(r.mealsTotal)}</td><td>${fmt(r.advTotal)}</td><td>${fmt(r.shiftDeduction)}</td><td>${fmt(r.net)}</td></tr>`).join('')}
       </table>
       <h2>إجمالي صافي المستحق: <span class="tot">${fmt(totalNet)} ${CURRENCY}</span></h2>
       </body></html>`;
@@ -7925,283 +8020,155 @@ try {
     }
   }
 
-  /* ================= 📞 اتصال صوتي بين الموظفين (WebRTC + Supabase Realtime) ================= */
-  // ملاحظات استقرار:
-  // - كل جهاز بيشترك بقناة خاصة فيه (call-<id>) عشان يستقبل الإشارات (offer/answer/ice/hangup...)
-  // - الصوت نفسه مباشر بين الجهازين (WebRTC P2P) — مش عن طريق Supabase، فبيشتغل بسلاسة لو الشبكة كويسة
-  // - كل الأحداث (قبول/رفض/انقطاع/مشغول) بتسكّر المكالمة صح من الطرفين — ما في حالة "علقانة"
-  // - أكتر من STUN سيرفر عشان يزيد فرصة نجاح الاتصال المباشر
-  const ICE_SERVERS = [
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:stun.cloudflare.com:3478' },
-  ];
-  let CALL_STATE = null;      // {pc, localStream, remoteAudio, targetId, targetName, role, status, pendingIce}
-  let PENDING_OFFER = null;   // مكالمة واردة بانتظار قبول/رفض
-  let callTimerInterval = null, ringInterval = null, ringTimeout = null;
-  let __callChannel = null;
+  /* ================= 💬 شات بين الموظفين (نصي — موثوق 100%، محفوظ بقاعدة البيانات) ================= */
+  // بدل الاتصال الصوتي: رسائل نصية بسيطة بتتخزن مباشرة بقاعدة البيانات (staff_messages)
+  // ما في تعقيد P2P ولا مشاكل شبكات — أي رسالة تنبعث بتوصل أكيد لأنها سطر بجدول، مش إشارة لحظية بتضيع
+  let CHAT_POLL_TIMER = null;
+  let CHAT_ACTIVE_WITH = null; // {id, name} — المحادثة المفتوحة حاليًا
 
-  function initCallSignaling(){
+  async function checkUnreadMessages(){
     try{
-      if(__callChannel){ try{ db.removeChannel(__callChannel); }catch(e){} }
-      __callChannel = db.channel('call-'+ME.id, { config: { broadcast: { self: false } } });
-      __callChannel.on('broadcast', {event:'signal'}, ({payload}) => handleCallSignal(payload));
-      __callChannel.subscribe();
-    }catch(e){ console.error('initCallSignaling failed:', e); }
+      const { count, error } = await db.from('staff_messages').select('*', {count:'exact', head:true}).eq('to_id', ME.id).is('read_at', null);
+      if(error){ console.error('checkUnreadMessages failed:', error); return; }
+      const badge = document.getElementById('chatUnreadBadge');
+      if(badge) badge.textContent = count ? '('+count+')' : '';
+    }catch(e){ console.error('checkUnreadMessages failed:', e); }
   }
 
-  async function sendCallSignal(targetId, payload){
-    try{
-      const ch = db.channel('call-'+targetId, { config: { broadcast: { self: false } } });
-      await new Promise((resolve)=>{
-        ch.subscribe((status)=>{ if(status==='SUBSCRIBED') resolve(); });
-        setTimeout(resolve, 1500); // ما نعلق لو ما اشترك بسرعة
-      });
-      await ch.send({ type:'broadcast', event:'signal', payload });
-      setTimeout(()=>{ try{ db.removeChannel(ch); }catch(e){} }, 2000);
-    }catch(e){ console.error('sendCallSignal failed:', e); }
-  }
-
-  async function updateOnlineCount(){
-    try{
-      const cutoff = new Date(Date.now()-90000).toISOString();
-      const { data, error } = await db.from('devices').select('staff_id, staff_name, branch_id, last_seen').gte('last_seen', cutoff).not('staff_id','is',null);
-      if(error){ window.__callDirError = error.message; console.error('updateOnlineCount failed:', error); return; }
-      window.__callDirError = null;
-      const map = {};
-      (data||[]).forEach(d=>{ if(d.staff_id) map[d.staff_id] = d; }); // آخر جهاز لكل موظف
-      ONLINE_STAFF = Object.values(map).filter(d=>d.staff_id!==ME.id);
-      const badge = document.getElementById('onlineCountBadge');
-      if(badge) badge.textContent = ONLINE_STAFF.length ? '('+ONLINE_STAFF.length+')' : '';
-    }catch(e){ window.__callDirError = e.message; console.error('updateOnlineCount failed:', e); }
-  }
-
-  async function openCallDirectory(){
-    await updateOnlineCount();
+  async function openChatDirectory(){
+    const { data: staffList } = await db.from('staff').select('id, full_name, branch_id').eq('is_active', true).order('full_name');
+    const others = (staffList||[]).filter(s=>s.id!==ME.id);
+    const { data: unreadRows } = await db.from('staff_messages').select('from_id').eq('to_id', ME.id).is('read_at', null);
+    const unreadCount = {};
+    (unreadRows||[]).forEach(m=>{ unreadCount[m.from_id] = (unreadCount[m.from_id]||0)+1; });
     const branchName = id => BRANCHES.find(b=>b.id===id)?.name_ar || 'بدون فرع';
-    modal(`<h3>📞 اتصال بموظف</h3>
-      <div style="color:var(--muted);font-weight:700;font-size:.82rem;margin-bottom:10px">قائمة الموظفين المتصلين بالنظام حاليًا (بأي فرع) — اتصال صوتي مباشر ثنائي الاتجاه.</div>
-      ${window.__callDirError ? `<div class="alert-red" style="margin-bottom:10px">⚠️ تعذّر جلب قائمة المتاحين: ${esc(window.__callDirError)}<br>غالبًا ناقص عمود بجدول devices — نفّذ SQL الإصلاح (fix_devices_presence.sql).</div>` : ''}
+    modal(`<h3>💬 شات الموظفين</h3>
+      <div style="color:var(--muted);font-weight:700;font-size:.82rem;margin-bottom:10px">اختر موظف لتبدأ محادثة نصية معه (بتوصله حتى لو مش داخل حاليًا).</div>
       <div class="tbl-wrap"><table class="tbl">
         <tr><th>الموظف</th><th>الفرع</th><th></th></tr>
-        ${ONLINE_STAFF.map(d=>`<tr>
-          <td><b>🟢 ${esc(d.staff_name||'—')}</b></td>
-          <td>${esc(branchName(d.branch_id))}</td>
-          <td><button class="mini ok" onclick="closeModal();callEmployee('${d.staff_id}','${esc(d.staff_name||'')}')">📞 اتصال</button></td>
-        </tr>`).join('')||'<tr><td colspan="3" class="empty-note">ما في موظفين متاحين هلأ</td></tr>'}
+        ${others.map(s=>`<tr>
+          <td><b>${esc(s.full_name)}</b>${unreadCount[s.id]?` <span style="background:var(--red);color:#fff;border-radius:999px;padding:2px 8px;font-size:.75rem;font-weight:900">${unreadCount[s.id]} جديدة</span>`:''}</td>
+          <td>${esc(branchName(s.branch_id))}</td>
+          <td><button class="mini ok" onclick="openChatConversation('${s.id}','${esc(s.full_name)}')">💬 فتح المحادثة</button></td>
+        </tr>`).join('')||'<tr><td colspan="3" class="empty-note">ما في موظفين تانيين</td></tr>'}
       </table></div>
       <div class="m-act"><button class="cancel" onclick="closeModal()">إغلاق</button></div>`);
   }
 
-  function cleanupCall(){
-    if(callTimerInterval){ clearInterval(callTimerInterval); callTimerInterval=null; }
-    if(ringInterval){ clearInterval(ringInterval); ringInterval=null; }
-    if(ringTimeout){ clearTimeout(ringTimeout); ringTimeout=null; }
-    if(CALL_STATE){
-      try{ CALL_STATE.pc?.close(); }catch(e){}
-      try{ CALL_STATE.localStream?.getTracks().forEach(t=>t.stop()); }catch(e){}
-      try{ if(CALL_STATE.remoteAudio){ CALL_STATE.remoteAudio.pause(); CALL_STATE.remoteAudio.srcObject=null; CALL_STATE.remoteAudio.remove(); } }catch(e){}
-    }
-    CALL_STATE = null;
-    PENDING_OFFER = null;
-    document.getElementById('callBar')?.remove();
-    document.getElementById('incomingCallBox')?.remove();
+  async function openChatConversation(staffId, staffName){
+    CHAT_ACTIVE_WITH = { id: staffId, name: staffName };
+    modal(`<h3>💬 ${esc(staffName)}</h3>
+      <div id="chatMsgs" style="max-height:340px;overflow-y:auto;background:#f7f2ea;border-radius:12px;padding:10px;margin-bottom:10px;display:flex;flex-direction:column;gap:6px"></div>
+      <div style="display:flex;gap:8px">
+        <input id="chatInput" placeholder="اكتب رسالة..." style="flex:1;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px" onkeydown="if(event.key==='Enter')sendChatMessage()">
+        <button class="mini ok" onclick="sendChatMessage()">إرسال ↩</button>
+      </div>
+      <div class="m-act"><button class="cancel" onclick="closeChatConversation()">إغلاق</button></div>`);
+    await loadChatMessages();
+    if(CHAT_POLL_TIMER) clearInterval(CHAT_POLL_TIMER);
+    CHAT_POLL_TIMER = setInterval(loadChatMessages, 4000);
   }
 
-  function setupPeerConnection(pc, remoteTargetIdGetter){
-    // 🔊 مهم للاستقرار الثنائي: أي مسار صوتي واصل من الطرف التاني بيتشغّل فورًا،
-    // ولو الأوتوبلاي انحظر من المتصفح، منجرب نشغّله يدويًا ومنوريك تنبيه بسيط
-    const remoteAudio = document.createElement('audio');
-    remoteAudio.autoplay = true;
-    remoteAudio.setAttribute('playsinline','');
-    document.body.appendChild(remoteAudio);
-    pc.ontrack = e => {
-      remoteAudio.srcObject = e.streams[0];
-      remoteAudio.play().catch(()=>{
-        toast('🔊 دوس أي مكان بالشاشة عشان يشتغل صوت المكالمة');
-        const enableOnce = ()=>{ remoteAudio.play().catch(()=>{}); document.removeEventListener('click', enableOnce); };
-        document.addEventListener('click', enableOnce, {once:true});
+  function closeChatConversation(){
+    if(CHAT_POLL_TIMER){ clearInterval(CHAT_POLL_TIMER); CHAT_POLL_TIMER=null; }
+    CHAT_ACTIVE_WITH = null;
+    closeModal();
+    checkUnreadMessages();
+  }
+
+  async function loadChatMessages(){
+    if(!CHAT_ACTIVE_WITH) return;
+    const box = document.getElementById('chatMsgs');
+    if(!box){ if(CHAT_POLL_TIMER){ clearInterval(CHAT_POLL_TIMER); CHAT_POLL_TIMER=null; } return; }
+    try{
+      const otherId = CHAT_ACTIVE_WITH.id;
+      const { data, error } = await db.from('staff_messages').select('*')
+        .or(`and(from_id.eq.${ME.id},to_id.eq.${otherId}),and(from_id.eq.${otherId},to_id.eq.${ME.id})`)
+        .order('created_at', {ascending:true}).limit(200);
+      if(error){ box.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message||'الجدول staff_messages غير موجود — نفّذ SQL أولاً')}</div>`; return; }
+      const list = data||[];
+      const wasNearBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 40;
+      box.innerHTML = list.map(m=>{
+        const mine = m.from_id===ME.id;
+        return `<div style="align-self:${mine?'flex-end':'flex-start'};max-width:78%">
+          <div style="background:${mine?'var(--maroon)':'#fff'};color:${mine?'#fff':'#241414'};border:1px solid ${mine?'var(--maroon)':'var(--line)'};border-radius:14px;padding:8px 12px;font-weight:700">${esc(m.body)}</div>
+          <div style="font-size:.68rem;color:var(--muted);margin-top:2px;text-align:${mine?'left':'right'}">${new Date(m.created_at).toLocaleTimeString('ar-JO',{hour:'2-digit',minute:'2-digit'})}</div>
+        </div>`;
+      }).join('') || '<div class="empty-note">ابدأ المحادثة 👋</div>';
+      if(wasNearBottom) box.scrollTop = box.scrollHeight;
+      // علّم رسائل الطرف التاني كمقروءة
+      const unreadIds = list.filter(m=>m.to_id===ME.id && !m.read_at).map(m=>m.id);
+      if(unreadIds.length){
+        await db.from('staff_messages').update({ read_at: new Date().toISOString() }).in('id', unreadIds);
+        checkUnreadMessages();
+      }
+    }catch(e){ console.error('loadChatMessages failed:', e); }
+  }
+
+  async function sendChatMessage(){
+    if(!CHAT_ACTIVE_WITH) return;
+    const input = document.getElementById('chatInput');
+    const body = input?.value.trim();
+    if(!body) return;
+    input.value = '';
+    try{
+      const { error } = await db.from('staff_messages').insert({
+        from_id: ME.id, from_name: ME.full_name, to_id: CHAT_ACTIVE_WITH.id, to_name: CHAT_ACTIVE_WITH.name, body
       });
-    };
-    pc.onconnectionstatechange = () => {
-      console.log('call connectionState:', pc.connectionState);
-      if(['failed','disconnected','closed'].includes(pc.connectionState) && CALL_STATE?.status==='connected'){
-        toast('📞 انقطعت المكالمة'); cleanupCall();
-      }
-    };
-    pc.oniceconnectionstatechange = () => {
-      if(pc.iceConnectionState==='failed'){
-        toast('⚠️ فشل الاتصال المباشر — الشبكة عند حد الطرفين ممكن تكون تمنع الاتصال المباشر (شبكة جامعة/مؤسسة)');
-      }
-    };
-    return remoteAudio;
+      if(error){ toast('✗ فشل إرسال الرسالة: '+error.message); console.error(error); return; }
+      await loadChatMessages();
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
 
-  async function callEmployee(targetId, targetName){
-    if(CALL_STATE){ toast('⚠️ في مكالمة شغالة أصلًا'); return; }
+  /* ---- شاشة مراقبة المحادثات — للمالك بس ---- */
+  async function renderChatAdmin(){
+    const C = document.getElementById('admContent');
+    C.innerHTML = '<div class="empty-note">... جاري التحميل</div>';
     try{
-      const stream = await navigator.mediaDevices.getUserMedia({audio:true});
-      const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
-      stream.getTracks().forEach(t=>pc.addTrack(t, stream));
-      const remoteAudio = setupPeerConnection(pc);
-      pc.onicecandidate = e => { if(e.candidate) sendCallSignal(targetId, {action:'ice', from:ME.id, candidate:e.candidate}); };
-      CALL_STATE = { pc, localStream:stream, remoteAudio, targetId, targetName, role:'caller', status:'calling', pendingIce:[] };
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      await sendCallSignal(targetId, { action:'offer', from:ME.id, fromName:ME.full_name, sdp:offer });
-      showCallBar('calling');
-      ringTimeout = setTimeout(()=>{
-        if(CALL_STATE && CALL_STATE.status==='calling' && CALL_STATE.targetId===targetId){
-          sendCallSignal(targetId, {action:'cancel', from:ME.id});
-          toast('📞 ما في رد'); cleanupCall();
-        }
-      }, 30000);
-    }catch(e){
-      console.error('callEmployee failed:', e);
-      if(e.name==='NotAllowedError') toast('⛔ لازم تسمح للمتصفح باستخدام المايكروفون');
-      else toast('✗ فشل بدء المكالمة: '+(e.message||''));
-      cleanupCall();
-    }
-  }
-
-  function handleCallSignal(payload){
-    try{
-      const { action, from, fromName, sdp, candidate } = payload;
-      if(action==='offer'){
-        if(CALL_STATE){ sendCallSignal(from, {action:'busy', from:ME.id}); return; } // مشغول بمكالمة تانية
-        PENDING_OFFER = { from, fromName, sdp };
-        showIncomingCall(fromName);
-        return;
-      }
-      if(action==='answer'){
-        if(CALL_STATE && CALL_STATE.role==='caller' && CALL_STATE.status==='calling'){
-          if(ringTimeout){ clearTimeout(ringTimeout); ringTimeout=null; }
-          CALL_STATE.pc.setRemoteDescription(sdp).then(()=>{
-            CALL_STATE.status = 'connected';
-            (CALL_STATE.pendingIce||[]).forEach(c=>CALL_STATE.pc.addIceCandidate(c).catch(()=>{}));
-            CALL_STATE.pendingIce = [];
-            showCallBar('connected');
-          }).catch(e=>console.error('setRemoteDescription (answer) failed:', e));
-        }
-        return;
-      }
-      if(action==='ice'){
-        if(CALL_STATE && CALL_STATE.pc){
-          if(CALL_STATE.pc.remoteDescription) CALL_STATE.pc.addIceCandidate(candidate).catch(()=>{});
-          else (CALL_STATE.pendingIce = CALL_STATE.pendingIce||[]).push(candidate);
-        }
-        return;
-      }
-      // busy / reject / hangup / cancel — كلهم بينهو المكالمة من عندي
-      if(action==='busy') toast('📞 '+(fromName||'الطرف الآخر')+' مشغول بمكالمة تانية');
-      else if(action==='reject') toast('📞 رفض المكالمة');
-      else if(action==='cancel') { /* الطرف التاني ألغى قبل ما نرد — سكّر صندوق الوارد بصمت */ }
-      else toast('📞 انتهت المكالمة');
-      if(PENDING_OFFER && PENDING_OFFER.from===from) PENDING_OFFER=null;
-      document.getElementById('incomingCallBox')?.remove();
-      cleanupCall();
-    }catch(e){ console.error('handleCallSignal error:', e); }
-  }
-
-  function showIncomingCall(fromName){
-    const old = document.getElementById('incomingCallBox'); if(old) old.remove();
-    const box = document.createElement('div');
-    box.id = 'incomingCallBox';
-    box.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:99999;display:flex;align-items:center;justify-content:center';
-    box.innerHTML = `
-      <div style="background:#fff;border-radius:20px;padding:28px 32px;text-align:center;min-width:260px">
-        <div style="font-size:3rem;margin-bottom:6px;animation:blink 1s infinite">📞</div>
-        <div style="font-weight:900;font-size:1.2rem;margin-bottom:4px">مكالمة واردة</div>
-        <div style="font-weight:700;color:var(--muted);margin-bottom:18px">${esc(fromName||'موظف')}</div>
-        <div style="display:flex;gap:12px;justify-content:center">
-          <button onclick="rejectIncomingCall()" style="background:var(--red);color:#fff;border:none;border-radius:999px;padding:12px 24px;font-weight:900;font-size:1rem">❌ رفض</button>
-          <button onclick="acceptIncomingCall()" style="background:var(--ok);color:#fff;border:none;border-radius:999px;padding:12px 24px;font-weight:900;font-size:1rem">✅ قبول</button>
+      const { data, error } = await db.from('staff_messages').select('*').order('created_at',{ascending:false}).limit(500);
+      if(error){ C.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message||'الجدول staff_messages غير موجود — نفّذ SQL أولاً')}</div>`; return; }
+      const list = data||[];
+      // تجميع بالمحادثة الثنائية
+      const convos = {};
+      list.forEach(m=>{
+        const key = [m.from_id, m.to_id].sort().join('|');
+        if(!convos[key]) convos[key] = { a: m.from_name, aId: m.from_id, b: m.to_name, bId: m.to_id, msgs: [], last: m.created_at };
+        convos[key].msgs.push(m);
+        if(m.created_at > convos[key].last) convos[key].last = m.created_at;
+      });
+      const convoList = Object.entries(convos).sort((a,b)=>b[1].last.localeCompare(a[1].last));
+      window.__CHAT_CONVOS = convos;
+      C.innerHTML = `
+        <div class="panel" style="margin-bottom:14px">
+          <h3>💬 مراقبة محادثات الموظفين</h3>
+          <div style="color:var(--muted);font-weight:700;font-size:.82rem">كل المحادثات بين الموظفين — للمالك بس.</div>
         </div>
-      </div>`;
-    document.body.appendChild(box);
-    beepUrgentIncoming();
-    ringInterval = setInterval(()=>{ if(PENDING_OFFER) beepUrgentIncoming(); else clearInterval(ringInterval); }, 2500);
-    ringTimeout = setTimeout(()=>{
-      if(PENDING_OFFER && PENDING_OFFER.fromName===fromName){ rejectIncomingCall(true); }
-    }, 30000);
+        <div class="tbl-wrap"><table class="tbl">
+          <tr><th>بين</th><th>عدد الرسائل</th><th>آخر رسالة</th><th></th></tr>
+          ${convoList.map(([key,c])=>`<tr>
+            <td><b>${esc(c.a)}</b> ↔ <b>${esc(c.b)}</b></td>
+            <td>${c.msgs.length}</td>
+            <td>${new Date(c.last).toLocaleString('ar-JO')}</td>
+            <td><button class="mini ok" onclick="showChatConvoDetail('${key}')">👁️ عرض</button></td>
+          </tr>`).join('')||'<tr><td colspan="4" class="empty-note">ما في محادثات بعد</td></tr>'}
+        </table></div>`;
+    }catch(e){ C.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
   }
-
-  window.rejectIncomingCall = async function(silent){
-    if(!PENDING_OFFER) return;
-    const from = PENDING_OFFER.from;
-    PENDING_OFFER = null;
-    if(ringInterval){ clearInterval(ringInterval); ringInterval=null; }
-    if(ringTimeout){ clearTimeout(ringTimeout); ringTimeout=null; }
-    document.getElementById('incomingCallBox')?.remove();
-    if(!silent) await sendCallSignal(from, {action:'reject', from:ME.id});
-  };
-
-  window.acceptIncomingCall = async function(){
-    if(!PENDING_OFFER) return;
-    const { from, fromName, sdp } = PENDING_OFFER;
-    if(ringInterval){ clearInterval(ringInterval); ringInterval=null; }
-    if(ringTimeout){ clearTimeout(ringTimeout); ringTimeout=null; }
-    document.getElementById('incomingCallBox')?.remove();
-    try{
-      const stream = await navigator.mediaDevices.getUserMedia({audio:true});
-      const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
-      stream.getTracks().forEach(t=>pc.addTrack(t, stream));
-      const remoteAudio = setupPeerConnection(pc);
-      pc.onicecandidate = e => { if(e.candidate) sendCallSignal(from, {action:'ice', from:ME.id, candidate:e.candidate}); };
-      CALL_STATE = { pc, localStream:stream, remoteAudio, targetId:from, targetName:fromName, role:'callee', status:'connected', pendingIce:[] };
-      await pc.setRemoteDescription(sdp);
-      (CALL_STATE.pendingIce||[]).forEach(c=>pc.addIceCandidate(c).catch(()=>{}));
-      CALL_STATE.pendingIce = [];
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      await sendCallSignal(from, { action:'answer', from:ME.id, sdp:answer });
-      PENDING_OFFER = null;
-      showCallBar('connected');
-    }catch(e){
-      console.error('acceptIncomingCall failed:', e);
-      if(e.name==='NotAllowedError') toast('⛔ لازم تسمح للمتصفح باستخدام المايكروفون');
-      sendCallSignal(from, {action:'reject', from:ME.id});
-      cleanupCall();
-    }
-  };
-
-  window.hangupCall = function(){
-    if(!CALL_STATE) return;
-    sendCallSignal(CALL_STATE.targetId, {action:'hangup', from:ME.id});
-    cleanupCall();
-  };
-
-  window.toggleCallMute = function(){
-    if(!CALL_STATE?.localStream) return;
-    const track = CALL_STATE.localStream.getAudioTracks()[0];
-    if(!track) return;
-    track.enabled = !track.enabled;
-    const btn = document.getElementById('muteCallBtn');
-    if(btn) btn.textContent = track.enabled ? '🔊' : '🔇';
-  };
-
-  function showCallBar(status){
-    const old = document.getElementById('callBar'); if(old) old.remove();
-    if(!CALL_STATE) return;
-    const bar = document.createElement('div');
-    bar.id = 'callBar';
-    bar.style.cssText = 'position:fixed;bottom:16px;left:50%;transform:translateX(-50%);z-index:99996;background:var(--maroon);color:#fff;border-radius:999px;padding:10px 18px;display:flex;align-items:center;gap:12px;box-shadow:0 10px 30px rgba(0,0,0,.35);font-weight:800';
-    bar.innerHTML = `
-      <span>📞</span>
-      <span>${esc(CALL_STATE.targetName)}</span>
-      <span id="callTimer" style="color:var(--yellow)">${status==='calling'?'... يرن':'00:00'}</span>
-      <button id="muteCallBtn" onclick="toggleCallMute()" style="background:rgba(255,255,255,.2);border-radius:999px;padding:6px 10px;color:#fff">🔊</button>
-      <button onclick="hangupCall()" style="background:var(--red);border-radius:999px;padding:6px 14px;color:#fff">☎️ إنهاء</button>`;
-    document.body.appendChild(bar);
-    if(callTimerInterval) clearInterval(callTimerInterval);
-    if(status==='connected'){
-      const start = Date.now();
-      callTimerInterval = setInterval(()=>{
-        const s = Math.floor((Date.now()-start)/1000);
-        const el = document.getElementById('callTimer');
-        if(el) el.textContent = String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');
-      }, 1000);
-    }
+  function showChatConvoDetail(key){
+    const c = (window.__CHAT_CONVOS||{})[key]; if(!c) return;
+    const msgs = c.msgs.slice().sort((a,b)=>a.created_at.localeCompare(b.created_at));
+    modal(`<h3>💬 ${esc(c.a)} ↔ ${esc(c.b)}</h3>
+      <div style="max-height:400px;overflow-y:auto;background:#f7f2ea;border-radius:12px;padding:10px;display:flex;flex-direction:column;gap:6px">
+        ${msgs.map(m=>{
+          const mine = m.from_id===c.aId;
+          return `<div style="align-self:${mine?'flex-end':'flex-start'};max-width:78%">
+            <div style="font-size:.7rem;font-weight:800;color:var(--muted)">${esc(m.from_name)}</div>
+            <div style="background:${mine?'var(--maroon)':'#fff'};color:${mine?'#fff':'#241414'};border:1px solid ${mine?'var(--maroon)':'var(--line)'};border-radius:14px;padding:8px 12px;font-weight:700">${esc(m.body)}</div>
+            <div style="font-size:.68rem;color:var(--muted);margin-top:2px">${new Date(m.created_at).toLocaleString('ar-JO')}</div>
+          </div>`;
+        }).join('')}
+      </div>
+      <div class="m-act"><button class="cancel" onclick="closeModal()">إغلاق</button></div>`);
   }
 
   /* ================= PWA ================= */
