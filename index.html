@@ -224,6 +224,7 @@
     /* ====== نافذة ====== */
     .modal{position:fixed;inset:0;background:rgba(36,10,10,.55);display:flex;align-items:center;justify-content:center;z-index:90;padding:14px}
     .mbox{background:var(--cream);border-radius:20px;padding:22px;width:min(94vw,430px);max-height:92vh;overflow-y:auto}
+    .panel{background:#fff;border-radius:16px;padding:18px 20px;width:100%;box-shadow:var(--shadow);border:1px solid var(--line)}
     .mbox h3{margin-bottom:14px;color:var(--maroon)}
     .fld{margin-bottom:12px}
     .fld label{display:block;font-weight:700;font-size:.88rem;margin-bottom:4px;color:var(--muted)}
@@ -575,6 +576,8 @@
         <button data-a="roles" onclick="admTab('roles')">🛡️ الأدوار</button>
         <button data-a="branches" onclick="admTab('branches')">🏪 الفروع</button>
         <button data-a="inventory" onclick="admTab('inventory')" style="background:var(--yellow);border-color:#d9c400">📋 جرد المخزون</button>
+        <button data-a="warehouse" onclick="admTab('warehouse')" style="background:#d9c8ff;border-color:#7b2cbf">🏬 المستودع</button>
+        <button data-a="treasury" onclick="admTab('treasury')" style="background:#c8f7d4;border-color:#1a9c4b">💰 المصاري</button>
         <button data-a="ingredients" onclick="admTab('ingredients')">🥩 المكونات</button>
         <button data-a="recipes" onclick="admTab('recipes')">📋 الوصفات</button>
         <button data-a="transfers" onclick="admTab('transfers')">🔄 نقل بضاعة</button>
@@ -915,6 +918,13 @@
     if(h){ h.className='found'; h.textContent = `✓ عميل مسجل — ${c.orders_count||0} طلب سابق`; }
     const w = el('custWarn');
     if(w && (c.flagged || c.notes)){ w.innerHTML = (c.flagged?'🚩 عميل عليه تنبيه!':'📝 ملاحظة:')+'<br>'+esc(c.notes||'راجع المدير'); w.classList.remove('hidden'); }
+    // 🎁 خصم VIP تلقائي لمرة وحدة — نفس منطق البحث المباشر بالهاتف
+    if(c.vip_discount_sent_at && c.vip_discount_percent>0 && !appliedCode && perm('discount_code')){
+      appliedCode = { kind:'percent', value:+c.vip_discount_percent, code:'VIP', isVip:true };
+      const codeInput = el('codeInput'); if(codeInput) codeInput.value = 'VIP (تلقائي)';
+      const codeMsg = el('codeMsg'); if(codeMsg){ codeMsg.className='ok'; codeMsg.textContent = `🎁 تطبّق تلقائي خصم VIP ${c.vip_discount_percent}% (مرة وحدة)`; }
+      renderCart();
+    }
   };
 
   /* ================= نظام الصلاحيات المخصصة ================= */
@@ -1376,6 +1386,7 @@
       FIN_END_H = parseInt(SETTINGS.fin_end_hour) ?? 3; if(isNaN(FIN_END_H)) FIN_END_H = 3;
       LATE_MIN = parseInt(SETTINGS.late_min); if(isNaN(LATE_MIN)||LATE_MIN<=0) LATE_MIN = 20;
       READY_WAIT_MIN = parseInt(SETTINGS.ready_wait_min); if(isNaN(READY_WAIT_MIN)||READY_WAIT_MIN<=0) READY_WAIT_MIN = 7;
+      applyTheme();
       if(ME && ME.role==='custom') await loadCustomRoles();
       const branchSel = document.getElementById('branchSel');
       if (branchSel) branchSel.innerHTML = '<option value="">⚠️ اختر الفرع...</option>' + BRANCHES.map(x=>`<option value="${x.id}">🏪 ${esc(x.name_ar)}</option>`).join('');
@@ -1510,14 +1521,19 @@
       const cancelled = all.filter(o=>o.status==='cancelled');
       const sum = k => ok.reduce((a,o)=>a+parseFloat(o[k]||0),0);
       // الحساب المقطوع: كل جزء يترحّل لطريقة دفعه الحقيقية (مش يتحسب كله كاش أو يضيع)
+      // 🛵 أجور التوصيل مش كاش عنا إطلاقًا — بتروح مباشرة للسائق (شركة توصيل منفصلة) وما بتلمس درج الكاشير،
+      // فلازم تُستبعد من كل حساب كاش/متوقع بالدرج (بس تضل محسوبة بإجمالي الفاتورة والمبيعات العادية)
       const byPay = {};
       ok.forEach(o=>{
+        const delFee = o.order_type==='delivery' ? parseFloat(o.delivery_fee||0) : 0;
         if(o.payment_method==='split' && o.split_details){
           const d = o.split_details;
-          byPay[d.m1] = (byPay[d.m1]||0) + parseFloat(d.amt1||0);
-          byPay[d.m2] = (byPay[d.m2]||0) + parseFloat(d.amt2||0);
+          let amt1 = parseFloat(d.amt1||0), amt2 = parseFloat(d.amt2||0);
+          if(delFee>0){ if(d.m1==='cash') amt1=Math.max(0,amt1-delFee); else if(d.m2==='cash') amt2=Math.max(0,amt2-delFee); }
+          byPay[d.m1] = (byPay[d.m1]||0) + amt1;
+          byPay[d.m2] = (byPay[d.m2]||0) + amt2;
         } else {
-          byPay[o.payment_method] = (byPay[o.payment_method]||0) + parseFloat(o.total||0);
+          byPay[o.payment_method] = (byPay[o.payment_method]||0) + Math.max(0, parseFloat(o.total||0) - delFee);
         }
       });
       const opening = parseFloat(currentShift.opening_balance||0);
@@ -1748,6 +1764,7 @@
         approval_status: 'pending'
       });
       if(error){ toast('✗ '+error.message); console.error(error); return; }
+      await addTreasuryTx('cash', -amt, 'expense', null, 'سحب من الدرج — '+reason);
       await logActivity('drawer_withdraw', 'سحب '+fmt(amt)+' — '+reason);
       closeModal(); toast('✓ اتسجل السحب — بانتظار موافقة المدير');
       printDrawerSlip(amt, reason);
@@ -2158,6 +2175,15 @@
               if(matchedCustomer.vip_discount_sent_at){
                 const d = new Date(matchedCustomer.vip_discount_sent_at).toLocaleDateString('ar-JO');
                 parts.push('🎁 اتبعتله خصم VIP بتاريخ '+d);
+                // 🎁 تطبيق تلقائي لمرة وحدة فقط — لسه ما استخدمه (vip_discount_sent_at لسا موجود)
+                if(matchedCustomer.vip_discount_percent>0 && !appliedCode && perm('discount_code')){
+                  appliedCode = { kind:'percent', value:+matchedCustomer.vip_discount_percent, code:'VIP', isVip:true };
+                  const codeInput = document.getElementById('codeInput');
+                  if(codeInput) codeInput.value = 'VIP (تلقائي)';
+                  const codeMsg = document.getElementById('codeMsg');
+                  if(codeMsg){ codeMsg.className='ok'; codeMsg.textContent = `🎁 تطبّق تلقائي خصم VIP ${matchedCustomer.vip_discount_percent}% (مرة وحدة)`; }
+                  renderCart();
+                }
               }
               // تقييم العميل من طلباته السابقة (متوسط)
               try{
@@ -2286,15 +2312,25 @@
     const name = custName ? custName.value.trim() : '';
     const addr = custAddr ? custAddr.value.trim() : '';
     if(!phone) return null;
-    if(matchedCustomer){
+    // 🔒 تأكيد مباشر من قاعدة البيانات وقت الحفظ نفسه — مش نعتمد بس على matchedCustomer
+    // (كان ممكن يكون لسا ما تحمّل بسبب سرعة الكاشير بالكتابة/الحفظ قبل ما يخلص البحث،
+    // وهاد كان يسبب إنشاء عميل مكرر بدل تحديث الأصلي = عدد الطلبات ما يتحرك والعنوان ما يترحّل)
+    let target = (matchedCustomer && matchedCustomer.phone === phone) ? matchedCustomer : null;
+    if(!target){
+      try{
+        const { data: found } = await db.from('customers').select('*').eq('phone', phone).limit(1);
+        if(found && found.length) target = found[0];
+      }catch(e){ console.error('upsertCustomer lookup failed:', e); }
+    }
+    if(target){
       const upd = {};
-      if(!editingOrder) upd.orders_count = (matchedCustomer.orders_count||0)+1;
+      if(!editingOrder) upd.orders_count = (target.orders_count||0)+1;
       if(name) upd.name = name;
       if(addr) upd.address = addr;
-      if(Object.keys(upd).length) await db.from('customers').update(upd).eq('id', matchedCustomer.id);
-      return matchedCustomer.id;
+      if(Object.keys(upd).length) await db.from('customers').update(upd).eq('id', target.id);
+      return target.id;
     }
-    const { data } = await db.from('customers').insert({ phone, name: name||'عميل', address: addr||null }).select().single();
+    const { data } = await db.from('customers').insert({ phone, name: name||'عميل', address: addr||null, orders_count: editingOrder?0:1 }).select().single();
     return data?.id || null;
   }
 
@@ -2730,7 +2766,14 @@
     }
     if ((method === 'app_network' || method === 'auto') && window.SJSPrinter && SETTINGS.printer_ip) {
       try { await printViaAppNetwork(generateReceiptText(ord, lines, t, cust)); return; }
-      catch(e) { console.error('App network print failed:', e); toast('⚠️ فشل الشبكة الأصلية: '+(e.message||'')); if(method==='app_network') return; }
+      catch(e) {
+        console.error('App network print failed (محاولة أولى):', e);
+        // 🔌 الطابعات الحرارية الشبكية كثير منها بتنام بوضع توفير طاقة بعد فترة خمول —
+        // أول اتصال بعد الخمول بيفشل بس بيصحّيها، فنعطيها ثانية ونحاول تاني قبل ما نستسلم
+        await new Promise(r=>setTimeout(r, 1800));
+        try { await printViaAppNetwork(generateReceiptText(ord, lines, t, cust)); toast('✅ انطبعت (بعد إعادة محاولة — الطابعة كانت بوضع سكون)'); return; }
+        catch(e2) { console.error('App network print failed (محاولة ثانية):', e2); toast('⚠️ فشل الاتصال بالطابعة مرتين — تأكد إنها شغالة'); if(method==='app_network') return; }
+      }
     }
     // احتياطي فقط: RawBT (لو ما في جسر أصلي مضبوط، أو الجسر فشل بوضع "تلقائي")
     if (method === 'rawbt' || (method === 'auto' && isAndroid)) {
@@ -2784,6 +2827,48 @@
   }
 
   /* ================= حفظ الطلب ================= */
+  /* ================= سجل حركات المخزون الموحّد (المستودع) ================= */
+  // type: 'purchase' | 'sale' | 'transfer_out' | 'transfer_in' | 'waste' | 'audit' | 'manual'
+  // qty: موجبة = دخول للمخزون، سالبة = خروج منه
+  async function logMovement(branchId, ingredientId, qty, type, note){
+    try{
+      await db.from('inventory_movements').insert({
+        branch_id: branchId, ingredient_id: ingredientId, qty, type,
+        note: note||null, created_by: ME?.full_name||null
+      });
+    }catch(e){ console.error('logMovement failed (تأكد من تنفيذ SQL جدول inventory_movements):', e); }
+  }
+
+  /* ================= 💰 المصاري (كاش + بنك) ================= */
+  // account: 'cash' | 'bank' — amount: موجب = دخول، سالب = خروج
+  async function addTreasuryTx(account, amount, type, refId, note){
+    try{
+      await db.from('treasury_transactions').insert({
+        account, amount, type, ref_id: refId||null, note: note||null, created_by: ME?.full_name||null
+      });
+    }catch(e){ console.error('addTreasuryTx failed (تأكد من تنفيذ SQL جدول treasury_transactions):', e); }
+  }
+
+  // ترحيل المبيعات تلقائيًا للمصاري — كاش أو بنك/كليك حسب طريقة الدفع
+  // ملاحظة: طلبات المنصات (طلباتي، تلاباتي...) بتتسوّى حسابيًا لحالها بشاشة "منصات التوصيل"، فما بترحّل هون
+  // وأجور التوصيل مستبعدة دايمًا (بتروح مباشرة للسائق، مش من مصاري المطعم)
+  function payAccount(m){ return m==='cash' ? 'cash' : 'bank'; } // card/cliq = بنك، أي شي غير كاش = بنك
+  async function postSaleToTreasury(o, sign){
+    if(o.platform_id) return;
+    const delFee = o.order_type==='delivery' ? parseFloat(o.delivery_fee||0) : 0;
+    const note = 'مبيعات — فاتورة #'+(o.order_number||'');
+    if(o.payment_method==='split' && o.split_details){
+      const d = o.split_details;
+      let amt1 = parseFloat(d.amt1||0), amt2 = parseFloat(d.amt2||0);
+      if(delFee>0){ if(d.m1==='cash') amt1=Math.max(0,amt1-delFee); else if(d.m2==='cash') amt2=Math.max(0,amt2-delFee); }
+      if(amt1>0) await addTreasuryTx(payAccount(d.m1), amt1*sign, 'sale', o.id, note);
+      if(amt2>0) await addTreasuryTx(payAccount(d.m2), amt2*sign, 'sale', o.id, note);
+    } else {
+      const amt = Math.max(0, parseFloat(o.total||0) - delFee);
+      if(amt>0) await addTreasuryTx(payAccount(o.payment_method), amt*sign, 'sale', o.id, note);
+    }
+  }
+
   async function restoreInventoryForCancel(branchId, orderItems){
     // عكس deductInventoryForSale بالضبط — يرجّع كل مادة لمخزون الفرع، كل مادة لحالها مقسّمة صح
     if(!branchId || !orderItems?.length) return;
@@ -2806,6 +2891,7 @@
       const {data:bi} = await db.from('branch_inventory').select('id,stock').eq('branch_id',branchId).eq('ingredient_id',ingId).maybeSingle();
       if(bi) await db.from('branch_inventory').update({stock: (bi.stock||0)+qty}).eq('id', bi.id);
       else await db.from('branch_inventory').insert({branch_id:branchId, ingredient_id:ingId, stock:qty, min_stock:0});
+      logMovement(branchId, ingId, qty, 'sale', 'استرجاع بسبب إلغاء طلب');
     }
   }
   async function deductInventoryForSale(branchId, cartItems){
@@ -2828,6 +2914,7 @@
     for(const [ingId, qty] of Object.entries(consumption)){
       const {data:bi} = await db.from('branch_inventory').select('id,stock').eq('branch_id',branchId).eq('ingredient_id',ingId).maybeSingle();
       if(bi) await db.from('branch_inventory').update({stock: Math.max(0,(bi.stock||0)-qty)}).eq('id',bi.id);
+      logMovement(branchId, ingId, -qty, 'sale', 'خصم بيع');
     }
   }
 
@@ -2953,8 +3040,15 @@
       const { error: e2 } = await db.from('order_items').insert(lines);
       if(e2) throw e2;
 
+      // 🎁 خصم VIP استُخدم الآن — نوقفه عشان ما ينطبق تاني بطلب جاي (لمرة وحدة فقط)
+      if(appliedCode && appliedCode.isVip && customer_id){
+        try{ await db.from('customers').update({ vip_discount_sent_at: null }).eq('id', customer_id); }
+        catch(e){ console.error('clear vip discount failed:', e); }
+      }
+
       if(!editingOrder){
         try{ await deductInventoryForSale(branch_id, cartCopy); }catch(e){ console.error('deduct inventory failed:', e); }
+        try{ await postSaleToTreasury({...rec, id:ord.id, order_number:ord.order_number}, 1); }catch(e){ console.error('post sale to treasury failed:', e); }
       }
 
       // الطلب انحفظ بنجاح بقاعدة البيانات — أي خطأ من هون ورايح هو خطأ طباعة بس، مش خطأ حفظ
@@ -3323,6 +3417,10 @@
       if(o && o.branch_id && o.order_items?.length){
         try{ await restoreInventoryForCancel(o.branch_id, o.order_items); }
         catch(e){ console.error('restore inventory on cancel failed:', e); }
+      }
+      // عكس حركة المبيعات بالمصاري (كانت اترحّلت وقت حفظ الطلب)
+      if(o){
+        try{ await postSaleToTreasury(o, -1); }catch(e){ console.error('reverse sale treasury failed:', e); }
       }
       await logActivity('cancel_order', 'إلغاء طلب #'+(o?.order_number||id)+' — السبب: '+reason.trim());
       if(o){
@@ -3892,7 +3990,7 @@
   const ADMIN_TAB_PERM = {
     items:'items_manage', cats:'cats_manage', codes:'codes_manage', staff:'staff_manage', roles:'admin_only', branches:'branches_manage', sett:'settings_manage', devices:'devices_manage',
     ingredients:'inventory_view', recipes:'inventory_view',
-    inventory:'inventory_audit', transfers:'inventory_transfer',
+    inventory:'inventory_audit', transfers:'inventory_transfer', warehouse:'admin_only', treasury:'admin_only',
     expenses:'expenses_view', purchases:'purchases_view',
     platforms:'platforms_view', empmeals:'empmeals_view', topcust:'topcust_view', waste:'waste_log', suppliers:'purchases_view',
   };
@@ -3938,7 +4036,7 @@
       try {
         const {data}=await db.from('staff').select('*, branches(name_ar)').order('created_at');
         STAFF=data||[];
-        C.innerHTML=`<button class="add-btn" onclick="staffForm()">＋ إضافة موظف</button><div class="tbl-wrap"><table class="tbl"><tr><th>الاسم</th><th>الدور</th><th>الفرع</th><th>PIN</th><th>الحالة</th><th></th></tr>${STAFF.map(s=>`<tr class="${s.is_active?'':'off'}"><td>${esc(s.full_name)}</td><td>${ROLE_AR[s.role]||esc(s.role)}</td><td>${esc(s.branches?.name_ar||'كل الفروع')}</td><td>${s.pin}</td><td>${s.is_active?'✅':'🚫'}</td><td style="white-space:nowrap"><button class="mini edit" onclick="staffForm('${s.id}')">تعديل</button>${s.id!==ME.id?`<button class="mini tog" onclick="toggleStaff('${s.id}',${!s.is_active})">${s.is_active?'تعطيل/أرشفة':'تفعيل'}</button><button class="mini del" onclick="deleteStaff('${s.id}','${esc(s.full_name)}')">حذف نهائي</button>`:''}</td></tr>`).join('')}</table></div>`;
+        C.innerHTML=`<button class="add-btn" onclick="staffForm()">＋ إضافة موظف</button><div class="tbl-wrap"><table class="tbl"><tr><th>الاسم</th><th>الدور</th><th>الفرع</th><th>PIN</th><th>الحالة</th><th></th></tr>${STAFF.map(s=>`<tr class="${s.is_active?'':'off'}"><td>${esc(s.full_name)}</td><td>${ROLE_AR[s.role]||esc(s.role)}</td><td>${esc(s.branches?.name_ar||'كل الفروع')}</td><td>${s.pin}</td><td>${s.is_active?'✅':'🚫'}</td><td style="white-space:nowrap"><button class="mini edit" onclick="staffForm('${s.id}')">تعديل</button><button class="mini ok" onclick="staffAdvancesView('${s.id}','${esc(s.full_name)}')">💰 السلف</button>${s.id!==ME.id?`<button class="mini tog" onclick="toggleStaff('${s.id}',${!s.is_active})">${s.is_active?'تعطيل/أرشفة':'تفعيل'}</button><button class="mini del" onclick="deleteStaff('${s.id}','${esc(s.full_name)}')">حذف نهائي</button>`:''}</td></tr>`).join('')}</table></div>`;
         const salesStaff = document.getElementById('salesStaff');
         if (salesStaff) salesStaff.innerHTML = '<option value="">كل الموظفين</option>' + STAFF.map(s=>`<option value="${s.id}">${esc(s.full_name)}</option>`).join('');
       } catch(e) { console.error(e); }
@@ -3958,6 +4056,8 @@
     if(admView==='purchases'){ renderPurchases(); return; }
     if(admView==='inventory'){ renderInventory(); return; }
     if(admView==='transfers'){ renderTransfers(); return; }
+    if(admView==='warehouse'){ renderWarehouse(); return; }
+    if(admView==='treasury'){ renderTreasury(); return; }
     if(admView==='platforms'){ renderPlatforms(); return; }
     if(admView==='devices'){ renderDevices(); return; }
     if(admView==='empmeals'){ renderEmpMeals(); return; }
@@ -4036,6 +4136,26 @@
         </div>
         <div class="fld"><label>✍️ معلومات إضافية على الفاتورة (اختياري)</label>
           <input id="f_extraInfo" value="${esc(SETTINGS.invoice_extra_info||'')}" placeholder="مثال: الرقم الضريبي، سياسة الاستبدال..."></div>
+
+        <hr style="margin:16px 0"><h4 style="color:var(--maroon)">🎨 الثيم ولون الواجهة</h4>
+        <div style="color:var(--muted);font-size:.82rem;font-weight:600;margin-bottom:8px">بتنطبق على كل الأجهزة فورًا (محفوظة بالنظام مش بالجهاز بس)</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+          <button type="button" class="mini ok" onclick="applyThemePreset('default')">🔴 الافتراضي</button>
+          <button type="button" class="mini ok" onclick="applyThemePreset('blue')">🔵 أزرق</button>
+          <button type="button" class="mini ok" onclick="applyThemePreset('green')">🟢 أخضر</button>
+          <button type="button" class="mini ok" onclick="applyThemePreset('purple')">🟣 بنفسجي</button>
+          <button type="button" class="mini ok" onclick="applyThemePreset('dark')">⚫ داكن</button>
+        </div>
+        <div class="two" style="flex-wrap:wrap;gap:12px">
+          <div><label style="display:block;font-size:.8rem;font-weight:700">اللون الرئيسي</label>
+            <input type="color" id="f_themeRed" value="${SETTINGS.theme_red||'#F60100'}" oninput="previewTheme()" style="width:52px;height:38px;border:none;border-radius:8px;cursor:pointer"></div>
+          <div><label style="display:block;font-size:.8rem;font-weight:700">اللون الثانوي (الهيدر)</label>
+            <input type="color" id="f_themeMaroon" value="${SETTINGS.theme_maroon||'#4a1010'}" oninput="previewTheme()" style="width:52px;height:38px;border:none;border-radius:8px;cursor:pointer"></div>
+          <div><label style="display:block;font-size:.8rem;font-weight:700">لون التمييز</label>
+            <input type="color" id="f_themeYellow" value="${SETTINGS.theme_yellow||'#FDE507'}" oninput="previewTheme()" style="width:52px;height:38px;border:none;border-radius:8px;cursor:pointer"></div>
+          <div><label style="display:block;font-size:.8rem;font-weight:700">لون الخلفية</label>
+            <input type="color" id="f_themeCream" value="${SETTINGS.theme_cream||'#FFF8EE'}" oninput="previewTheme()" style="width:52px;height:38px;border:none;border-radius:8px;cursor:pointer"></div>
+        </div>
 
         <hr style="margin:16px 0"><h4 style="color:var(--maroon)">🔔 نغمة التنبيه</h4>
         <div class="fld"><label>اختر النغمة</label>
@@ -4164,7 +4284,10 @@
     const all = orders||[];
     const ok = all.filter(o=>o.status!=='cancelled');
     const sum = k => ok.reduce((a,o)=>a+parseFloat(o[k]||0),0);
-    const byPay = {}; ok.forEach(o=>{ byPay[o.payment_method]=(byPay[o.payment_method]||0)+parseFloat(o.total||0); });
+    const byPay = {}; ok.forEach(o=>{
+      const delFee = o.order_type==='delivery' ? parseFloat(o.delivery_fee||0) : 0;
+      byPay[o.payment_method]=(byPay[o.payment_method]||0)+Math.max(0, parseFloat(o.total||0)-delFee);
+    });
     const opening = parseFloat(sh.opening_balance||0);
     const expected = sh.expected_balance!==null ? parseFloat(sh.expected_balance) : opening + (byPay['cash']||0);
     const counted = sh.closing_balance!==null ? parseFloat(sh.closing_balance) : 0;
@@ -4402,6 +4525,8 @@
       <div class="fld"><label>المبلغ (${CURRENCY})</label><input id="fe_amt" inputmode="decimal" value="${e.amount||''}"></div>
       <div class="fld"><label>الفرع</label><select id="fe_br"><option value="">كل الفروع</option>
         ${BRANCHES.map(b=>`<option value="${b.id}" ${e.branch_id===b.id?'selected':''}>${esc(b.name_ar)}</option>`).join('')}</select></div>
+      ${id?'':`<div class="fld"><label>💰 دفع من حساب</label>
+        <select id="fe_acc"><option value="cash">💵 كاش</option><option value="bank">🏦 بنك/كليك</option></select></div>`}
       <div class="m-act"><button class="save" onclick="saveExpense('${id||''}')">حفظ ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
   }
   async function saveExpense(id){
@@ -4416,6 +4541,11 @@
     if(!rec.amount){toast('⚠️ المبلغ مطلوب');return;}
     const r = id ? await db.from('expenses').update(rec).eq('id',id) : await db.from('expenses').insert(rec);
     if(r.error){toast('✗ '+r.error.message);return;}
+    if(!id){
+      const acc = document.getElementById('fe_acc')?.value||'cash';
+      try{ await addTreasuryTx(acc, -rec.amount, 'expense', null, rec.category+' — '+rec.title); }
+      catch(e){ console.error('post expense to treasury failed:', e); }
+    }
     await logActivity(id?'edit_expense':'add_expense', 'مصروف: '+rec.category+' - '+fmt(rec.amount));
     closeModal();toast('✓ انحفظ');renderExpenses();
   }
@@ -4459,21 +4589,41 @@
           ${INGR.map(i=>`<option value="${i.id}" ${filterIng===i.id?'selected':''}>${esc(i.name)}</option>`).join('')}
         </select>
         <button class="mini edit" onclick="printPurchasesReport()">🖨️ طباعة</button>
+        <button class="mini ok" onclick="printPurchasesPDF()">📄 PDF منسّق</button>
       </div>
       <div class="tbl-wrap"><table class="tbl">
-        <tr><th>التاريخ</th><th>المورد</th><th>المواد</th><th>الإجمالي</th><th></th></tr>
+        <tr><th>التاريخ</th><th>المورد</th><th>المواد</th><th>الإجمالي</th><th>الدفع</th><th></th></tr>
         ${filtered.map(p=>`<tr>
           <td>${new Date(p.purchase_date).toLocaleDateString('ar-JO')}</td>
           <td><b>${esc(p.supplier||'—')}</b></td>
           <td>${(p.purchase_items||[]).map(i=>esc(i.ingredients?.name||'—')).join('، ')}</td>
           <td><b style="color:var(--red)">${fmt(p.total)} ${CURRENCY}</b></td>
+          <td>${p.payment_status==='cash'?'✅ كاش':p.payment_status==='bank'?'✅ كليك/بنك':'<b style="color:var(--red)">🔴 دين</b>'}</td>
           <td style="white-space:nowrap">
             <button class="mini tog" onclick="showPurchaseDetail('${p.id}')">👁️</button>
             <button class="mini edit" onclick="editPurchaseInfo('${p.id}')">تعديل</button>
+            ${(!p.payment_status||p.payment_status==='unpaid')?`<button class="mini ok" onclick="settlePurchase('${p.id}')">💰 تسديد</button>`:''}
             <button class="mini del" onclick="deletePurchase('${p.id}')">حذف</button>
           </td>
-        </tr>`).join('')||'<tr><td colspan="5" class="empty-note">ما في مشتريات</td></tr>'}
+        </tr>`).join('')||'<tr><td colspan="6" class="empty-note">ما في مشتريات</td></tr>'}
       </table></div>`;
+  }
+  function settlePurchase(id){
+    const p = PURCHASES_DATA.find(x=>x.id===id); if(!p) return;
+    modal(`<h3>💰 تسديد فاتورة — ${esc(p.supplier||'—')}</h3>
+      <div style="color:var(--muted);font-weight:700;margin-bottom:10px">المبلغ: <b style="color:var(--red)">${fmt(p.total)} ${CURRENCY}</b></div>
+      <div class="fld"><label>الدفع من</label>
+        <select id="settle_acc"><option value="cash">💵 كاش</option><option value="bank">🏦 كليك/بنك</option></select></div>
+      <div class="m-act"><button class="save" onclick="confirmSettlePurchase('${id}')">تأكيد التسديد ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
+  }
+  async function confirmSettlePurchase(id){
+    const p = PURCHASES_DATA.find(x=>x.id===id); if(!p) return;
+    const acc = document.getElementById('settle_acc')?.value||'cash';
+    try{
+      await db.from('purchases').update({ payment_status: acc, paid_at: new Date().toISOString() }).eq('id', id);
+      await addTreasuryTx(acc, -p.total, 'purchase', id, 'تسديد فاتورة شراء — '+(p.supplier||''));
+      closeModal(); toast('✓ اتسددت الفاتورة'); renderPurchases();
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
   function printPurchasesReport(){
     const filterSup = window.__purFilterSup||'';
@@ -4491,6 +4641,28 @@
       </table><h3>الإجمالي: ${fmt(total)} ${CURRENCY}</h3></body></html>`;
     printRaw(text, html);
   }
+  function printPurchasesPDF(){
+    const filterSup = window.__purFilterSup||'';
+    const filterIng = window.__purFilterIng||'';
+    let filtered = PURCHASES_DATA;
+    if(filterSup) filtered = filtered.filter(p=>p.supplier===filterSup);
+    if(filterIng) filtered = filtered.filter(p=>(p.purchase_items||[]).some(i=>i.ingredient_id===filterIng));
+    const total = filtered.reduce((a,p)=>a+parseFloat(p.total||0),0);
+    const html = `<html dir="rtl"><head><meta charset="UTF-8">
+      <style>body{font-family:Cairo,Arial;padding:28px}h1{color:#4a1010}table{width:100%;border-collapse:collapse;margin-top:14px}td,th{padding:8px 10px;border:1px solid #eadfd4;text-align:right;font-size:.85rem}th{background:#FFF8EE}.tot{font-weight:900;color:#F60100}@media print{.no-print{display:none}}</style>
+      </head><body>
+      <button class="no-print" onclick="window.print()" style="margin-bottom:16px;background:#4a1010;color:#FDE507;border:none;border-radius:10px;padding:10px 20px;font-weight:800;cursor:pointer">🖨️ طباعة / حفظ PDF</button>
+      <h1>🛒 تقرير المشتريات — Saber Jo Snack</h1>
+      <div>${filterSup?'المورد: '+esc(filterSup)+' — ':''}تاريخ الطباعة: ${new Date().toLocaleString('ar-JO')}</div>
+      <table><tr><th>التاريخ</th><th>المورد</th><th>المواد</th><th>الإجمالي</th><th>الدفع</th></tr>
+      ${filtered.map(p=>`<tr><td>${p.purchase_date}</td><td>${esc(p.supplier||'—')}</td><td>${(p.purchase_items||[]).map(i=>esc(i.ingredients?.name||'—')).join('، ')}</td><td>${fmt(p.total)}</td><td>${p.payment_status==='cash'?'كاش':p.payment_status==='bank'?'بنك/كليك':'دين'}</td></tr>`).join('')}
+      </table>
+      <h2>الإجمالي: <span class="tot">${fmt(total)} ${CURRENCY}</span></h2>
+      </body></html>`;
+    const win = window.open('','_blank');
+    win.document.write(html); win.document.close();
+  }
+
   function editPurchaseInfo(id){
     const p = PURCHASES_DATA.find(x=>x.id===id); if(!p) return;
     modal(`<h3>تعديل بيانات الفاتورة</h3>
@@ -4560,6 +4732,16 @@
       <div class="fld"><label>الفرع المستلم *</label><select id="fp_br" onchange="window.__purchaseBranchId=this.value">
         <option value="">اختر الفرع...</option>
         ${BRANCHES.map(b=>`<option value="${b.id}">${esc(b.name_ar)}</option>`).join('')}</select></div>
+      <div class="fld"><label>💰 حالة الدفع</label>
+        <select id="fp_paystatus" onchange="document.getElementById('fp_payacc_wrap').classList.toggle('hidden', this.value==='unpaid')">
+          <option value="unpaid">🔴 غير مدفوعة (دين على المطعم)</option>
+          <option value="cash">✅ مدفوعة — كاش</option>
+          <option value="bank">✅ مدفوعة — كليك/بنك</option>
+        </select>
+      </div>
+      <div class="fld" id="fp_payacc_wrap" style="background:#fff8e1;border-radius:10px;padding:10px 12px">
+        <div style="font-size:.8rem;color:var(--muted);font-weight:700">💡 المبلغ رح ينخصم تلقائيًا من رصيد الحساب المختار بشاشة "💰 المصاري"</div>
+      </div>
       <div class="fld"><label>ملاحظات</label><input id="fp_note" placeholder="اختياري"></div>
       <div class="m-act"><button class="save" onclick="savePurchase()">حفظ ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
   }
@@ -4580,7 +4762,11 @@
       sup = document.getElementById('fp_sup_new').value.trim();
       if(sup){
         const exists = SUPPLIERS_DATA.find(s=>s.name===sup);
-        if(!exists) await db.from('suppliers').insert({name:sup});
+        if(!exists){
+          const { data: newSup, error: supErr } = await db.from('suppliers').insert({name:sup}).select().single();
+          if(supErr){ console.error('add supplier failed:', supErr); toast('⚠️ تنبيه: ما انسجل المورد بقائمة الموردين، بس الفاتورة رح تنحفظ'); }
+          else if(newSup) SUPPLIERS_DATA.push(newSup);
+        }
       }
     }
     if(!dt||!sup){toast('⚠️ التاريخ والمورد مطلوبين');return;}
@@ -4593,12 +4779,18 @@
     })).filter(x=>x.ingredient_id&&x.quantity>0);
     if(!items.length){toast('⚠️ أضف مادة واحدة على الأقل');return;}
     const total=items.reduce((a,x)=>a+x.quantity*x.unit_cost,0);
+    const payStatus = document.getElementById('fp_paystatus')?.value || 'unpaid';
     const {data:pur,error}=await db.from('purchases').insert({
       purchase_date:dt,supplier:sup,total,
       branch_id:window.__purchaseBranchId||null,
-      notes:document.getElementById('fp_note').value.trim()||null
+      notes:document.getElementById('fp_note').value.trim()||null,
+      payment_status: payStatus,
+      paid_at: payStatus!=='unpaid' ? new Date().toISOString() : null
     }).select().single();
     if(error){toast('✗ '+error.message);return;}
+    if(payStatus!=='unpaid'){
+      await addTreasuryTx(payStatus, -total, 'purchase', pur.id, 'فاتورة شراء — '+sup);
+    }
     await db.from('purchase_items').insert(items.map(x=>({...x,purchase_id:pur.id})));
     for(const it of items){
       const {data:ing}=await db.from('ingredients').select('stock').eq('id',it.ingredient_id).single();
@@ -4610,6 +4802,7 @@
         const {data:bi}=await db.from('branch_inventory').select('id,stock').eq('branch_id',branch.id).eq('ingredient_id',it.ingredient_id).maybeSingle();
         if(bi) await db.from('branch_inventory').update({stock:(bi.stock||0)+it.quantity}).eq('id',bi.id);
         else await db.from('branch_inventory').insert({branch_id:branch.id,ingredient_id:it.ingredient_id,stock:it.quantity,min_stock:0});
+        logMovement(branch.id, it.ingredient_id, it.quantity, 'purchase', 'فاتورة شراء — '+sup);
       }
     }
     closeModal();toast('✓ انحفظت الفاتورة والمخزون اتحدث');renderPurchases();
@@ -4815,6 +5008,7 @@
       const diff = actual - expected;
       results.push({ ingredient_id: ingId, expected, actual, variance: diff });
       await db.from('branch_inventory').update({stock: actual}).eq('id', id);
+      if(Math.abs(diff)>0.001) logMovement(branchId, ingId, diff, 'audit', 'تصحيح جرد (المتوقع '+expected+' ← الفعلي '+actual+')');
       updated++;
     }
     if(!updated){ toast('⚠️ عدّ مادة واحدة على الأقل'); return; }
@@ -4851,10 +5045,13 @@
   async function renderInventory(){
     await loadIngredients();
     const C = document.getElementById('admContent');
+    const admin = isAdmin();
     // جلب مخزون الفروع
-    const {data:inv} = await db.from('branch_inventory')
+    const {data:invAll} = await db.from('branch_inventory')
       .select('*, ingredients(name,unit), branches(name_ar)')
       .order('branch_id');
+    // 🔒 الموظف العادي (مش مدير) بيشوف بس الفرع اللي هو تابع له، محدّ غيره — والمدير بيشوف كل الفروع
+    const inv = admin ? (invAll||[]) : (invAll||[]).filter(x=>x.branch_id===ME.branch_id);
     // تنظيم حسب الفرع
     const byBranch = {};
     (inv||[]).forEach(x=>{
@@ -4868,28 +5065,26 @@
           <h4 style="color:var(--maroon)">🏪 ${esc(br.name)}</h4>
           <button class="mini ok" onclick="doInventory('${br.branch_id}','${esc(br.name)}')">📋 جرد</button>
         </div>
-        <table class="tbl"><tr><th>المادة</th><th>المخزون الحالي</th><th>الوحدة</th><th>الحد الأدنى</th><th>الحالة</th><th></th></tr>
+        <table class="tbl"><tr><th>المادة</th>${admin?'<th>المخزون الحالي</th>':''}<th>الوحدة</th>${admin?'<th>الحد الأدنى</th><th>الحالة</th><th></th>':''}</tr>
           ${br.items.map(i=>{
             const low = (i.stock||0) <= (i.min_stock||0);
-            return `<tr class="${low?'late':''}">
+            return `<tr class="${admin&&low?'late':''}">
               <td><b>${esc(i.ingredients?.name||'—')}</b></td>
-              <td><b style="color:${low?'var(--red)':'var(--ok)'}">${i.stock||0}</b></td>
+              ${admin?`<td><b style="color:${low?'var(--red)':'var(--ok)'}">${i.stock||0}</b></td>`:''}
               <td>${esc(i.ingredients?.unit||'')}</td>
-              <td>${i.min_stock||0}</td>
-              <td>${low?'⚠️ نقص':'✅ كافي'}</td>
-              <td><button class="mini edit" onclick="adjustStock('${i.id}','${i.branch_id}','${i.ingredient_id}',${i.stock||0})">تعديل</button></td>
-            </tr>`;}).join('')||'<tr><td colspan="6" class="empty-note">فاضي</td></tr>'}
+              ${admin?`<td>${i.min_stock||0}</td><td>${low?'⚠️ نقص':'✅ كافي'}</td><td><button class="mini edit" onclick="adjustStock('${i.id}','${i.branch_id}','${i.ingredient_id}',${i.stock||0})">تعديل</button></td>`:''}
+            </tr>`;}).join('')||`<tr><td colspan="${admin?6:2}" class="empty-note">فاضي</td></tr>`}
         </table>
-      </div>`).join('') || '<div class="empty-note">ما في مخزون مسجل — أضف مشتريات أو عدّل اليدوي</div>';
+      </div>`).join('') || '<div class="empty-note">ما في مخزون مسجل بفرعك</div>';
 
-    const lowAlerts = (inv||[]).filter(x=>(x.stock||0)<=(x.min_stock||0));
+    const lowAlerts = admin ? (inv||[]).filter(x=>(x.stock||0)<=(x.min_stock||0)) : [];
     C.innerHTML = `
-      ${lowAlerts.length ? `<div class="alert-red" style="margin-bottom:12px">⚠️ ${lowAlerts.length} مادة تحتاج تعبئة: ${lowAlerts.map(x=>esc(x.ingredients?.name||'—')).join('، ')}</div>` : '<div class="alert-ok" style="margin-bottom:12px">✅ المخزون كافي في كل الفروع</div>'}
+      ${admin ? (lowAlerts.length ? `<div class="alert-red" style="margin-bottom:12px">⚠️ ${lowAlerts.length} مادة تحتاج تعبئة: ${lowAlerts.map(x=>esc(x.ingredients?.name||'—')).join('، ')}</div>` : '<div class="alert-ok" style="margin-bottom:12px">✅ المخزون كافي في كل الفروع</div>') : ''}
       <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">
-        <button class="add-btn" style="margin:0" onclick="initBranchStock()">⚡ تهيئة مخزون الفروع</button>
+        ${admin?`<button class="add-btn" style="margin:0" onclick="initBranchStock()">⚡ تهيئة مخزون الفروع</button>
         <button class="mini ok" style="padding:9px 18px" onclick="admTab('transfers')">🔄 نقل بضاعة بين الفروع</button>
         <button class="mini edit" style="padding:9px 18px" onclick="showAuditHistory()">📜 سجل عمليات الجرد</button>
-        <button class="mini ok" style="padding:9px 18px;background:var(--warn)" onclick="showConsumptionReport()">📉 تقرير الاستهلاك والطلب اليومي</button>
+        <button class="mini ok" style="padding:9px 18px;background:var(--warn)" onclick="showConsumptionReport()">📉 تقرير الاستهلاك والطلب اليومي</button>`:''}
       </div>
       ${branchHtml}`;
   }
@@ -5086,14 +5281,17 @@
           <option>جرد</option><option>هدر</option><option>تلف</option><option>تصحيح خطأ</option><option>أخرى</option>
         </select></div>
       <div class="m-act">
-        <button class="save" onclick="saveAdjust('${invId}')">حفظ ✓</button>
+        <button class="save" onclick="saveAdjust('${invId}','${branchId}','${ingId}',${current})">حفظ ✓</button>
         <button class="cancel" onclick="closeModal()">إلغاء</button>
       </div>`);
   }
-  async function saveAdjust(invId){
+  async function saveAdjust(invId, branchId, ingId, oldStock){
     const stock = parseFloat(document.getElementById('adj_cur').value)||0;
     const min_stock = parseFloat(document.getElementById('adj_min').value)||0;
+    const reason = document.getElementById('adj_reason')?.value||'تصحيح خطأ';
     await db.from('branch_inventory').update({stock, min_stock}).eq('id',invId);
+    const diff = stock - (parseFloat(oldStock)||0);
+    if(Math.abs(diff)>0.001) logMovement(branchId, ingId, diff, 'manual', 'تعديل يدوي — '+reason);
     closeModal(); toast('✓ اتحدث المخزون'); renderInventory();
   }
 
@@ -5160,6 +5358,360 @@
         </tr>`).join('')||'<tr><td colspan="9" class="empty-note">ما في نقل بضاعة مسجل</td></tr>'}
       </table></div>`;
   }
+  /* ================= 🏬 المستودع — أرصدة + سجل حركات مفصّل ================= */
+  const MOVE_TYPE_AR = {
+    purchase:{lbl:'🛒 شراء', color:'var(--ok)'}, sale:{lbl:'🧾 بيع', color:'var(--red)'},
+    transfer_out:{lbl:'📤 نقل صادر', color:'var(--warn)'}, transfer_in:{lbl:'📥 نقل وارد', color:'var(--ok)'},
+    waste:{lbl:'🗑️ إتلاف', color:'var(--red)'}, audit:{lbl:'📋 تصحيح جرد', color:'var(--maroon)'},
+    manual:{lbl:'✋ تعديل يدوي', color:'var(--muted)'},
+  };
+  let WH_FILTER = { from:'', to:'', branch:'', ing:'' };
+  let WH_AUTO_REFRESH = false, WH_TIMER = null;
+  function toggleWhAutoRefresh(on){
+    WH_AUTO_REFRESH = on;
+    if(WH_TIMER) clearInterval(WH_TIMER);
+    if(on){
+      WH_TIMER = setInterval(()=>{
+        // ما نحدّث إذا في مودال مفتوح (يعني المستخدم مشغول بنموذج) أو طلعنا من التبويب
+        if(document.getElementById('theModal')) return;
+        if(admView!=='warehouse' || document.getElementById('v-admin')?.classList.contains('hidden')) { clearInterval(WH_TIMER); WH_TIMER=null; return; }
+        renderWarehouse();
+      }, 5000);
+    }
+  }
+  async function renderWarehouse(){
+    await loadIngredients();
+    const C = document.getElementById('admContent');
+    C.innerHTML = '<div class="empty-note">... جاري التحميل</div>';
+    if(!WH_FILTER.from){
+      const d = new Date(); d.setDate(d.getDate()-30);
+      WH_FILTER.from = d.toISOString().split('T')[0];
+      WH_FILTER.to = new Date().toISOString().split('T')[0];
+    }
+    // 1) الأرصدة الحالية بكل فرع مع القيمة
+    const { data: bal, error: balErr } = await db.from('branch_inventory')
+      .select('*, ingredients(name, unit, unit_cost), branches(name_ar)');
+    if(balErr){
+      C.innerHTML = `<div class="alert-red">⚠️ ${esc(balErr.message||'خطأ بجلب الأرصدة')}</div>`;
+      console.error(balErr); return;
+    }
+    let balances = bal||[];
+    if(WH_FILTER.branch) balances = balances.filter(b=>b.branch_id===WH_FILTER.branch);
+    if(WH_FILTER.ing) balances = balances.filter(b=>b.ingredient_id===WH_FILTER.ing);
+    const totalValue = balances.reduce((a,b)=>a+(b.stock||0)*(b.ingredients?.unit_cost||0),0);
+
+    // 2) سجل الحركات بالفترة المحددة
+    let moves = [];
+    let moveErr = null;
+    try{
+      let q = db.from('inventory_movements').select('*, ingredients(name,unit), branches(name_ar)')
+        .gte('created_at', WH_FILTER.from+'T00:00:00').lte('created_at', WH_FILTER.to+'T23:59:59')
+        .order('created_at',{ascending:false}).limit(500);
+      if(WH_FILTER.branch) q = q.eq('branch_id', WH_FILTER.branch);
+      if(WH_FILTER.ing) q = q.eq('ingredient_id', WH_FILTER.ing);
+      const { data, error } = await q;
+      if(error) moveErr = error; else moves = data||[];
+    }catch(e){ moveErr = e; }
+
+    C.innerHTML = `
+      <div class="panel" style="margin-bottom:14px">
+        <h3>🏬 المستودع</h3>
+        <div class="two" style="flex-wrap:wrap;gap:10px;margin-bottom:8px">
+          <div><label style="font-weight:700;font-size:.82rem">من تاريخ</label><br>
+            <input type="date" id="wh_from" value="${WH_FILTER.from}" class="dfield"></div>
+          <div><label style="font-weight:700;font-size:.82rem">إلى تاريخ</label><br>
+            <input type="date" id="wh_to" value="${WH_FILTER.to}" class="dfield"></div>
+          <div><label style="font-weight:700;font-size:.82rem">الفرع</label><br>
+            <select id="wh_branch" class="dfield"><option value="">كل الفروع</option>
+              ${BRANCHES.map(b=>`<option value="${b.id}" ${WH_FILTER.branch===b.id?'selected':''}>${esc(b.name_ar)}</option>`).join('')}</select></div>
+          <div><label style="font-weight:700;font-size:.82rem">المادة</label><br>
+            <select id="wh_ing" class="dfield"><option value="">كل المواد</option>
+              ${INGR.map(i=>`<option value="${i.id}" ${WH_FILTER.ing===i.id?'selected':''}>${esc(i.name)}</option>`).join('')}</select></div>
+          <button class="mini ok" style="align-self:end" onclick="applyWhFilter()">🔍 فلترة</button>
+          <button class="mini edit" style="align-self:end" onclick="printWarehouseReport()">🖨️ طباعة (فاتورة)</button>
+          <button class="mini ok" style="align-self:end;background:var(--maroon)" onclick="printWarehousePDF()">📄 PDF منسّق</button>
+          <label style="align-self:end;display:flex;align-items:center;gap:5px;font-size:.78rem;font-weight:700;color:var(--muted)">
+            <input type="checkbox" id="wh_autoRefresh" ${WH_AUTO_REFRESH?'checked':''} onchange="toggleWhAutoRefresh(this.checked)" style="width:16px;height:16px">
+            🔄 تحديث تلقائي كل 5 ثواني
+          </label>
+        </div>
+      </div>
+
+      <div class="panel" style="margin-bottom:14px">
+        <h4 style="color:var(--maroon);margin-bottom:8px">📦 الأرصدة الحالية <span style="font-weight:600;font-size:.82rem;color:var(--muted)">(القيمة الإجمالية: <b style="color:var(--red)">${fmt(totalValue)} ${CURRENCY}</b>)</span></h4>
+        <div class="tbl-wrap"><table class="tbl">
+          <tr><th>الفرع</th><th>المادة</th><th>الرصيد</th><th>الوحدة</th><th>سعر الوحدة</th><th>القيمة</th></tr>
+          ${balances.map(b=>`<tr>
+            <td>🏪 ${esc(b.branches?.name_ar||'—')}</td>
+            <td><b>${esc(b.ingredients?.name||'—')}</b></td>
+            <td><b style="color:${(b.stock||0)<=(b.min_stock||0)?'var(--red)':'var(--ok)'}">${b.stock||0}</b></td>
+            <td>${esc(b.ingredients?.unit||'')}</td>
+            <td>${fmt(b.ingredients?.unit_cost||0)}</td>
+            <td><b>${fmt((b.stock||0)*(b.ingredients?.unit_cost||0))}</b></td>
+          </tr>`).join('')||'<tr><td colspan="6" class="empty-note">ما في أرصدة مطابقة للفلتر</td></tr>'}
+        </table></div>
+      </div>
+
+      <div class="panel">
+        <h4 style="color:var(--maroon);margin-bottom:8px">📜 سجل الحركات (${WH_FILTER.from} → ${WH_FILTER.to})</h4>
+        ${moveErr ? `<div class="alert-red">⚠️ ${esc(moveErr.message||'الجدول inventory_movements غير موجود — نفّذ SQL أولاً')}</div>` : `
+        <div class="tbl-wrap"><table class="tbl">
+          <tr><th>التاريخ والوقت</th><th>الفرع</th><th>المادة</th><th>النوع</th><th>الكمية</th><th>ملاحظة</th><th>الموظف</th></tr>
+          ${moves.map(m=>{
+            const t = MOVE_TYPE_AR[m.type]||{lbl:m.type,color:'var(--muted)'};
+            return `<tr>
+              <td>${new Date(m.created_at).toLocaleString('ar-JO')}</td>
+              <td>🏪 ${esc(m.branches?.name_ar||'—')}</td>
+              <td><b>${esc(m.ingredients?.name||'—')}</b> <small style="color:var(--muted)">(${esc(m.ingredients?.unit||'')})</small></td>
+              <td><b style="color:${t.color}">${t.lbl}</b></td>
+              <td><b style="color:${m.qty<0?'var(--red)':'var(--ok)'}">${m.qty>0?'+':''}${m.qty}</b></td>
+              <td style="font-size:.85rem;color:var(--muted)">${esc(m.note||'—')}</td>
+              <td>${esc(m.created_by||'—')}</td>
+            </tr>`;
+          }).join('')||'<tr><td colspan="7" class="empty-note">ما في حركات بهاي الفترة</td></tr>'}
+        </table></div>`}
+      </div>`;
+    window.__WH_BALANCES = balances; window.__WH_MOVES = moves;
+  }
+  function applyWhFilter(){
+    WH_FILTER.from = document.getElementById('wh_from')?.value || WH_FILTER.from;
+    WH_FILTER.to = document.getElementById('wh_to')?.value || WH_FILTER.to;
+    WH_FILTER.branch = document.getElementById('wh_branch')?.value || '';
+    WH_FILTER.ing = document.getElementById('wh_ing')?.value || '';
+    renderWarehouse();
+  }
+  function printWarehousePDF(){
+    const balances = window.__WH_BALANCES||[], moves = window.__WH_MOVES||[];
+    const totalValue = balances.reduce((a,b)=>a+(b.stock||0)*(b.ingredients?.unit_cost||0),0);
+    const html = `<html dir="rtl"><head><meta charset="UTF-8">
+      <style>
+        body{font-family:Cairo,Arial;padding:28px;color:#241414}
+        h1{color:#4a1010;margin-bottom:2px}
+        .sub{color:#8a7a72;font-weight:700;margin-bottom:18px}
+        h2{color:#4a1010;font-size:1.1rem;margin:22px 0 8px;border-bottom:2px solid #F60100;padding-bottom:4px}
+        table{width:100%;border-collapse:collapse;margin-bottom:10px}
+        td,th{padding:8px 10px;border:1px solid #eadfd4;text-align:right;font-size:.85rem}
+        th{background:#FFF8EE;font-weight:900}
+        .tot{font-weight:900;color:#F60100;font-size:1rem}
+        @media print{ .no-print{display:none} }
+      </style></head><body>
+      <button class="no-print" onclick="window.print()" style="margin-bottom:16px;background:#4a1010;color:#FDE507;border:none;border-radius:10px;padding:10px 20px;font-weight:800;cursor:pointer">🖨️ طباعة / حفظ PDF</button>
+      <h1>🏬 تقرير المستودع — Saber Jo Snack</h1>
+      <div class="sub">الفترة: ${WH_FILTER.from} → ${WH_FILTER.to} — تاريخ الطباعة: ${new Date().toLocaleString('ar-JO')}</div>
+      <h2>📦 الأرصدة الحالية — الإجمالي: <span class="tot">${fmt(totalValue)} ${CURRENCY}</span></h2>
+      <table><tr><th>الفرع</th><th>المادة</th><th>الرصيد</th><th>الوحدة</th><th>سعر الوحدة</th><th>القيمة</th></tr>
+      ${balances.map(b=>`<tr><td>${esc(b.branches?.name_ar||'—')}</td><td>${esc(b.ingredients?.name||'—')}</td><td>${b.stock||0}</td><td>${esc(b.ingredients?.unit||'')}</td><td>${fmt(b.ingredients?.unit_cost||0)}</td><td><b>${fmt((b.stock||0)*(b.ingredients?.unit_cost||0))}</b></td></tr>`).join('')||'<tr><td colspan="6">—</td></tr>'}
+      </table>
+      <h2>📜 سجل الحركات</h2>
+      <table><tr><th>التاريخ</th><th>الفرع</th><th>المادة</th><th>النوع</th><th>الكمية</th><th>ملاحظة</th><th>الموظف</th></tr>
+      ${moves.map(m=>`<tr><td>${new Date(m.created_at).toLocaleString('ar-JO')}</td><td>${esc(m.branches?.name_ar||'—')}</td><td>${esc(m.ingredients?.name||'—')}</td><td>${esc((MOVE_TYPE_AR[m.type]||{}).lbl||m.type)}</td><td>${m.qty}</td><td>${esc(m.note||'—')}</td><td>${esc(m.created_by||'—')}</td></tr>`).join('')||'<tr><td colspan="7">—</td></tr>'}
+      </table>
+      </body></html>`;
+    const win = window.open('','_blank');
+    win.document.write(html); win.document.close();
+  }
+  /* ================= 🧑‍🍳 سلف الموظفين ================= */
+  async function staffAdvancesView(staffId, staffName){
+    modal(`<h3>💰 سلف — ${esc(staffName)}</h3><div id="advBody" class="empty-note">... جاري التحميل</div>`);
+    try{
+      const { data, error } = await db.from('staff_advances').select('*').eq('staff_id', staffId).order('created_at',{ascending:false});
+      const body = document.getElementById('advBody');
+      if(!body) return; // المودال اتسكر قبل ما يخلص التحميل
+      if(error){ body.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message||'الجدول staff_advances غير موجود — نفّذ SQL أولاً')}</div>`; return; }
+      const list = data||[];
+      const outstanding = list.filter(a=>a.status==='open').reduce((s,a)=>s+parseFloat(a.amount||0),0);
+      body.innerHTML = `
+        <div style="background:#fff8e1;border-radius:10px;padding:10px 12px;margin-bottom:10px;font-weight:800">
+          المستحق حاليًا: <span style="color:var(--red)">${fmt(outstanding)} ${CURRENCY}</span>
+        </div>
+        <button class="add-btn" style="margin-bottom:10px" onclick="giveAdvanceForm('${staffId}','${esc(staffName)}')">➕ سلفة جديدة</button>
+        <div class="tbl-wrap"><table class="tbl">
+          <tr><th>التاريخ</th><th>المبلغ</th><th>من</th><th>ملاحظة</th><th>الحالة</th><th></th></tr>
+          ${list.map(a=>`<tr>
+            <td>${new Date(a.created_at).toLocaleDateString('ar-JO')}</td>
+            <td><b style="color:var(--red)">${fmt(a.amount)}</b></td>
+            <td>${a.account==='cash'?'💵 كاش':'🏦 بنك'}</td>
+            <td style="font-size:.85rem;color:var(--muted)">${esc(a.note||'—')}</td>
+            <td>${a.status==='open'?'<b style="color:var(--warn)">⏳ قائمة</b>':'<b style="color:var(--ok)">✅ متسددة</b>'}</td>
+            <td>${a.status==='open'?`<button class="mini ok" onclick="repayAdvance('${a.id}','${staffId}','${esc(staffName)}')">تسديد</button>`:''}</td>
+          </tr>`).join('')||'<tr><td colspan="6" class="empty-note">ما في سلف مسجلة</td></tr>'}
+        </table></div>
+        <div class="m-act"><button class="cancel" onclick="closeModal()">إغلاق</button></div>`;
+    }catch(e){ const body=document.getElementById('advBody'); if(body) body.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
+  }
+  function giveAdvanceForm(staffId, staffName){
+    modal(`<h3>➕ سلفة جديدة — ${esc(staffName)}</h3>
+      <div class="fld"><label>المبلغ</label><input id="adv_amt" type="number" step="0.01" min="0"></div>
+      <div class="fld"><label>من حساب</label>
+        <select id="adv_acc"><option value="cash">💵 كاش</option><option value="bank">🏦 بنك/كليك</option></select></div>
+      <div class="fld"><label>ملاحظة</label><input id="adv_note" placeholder="اختياري"></div>
+      <div class="m-act"><button class="save" onclick="saveAdvance('${staffId}','${esc(staffName)}')">حفظ ✓</button><button class="cancel" onclick="staffAdvancesView('${staffId}','${esc(staffName)}')">رجوع</button></div>`);
+  }
+  async function saveAdvance(staffId, staffName){
+    const amt = parseFloat(document.getElementById('adv_amt')?.value);
+    const acc = document.getElementById('adv_acc')?.value||'cash';
+    const note = document.getElementById('adv_note')?.value.trim();
+    if(isNaN(amt)||amt<=0){ toast('⚠️ اكتب مبلغ صحيح'); return; }
+    try{
+      const { data: adv, error } = await db.from('staff_advances').insert({
+        staff_id: staffId, staff_name: staffName, amount: amt, account: acc, note: note||null, status:'open', created_by: ME.full_name
+      }).select().single();
+      if(error){ toast('✗ '+error.message); console.error(error); return; }
+      await addTreasuryTx(acc, -amt, 'advance', adv.id, 'سلفة موظف — '+staffName);
+      toast('✓ اتسجلت السلفة'); staffAdvancesView(staffId, staffName);
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
+  }
+  async function repayAdvance(advId, staffId, staffName){
+    if(!confirm('تأكيد تسديد السلفة؟')) return;
+    try{
+      const { data: adv } = await db.from('staff_advances').select('*').eq('id', advId).single();
+      if(!adv) return;
+      await db.from('staff_advances').update({ status:'repaid', repaid_at: new Date().toISOString() }).eq('id', advId);
+      await addTreasuryTx(adv.account, +adv.amount, 'advance_repay', advId, 'تسديد سلفة — '+staffName);
+      toast('✓ اتسددت السلفة'); staffAdvancesView(staffId, staffName);
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
+  }
+
+  /* ================= شاشة المصاري ================= */
+  let TR_FILTER = { from:'', to:'', account:'', type:'' };
+  const TR_TYPE_AR = {
+    purchase:'🛒 فاتورة شراء', manual_in:'➕ إيداع يدوي', manual_out:'➖ سحب يدوي', expense:'💸 مصروف', sale:'🧾 مبيعات', advance:'🧑‍🍳 سلفة موظف', advance_repay:'✅ تسديد سلفة',
+  };
+  async function renderTreasury(){
+    const C = document.getElementById('admContent');
+    C.innerHTML = '<div class="empty-note">... جاري التحميل</div>';
+    if(!TR_FILTER.from){
+      const d = new Date(); d.setDate(d.getDate()-30);
+      TR_FILTER.from = d.toISOString().split('T')[0];
+      TR_FILTER.to = new Date().toISOString().split('T')[0];
+    }
+    const { data: allTx, error } = await db.from('treasury_transactions').select('*').order('created_at',{ascending:false});
+    if(error){
+      C.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message||'الجدول treasury_transactions غير موجود — نفّذ SQL أولاً')}</div>`;
+      console.error(error); return;
+    }
+    const all = allTx||[];
+    const cashBalance = all.filter(t=>t.account==='cash').reduce((a,t)=>a+parseFloat(t.amount||0),0);
+    const bankBalance = all.filter(t=>t.account==='bank').reduce((a,t)=>a+parseFloat(t.amount||0),0);
+
+    // ديون الموردين (فواتير غير مدفوعة)
+    const { data: unpaid } = await db.from('purchases').select('id,supplier,total,purchase_date').eq('payment_status','unpaid');
+    const bySupplierDebt = {};
+    (unpaid||[]).forEach(p=>{ bySupplierDebt[p.supplier] = (bySupplierDebt[p.supplier]||0) + parseFloat(p.total||0); });
+    const totalDebt = (unpaid||[]).reduce((a,p)=>a+parseFloat(p.total||0),0);
+
+    let filtered = all.filter(t=>{
+      const d = t.created_at.split('T')[0];
+      return d>=TR_FILTER.from && d<=TR_FILTER.to;
+    });
+    if(TR_FILTER.account) filtered = filtered.filter(t=>t.account===TR_FILTER.account);
+    if(TR_FILTER.type) filtered = filtered.filter(t=>t.type===TR_FILTER.type);
+
+    C.innerHTML = `
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">
+        <div class="stat" style="flex:1;min-width:180px">💵 رصيد الكاش<b style="color:${cashBalance<0?'var(--red)':'var(--ok)'}">${fmt(cashBalance)} ${CURRENCY}</b></div>
+        <div class="stat" style="flex:1;min-width:180px">🏦 رصيد البنك/كليك<b style="color:${bankBalance<0?'var(--red)':'var(--ok)'}">${fmt(bankBalance)} ${CURRENCY}</b></div>
+        <div class="stat" style="flex:1;min-width:180px">🔴 ديون على المطعم (فواتير غير مدفوعة)<b style="color:var(--red)">${fmt(totalDebt)} ${CURRENCY}</b></div>
+      </div>
+
+      <div class="panel" style="margin-bottom:14px">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+          <button class="add-btn" style="margin:0" onclick="treasuryManualForm('in')">➕ إيداع يدوي (المالك حط مصاري)</button>
+          <button class="add-btn" style="margin:0;background:var(--warn)" onclick="treasuryManualForm('out')">➖ سحب يدوي (المالك سحب مصاري)</button>
+        </div>
+        <div class="two" style="flex-wrap:wrap;gap:10px">
+          <div><label style="font-weight:700;font-size:.82rem">من تاريخ</label><br><input type="date" id="tr_from" value="${TR_FILTER.from}" class="dfield"></div>
+          <div><label style="font-weight:700;font-size:.82rem">إلى تاريخ</label><br><input type="date" id="tr_to" value="${TR_FILTER.to}" class="dfield"></div>
+          <div><label style="font-weight:700;font-size:.82rem">الحساب</label><br>
+            <select id="tr_acc" class="dfield"><option value="">الكل</option><option value="cash" ${TR_FILTER.account==='cash'?'selected':''}>كاش</option><option value="bank" ${TR_FILTER.account==='bank'?'selected':''}>بنك/كليك</option></select></div>
+          <div><label style="font-weight:700;font-size:.82rem">النوع</label><br>
+            <select id="tr_type" class="dfield"><option value="">الكل</option>
+              ${Object.entries(TR_TYPE_AR).map(([k,v])=>`<option value="${k}" ${TR_FILTER.type===k?'selected':''}>${v}</option>`).join('')}</select></div>
+          <button class="mini ok" style="align-self:end" onclick="applyTrFilter()">🔍 فلترة</button>
+          <button class="mini edit" style="align-self:end" onclick="printTreasuryPDF()">📄 PDF منسّق</button>
+        </div>
+      </div>
+
+      ${Object.keys(bySupplierDebt).length ? `
+      <div class="panel" style="margin-bottom:14px;border:2px solid var(--red)">
+        <h4 style="color:var(--red);margin-bottom:8px">🔴 ديون حسب المورد</h4>
+        <div class="tbl-wrap"><table class="tbl">
+          <tr><th>المورد</th><th>المستحق</th></tr>
+          ${Object.entries(bySupplierDebt).map(([s,amt])=>`<tr><td><b>${esc(s)}</b></td><td><b style="color:var(--red)">${fmt(amt)} ${CURRENCY}</b></td></tr>`).join('')}
+        </table></div>
+      </div>` : ''}
+
+      <div class="panel">
+        <h4 style="color:var(--maroon);margin-bottom:8px">📜 سجل الحركات المالية (${TR_FILTER.from} → ${TR_FILTER.to})</h4>
+        <div class="tbl-wrap"><table class="tbl">
+          <tr><th>التاريخ</th><th>الحساب</th><th>النوع</th><th>المبلغ</th><th>ملاحظة</th><th>الموظف</th></tr>
+          ${filtered.map(t=>`<tr>
+            <td>${new Date(t.created_at).toLocaleString('ar-JO')}</td>
+            <td>${t.account==='cash'?'💵 كاش':'🏦 بنك/كليك'}</td>
+            <td>${esc(TR_TYPE_AR[t.type]||t.type)}</td>
+            <td><b style="color:${t.amount<0?'var(--red)':'var(--ok)'}">${t.amount>0?'+':''}${fmt(t.amount)}</b></td>
+            <td style="font-size:.85rem;color:var(--muted)">${esc(t.note||'—')}</td>
+            <td>${esc(t.created_by||'—')}</td>
+          </tr>`).join('')||'<tr><td colspan="6" class="empty-note">ما في حركات بهاي الفترة</td></tr>'}
+        </table></div>
+      </div>`;
+    window.__TR_ALL = all; window.__TR_FILTERED = filtered;
+  }
+  function applyTrFilter(){
+    TR_FILTER.from = document.getElementById('tr_from')?.value || TR_FILTER.from;
+    TR_FILTER.to = document.getElementById('tr_to')?.value || TR_FILTER.to;
+    TR_FILTER.account = document.getElementById('tr_acc')?.value || '';
+    TR_FILTER.type = document.getElementById('tr_type')?.value || '';
+    renderTreasury();
+  }
+  function treasuryManualForm(dir){
+    modal(`<h3>${dir==='in'?'➕ إيداع يدوي':'➖ سحب يدوي'}</h3>
+      <div class="fld"><label>الحساب</label>
+        <select id="tm_acc"><option value="cash">💵 كاش</option><option value="bank">🏦 بنك/كليك</option></select></div>
+      <div class="fld"><label>المبلغ</label><input id="tm_amt" type="number" step="0.01" min="0"></div>
+      <div class="fld"><label>السبب</label><input id="tm_note" placeholder="مثال: المالك حط رأس مال، سحب أرباح..."></div>
+      <div class="m-act"><button class="save" onclick="saveTreasuryManual('${dir}')">حفظ ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
+  }
+  async function saveTreasuryManual(dir){
+    const acc = document.getElementById('tm_acc')?.value||'cash';
+    const amt = parseFloat(document.getElementById('tm_amt')?.value);
+    const note = document.getElementById('tm_note')?.value.trim();
+    if(isNaN(amt)||amt<=0){ toast('⚠️ اكتب مبلغ صحيح'); return; }
+    await addTreasuryTx(acc, dir==='in'?amt:-amt, dir==='in'?'manual_in':'manual_out', null, note||null);
+    closeModal(); toast('✓ اتسجلت الحركة'); renderTreasury();
+  }
+  function printTreasuryPDF(){
+    const filtered = window.__TR_FILTERED||[];
+    const html = `<html dir="rtl"><head><meta charset="UTF-8">
+      <style>body{font-family:Cairo,Arial;padding:28px}h1{color:#4a1010}table{width:100%;border-collapse:collapse;margin-top:14px}td,th{padding:8px 10px;border:1px solid #eadfd4;text-align:right;font-size:.85rem}th{background:#FFF8EE}@media print{.no-print{display:none}}</style>
+      </head><body>
+      <button class="no-print" onclick="window.print()" style="margin-bottom:16px;background:#4a1010;color:#FDE507;border:none;border-radius:10px;padding:10px 20px;font-weight:800;cursor:pointer">🖨️ طباعة / حفظ PDF</button>
+      <h1>💰 تقرير المصاري — Saber Jo Snack</h1>
+      <div>الفترة: ${TR_FILTER.from} → ${TR_FILTER.to}</div>
+      <table><tr><th>التاريخ</th><th>الحساب</th><th>النوع</th><th>المبلغ</th><th>ملاحظة</th><th>الموظف</th></tr>
+      ${filtered.map(t=>`<tr><td>${new Date(t.created_at).toLocaleString('ar-JO')}</td><td>${t.account==='cash'?'كاش':'بنك/كليك'}</td><td>${esc(TR_TYPE_AR[t.type]||t.type)}</td><td>${fmt(t.amount)}</td><td>${esc(t.note||'—')}</td><td>${esc(t.created_by||'—')}</td></tr>`).join('')}
+      </table></body></html>`;
+    const win = window.open('','_blank');
+    win.document.write(html); win.document.close();
+  }
+
+  function printWarehouseReport(){
+    const balances = window.__WH_BALANCES||[], moves = window.__WH_MOVES||[];
+    const totalValue = balances.reduce((a,b)=>a+(b.stock||0)*(b.ingredients?.unit_cost||0),0);
+    const html = `<html dir="rtl"><head><meta charset="UTF-8"><style>body{font-family:Cairo,Arial;padding:16px}table{width:100%;border-collapse:collapse;margin-bottom:20px}td,th{padding:6px;border:1px solid #ccc;text-align:right;font-size:.82rem}</style></head><body>
+      <h2>تقرير المستودع</h2><div>${WH_FILTER.from} → ${WH_FILTER.to}</div>
+      <h3>الأرصدة الحالية — الإجمالي: ${fmt(totalValue)} ${CURRENCY}</h3>
+      <table><tr><th>الفرع</th><th>المادة</th><th>الرصيد</th><th>الوحدة</th><th>القيمة</th></tr>
+      ${balances.map(b=>`<tr><td>${esc(b.branches?.name_ar||'—')}</td><td>${esc(b.ingredients?.name||'—')}</td><td>${b.stock||0}</td><td>${esc(b.ingredients?.unit||'')}</td><td>${fmt((b.stock||0)*(b.ingredients?.unit_cost||0))}</td></tr>`).join('')}
+      </table>
+      <h3>سجل الحركات</h3>
+      <table><tr><th>التاريخ</th><th>الفرع</th><th>المادة</th><th>النوع</th><th>الكمية</th><th>الموظف</th></tr>
+      ${moves.map(m=>`<tr><td>${new Date(m.created_at).toLocaleString('ar-JO')}</td><td>${esc(m.branches?.name_ar||'—')}</td><td>${esc(m.ingredients?.name||'—')}</td><td>${esc((MOVE_TYPE_AR[m.type]||{}).lbl||m.type)}</td><td>${m.qty}</td><td>${esc(m.created_by||'—')}</td></tr>`).join('')}
+      </table></body></html>`;
+    const text = 'تقرير المستودع — '+WH_FILTER.from+' إلى '+WH_FILTER.to+'\n';
+    printRaw(text, html);
+  }
+
   function printTransfersReport(){
     const filterStaff = window.__trFilterStaff||'';
     let filtered = TRANSFERS_DATA;
@@ -5667,6 +6219,7 @@ window.__lastEmpMealsData = null;
         staff_id: ME.id, staff_name: ME.full_name, reason, notes: note||null
       });
       if(error){ toast('✗ '+error.message); console.error(error); return; }
+      logMovement(branchId, ingId, -qty, 'waste', 'إتلاف — '+reason+(note?' — '+note:''));
       await logActivity('waste_log', 'إتلاف: '+qty+' — '+reason);
       closeModal(); toast('✓ اتسجل الإتلاف وانخصم من المخزون');
       printWasteReceipt(ingId, qty, branchId, reason, note);
@@ -5764,34 +6317,67 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
       const { data, error } = await db.from('suppliers').select('*').order('name');
       if(error){ C.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message||'الجدول suppliers غير موجود — نفّذ SQL أولاً')}</div>`; return; }
       SUPPLIERS_DATA = data||[];
-      const { data: purchases } = await db.from('purchases').select('supplier, total, purchase_date');
+      const { data: purchases } = await db.from('purchases').select('supplier, total, purchase_date, payment_status');
+      // 🔧 إصلاح ذاتي: أي مورد اتكتب اسمه بفاتورة شراء قديمة بس ما انسجل بجدول الموردين
+      // (بسبب خلل سابق بحفظ صامت) — نضيفه هلأ عشان تقرير الموردين ما يطلع فاضي
+      const existingNames = new Set(SUPPLIERS_DATA.map(s=>s.name));
+      const missingNames = [...new Set((purchases||[]).map(p=>p.supplier).filter(Boolean))].filter(n=>!existingNames.has(n));
+      if(missingNames.length){
+        try{
+          await db.from('suppliers').insert(missingNames.map(name=>({name})));
+          const { data: refreshed } = await db.from('suppliers').select('*').order('name');
+          if(refreshed) SUPPLIERS_DATA = refreshed;
+        }catch(e){ console.error('backfill suppliers failed:', e); }
+      }
       const bySupplier = {};
       (purchases||[]).forEach(p=>{
         if(!p.supplier) return;
-        if(!bySupplier[p.supplier]) bySupplier[p.supplier] = {count:0, total:0, last:null};
+        if(!bySupplier[p.supplier]) bySupplier[p.supplier] = {count:0, total:0, last:null, debt:0};
         bySupplier[p.supplier].count++;
         bySupplier[p.supplier].total += parseFloat(p.total||0);
+        if(!p.payment_status || p.payment_status==='unpaid') bySupplier[p.supplier].debt += parseFloat(p.total||0);
         if(!bySupplier[p.supplier].last || p.purchase_date > bySupplier[p.supplier].last) bySupplier[p.supplier].last = p.purchase_date;
       });
       C.innerHTML = `
-        <button class="add-btn" onclick="supplierForm()">+ مورد جديد</button>
+        <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+          <button class="add-btn" style="margin:0" onclick="supplierForm()">+ مورد جديد</button>
+          <button class="mini ok" onclick="printSuppliersPDF()">📄 PDF منسّق</button>
+        </div>
         <div class="tbl-wrap"><table class="tbl">
-          <tr><th>الاسم</th><th>الهاتف</th><th>عدد الفواتير</th><th>إجمالي المشتريات</th><th>آخر شراء</th><th></th></tr>
+          <tr><th>الاسم</th><th>الهاتف</th><th>عدد الفواتير</th><th>إجمالي المشتريات</th><th>الدين المستحق</th><th>آخر شراء</th><th></th></tr>
           ${SUPPLIERS_DATA.map(s=>{
-            const st = bySupplier[s.name] || {count:0,total:0,last:null};
+            const st = bySupplier[s.name] || {count:0,total:0,last:null,debt:0};
             return `<tr>
               <td><b>${esc(s.name)}</b></td>
               <td dir="ltr" style="text-align:right">${esc(s.phone||'—')}</td>
               <td>${st.count}</td>
               <td><b style="color:var(--red)">${fmt(st.total)} ${CURRENCY}</b></td>
+              <td>${st.debt>0?`<b style="color:var(--red)">${fmt(st.debt)} ${CURRENCY}</b>`:'✅ لا شي'}</td>
               <td>${st.last?new Date(st.last).toLocaleDateString('ar-JO'):'—'}</td>
               <td><button class="mini edit" onclick="supplierForm('${s.id}')">تعديل</button>
                   <button class="mini ok" onclick="showSupplierStatement('${s.id}','${esc(s.name)}')">📄 كشف حساب</button>
                   <button class="mini del" onclick="deleteSupplier('${s.id}','${esc(s.name)}')">حذف</button></td>
             </tr>`;
-          }).join('')||'<tr><td colspan="6" class="empty-note">ما في موردين مضافين بعد</td></tr>'}
+          }).join('')||'<tr><td colspan="7" class="empty-note">ما في موردين مضافين بعد</td></tr>'}
         </table></div>`;
+      window.__SUP_STATS = bySupplier;
     }catch(e){ C.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
+  }
+  function printSuppliersPDF(){
+    const stats = window.__SUP_STATS||{};
+    const html = `<html dir="rtl"><head><meta charset="UTF-8">
+      <style>body{font-family:Cairo,Arial;padding:28px}h1{color:#4a1010}table{width:100%;border-collapse:collapse;margin-top:14px}td,th{padding:8px 10px;border:1px solid #eadfd4;text-align:right;font-size:.85rem}th{background:#FFF8EE}@media print{.no-print{display:none}}</style>
+      </head><body>
+      <button class="no-print" onclick="window.print()" style="margin-bottom:16px;background:#4a1010;color:#FDE507;border:none;border-radius:10px;padding:10px 20px;font-weight:800;cursor:pointer">🖨️ طباعة / حفظ PDF</button>
+      <h1>🚚 تقرير الموردين — Saber Jo Snack</h1>
+      <div>تاريخ الطباعة: ${new Date().toLocaleString('ar-JO')}</div>
+      <table><tr><th>المورد</th><th>الهاتف</th><th>عدد الفواتير</th><th>الإجمالي</th><th>الدين المستحق</th><th>آخر شراء</th></tr>
+      ${SUPPLIERS_DATA.map(s=>{ const st=stats[s.name]||{count:0,total:0,last:null,debt:0};
+        return `<tr><td>${esc(s.name)}</td><td>${esc(s.phone||'—')}</td><td>${st.count}</td><td>${fmt(st.total)}</td><td>${fmt(st.debt)}</td><td>${st.last?new Date(st.last).toLocaleDateString('ar-JO'):'—'}</td></tr>`;
+      }).join('')}
+      </table></body></html>`;
+    const win = window.open('','_blank');
+    win.document.write(html); win.document.close();
   }
   function supplierForm(id){
     const s = SUPPLIERS_DATA.find(x=>x.id===id) || {};
@@ -6159,6 +6745,8 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
         if(e5){ toast('✗ فشل إنشاء مخزون الوجهة: '+e5.message); console.error(e5); return; }
       }
       transferredItems.push({ name: INGR.find(x=>x.id===it.ingredient_id)?.name||'—', unit: INGR.find(x=>x.id===it.ingredient_id)?.unit||'', quantity: it.quantity });
+      logMovement(fromId, it.ingredient_id, -it.quantity, 'transfer_out', 'نقل إلى '+(toBranch?.name_ar||''));
+      logMovement(toId, it.ingredient_id, it.quantity, 'transfer_in', 'نقل من '+(fromBranch?.name_ar||''));
     }
 
     // 3) تسجيل عملية النقل بسجل مستقل
@@ -6253,6 +6841,43 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
     };
     img.src = URL.createObjectURL(f);
   };
+  /* ================= الثيم ولون الخلفية ================= */
+  const THEME_PRESETS = {
+    default: { red:'#F60100', yellow:'#FDE507', maroon:'#4a1010', cream:'#FFF8EE' },
+    blue:    { red:'#0d6efd', yellow:'#ffd60a', maroon:'#0a1f44', cream:'#f2f6ff' },
+    green:   { red:'#1a9c4b', yellow:'#f4c542', maroon:'#0f3d24', cream:'#f3fbf3' },
+    purple:  { red:'#7b2cbf', yellow:'#f2c14e', maroon:'#2d0a4e', cream:'#f8f3ff' },
+    dark:    { red:'#e63946', yellow:'#ffd166', maroon:'#141414', cream:'#1e1e1e' },
+  };
+  function applyTheme(){
+    const t = {
+      red: SETTINGS.theme_red || THEME_PRESETS.default.red,
+      yellow: SETTINGS.theme_yellow || THEME_PRESETS.default.yellow,
+      maroon: SETTINGS.theme_maroon || THEME_PRESETS.default.maroon,
+      cream: SETTINGS.theme_cream || THEME_PRESETS.default.cream,
+    };
+    const root = document.documentElement.style;
+    root.setProperty('--red', t.red);
+    root.setProperty('--yellow', t.yellow);
+    root.setProperty('--maroon', t.maroon);
+    root.setProperty('--cream', t.cream);
+  }
+  function previewTheme(){
+    // معاينة حية بالإعدادات قبل الحفظ — من غير ما تلمس SETTINGS المحفوظة
+    const root = document.documentElement.style;
+    root.setProperty('--red', document.getElementById('f_themeRed')?.value||'#F60100');
+    root.setProperty('--yellow', document.getElementById('f_themeYellow')?.value||'#FDE507');
+    root.setProperty('--maroon', document.getElementById('f_themeMaroon')?.value||'#4a1010');
+    root.setProperty('--cream', document.getElementById('f_themeCream')?.value||'#FFF8EE');
+  }
+  function applyThemePreset(name){
+    const p = THEME_PRESETS[name]; if(!p) return;
+    const set = (id,v)=>{ const el=document.getElementById(id); if(el) el.value=v; };
+    set('f_themeRed', p.red); set('f_themeYellow', p.yellow); set('f_themeMaroon', p.maroon); set('f_themeCream', p.cream);
+    previewTheme();
+  }
+
+
   async function saveSettings(){
     const f_wanum = document.getElementById('f_wanum');
     const f_receiptTemplate = document.getElementById('f_receiptTemplate');
@@ -6284,6 +6909,10 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
       ready_wait_min: document.getElementById('f_readyWait') ? document.getElementById('f_readyWait').value : '7',
       alert_tone: f_alertTone ? f_alertTone.value : 'classic',
       alert_volume: f_alertVolume ? f_alertVolume.value : '0.5',
+      theme_red: document.getElementById('f_themeRed')?.value || '#F60100',
+      theme_yellow: document.getElementById('f_themeYellow')?.value || '#FDE507',
+      theme_maroon: document.getElementById('f_themeMaroon')?.value || '#4a1010',
+      theme_cream: document.getElementById('f_themeCream')?.value || '#FFF8EE',
     };
     if(window.__logoImg !== undefined) settings.invoice_logo = window.__logoImg || '';
     FIN_START_H = parseInt(settings.fin_start_hour)||10;
