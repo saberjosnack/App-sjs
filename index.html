@@ -578,6 +578,7 @@
         <button data-a="inventory" onclick="admTab('inventory')" style="background:var(--yellow);border-color:#d9c400">📋 جرد المخزون</button>
         <button data-a="warehouse" onclick="admTab('warehouse')" style="background:#d9c8ff;border-color:#7b2cbf">🏬 المستودع</button>
         <button data-a="treasury" onclick="admTab('treasury')" style="background:#c8f7d4;border-color:#1a9c4b">💰 المصاري</button>
+        <button data-a="hr" onclick="admTab('hr')" style="background:#ffe0c2;border-color:#e8890c">🧑‍💼 HR</button>
         <button data-a="ingredients" onclick="admTab('ingredients')">🥩 المكونات</button>
         <button data-a="recipes" onclick="admTab('recipes')">📋 الوصفات</button>
         <button data-a="transfers" onclick="admTab('transfers')">🔄 نقل بضاعة</button>
@@ -3990,7 +3991,7 @@
   const ADMIN_TAB_PERM = {
     items:'items_manage', cats:'cats_manage', codes:'codes_manage', staff:'staff_manage', roles:'admin_only', branches:'branches_manage', sett:'settings_manage', devices:'devices_manage',
     ingredients:'inventory_view', recipes:'inventory_view',
-    inventory:'inventory_audit', transfers:'inventory_transfer', warehouse:'admin_only', treasury:'admin_only',
+    inventory:'inventory_audit', transfers:'inventory_transfer', warehouse:'admin_only', treasury:'admin_only', hr:'admin_only',
     expenses:'expenses_view', purchases:'purchases_view',
     platforms:'platforms_view', empmeals:'empmeals_view', topcust:'topcust_view', waste:'waste_log', suppliers:'purchases_view',
   };
@@ -4058,6 +4059,7 @@
     if(admView==='transfers'){ renderTransfers(); return; }
     if(admView==='warehouse'){ renderWarehouse(); return; }
     if(admView==='treasury'){ renderTreasury(); return; }
+    if(admView==='hr'){ renderHR(); return; }
     if(admView==='platforms'){ renderPlatforms(); return; }
     if(admView==='devices'){ renderDevices(); return; }
     if(admView==='empmeals'){ renderEmpMeals(); return; }
@@ -5572,6 +5574,112 @@
     }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
 
+  /* ================= 🧑‍💼 HR — رواتب وساعات عمل وسلف ================= */
+  let HR_FILTER = { from:'', to:'' };
+  function hrsBetween(a,b){ return Math.max(0,(new Date(b)-new Date(a))/3600000); }
+  async function renderHR(){
+    const C = document.getElementById('admContent');
+    C.innerHTML = '<div class="empty-note">... جاري التحميل</div>';
+    if(!HR_FILTER.from){
+      const d = new Date(); d.setDate(1);
+      HR_FILTER.from = d.toISOString().split('T')[0];
+      HR_FILTER.to = new Date().toISOString().split('T')[0];
+    }
+    const [staffRes, shiftsRes, advRes] = await Promise.all([
+      db.from('staff').select('*').eq('is_active', true).order('full_name'),
+      db.from('cash_shifts').select('staff_id, start_time, end_time, status')
+        .gte('start_time', HR_FILTER.from+'T00:00:00').lte('start_time', HR_FILTER.to+'T23:59:59'),
+      db.from('staff_advances').select('staff_id, amount, created_at')
+        .gte('created_at', HR_FILTER.from+'T00:00:00').lte('created_at', HR_FILTER.to+'T23:59:59'),
+    ]);
+    if(shiftsRes.error){
+      C.innerHTML = `<div class="alert-red">⚠️ ${esc(shiftsRes.error.message||'خطأ بجلب الشيفتات')}</div>`;
+      console.error(shiftsRes.error); return;
+    }
+    const staffList = staffRes.data||[];
+    const shifts = (shiftsRes.data||[]).filter(s=>s.status==='closed' && s.end_time);
+    const advances = advRes.data||[];
+
+    const rows = staffList.map(s=>{
+      const myShifts = shifts.filter(sh=>sh.staff_id===s.id);
+      const hours = myShifts.reduce((a,sh)=>a+hrsBetween(sh.start_time, sh.end_time), 0);
+      const attendance = myShifts.length;
+      const advTotal = advances.filter(a=>a.staff_id===s.id).reduce((a,x)=>a+parseFloat(x.amount||0),0);
+      const gross = hours * (s.hourly_wage||0);
+      const net = gross - advTotal;
+      return { staff:s, hours, attendance, advTotal, gross, net };
+    });
+    const totalNet = rows.reduce((a,r)=>a+r.net,0);
+
+    C.innerHTML = `
+      <div class="panel" style="margin-bottom:14px">
+        <h3>🧑‍💼 HR — الرواتب والدوام</h3>
+        <div class="two" style="flex-wrap:wrap;gap:10px;margin-bottom:8px">
+          <div><label style="font-weight:700;font-size:.82rem">من تاريخ</label><br><input type="date" id="hr_from" value="${HR_FILTER.from}" class="dfield"></div>
+          <div><label style="font-weight:700;font-size:.82rem">إلى تاريخ</label><br><input type="date" id="hr_to" value="${HR_FILTER.to}" class="dfield"></div>
+          <button class="mini ok" style="align-self:end" onclick="applyHrFilter()">🔍 فلترة</button>
+          <button class="mini edit" style="align-self:end" onclick="printHRPDF()">📄 PDF منسّق</button>
+        </div>
+        <div style="color:var(--muted);font-size:.78rem;font-weight:600">💡 ساعات العمل والدوام محسوبة تلقائيًا من شيفتات الكاشير المغلقة بهاي الفترة. الموظفين يلي ما بيفتحوا شيفت (مطبخ مثلًا) ساعاتهم رح تطلع صفر — لازم يكون عندهم شيفت مسجل.</div>
+      </div>
+
+      <div class="panel">
+        <div style="margin-bottom:10px;font-weight:800">إجمالي صافي الرواتب المستحقة بالفترة: <span style="color:var(--red)">${fmt(totalNet)} ${CURRENCY}</span></div>
+        <div class="tbl-wrap"><table class="tbl">
+          <tr><th>الموظف</th><th>سعر الساعة</th><th>ساعات العمل</th><th>عدد الدوامات</th><th>السلف بالفترة</th><th>صافي الراتب</th><th></th></tr>
+          ${rows.map(r=>`<tr>
+            <td><b>${esc(r.staff.full_name)}</b></td>
+            <td>${fmt(r.staff.hourly_wage||0)}</td>
+            <td>${r.hours.toFixed(1)}</td>
+            <td>${r.attendance}</td>
+            <td>${r.advTotal>0?`<b style="color:var(--warn)">${fmt(r.advTotal)}</b>`:'—'}</td>
+            <td><b style="color:${r.net<0?'var(--red)':'var(--ok)'}">${fmt(r.net)} ${CURRENCY}</b></td>
+            <td><button class="mini ok" onclick="hrStatement('${r.staff.id}')">📋 كشف</button></td>
+          </tr>`).join('')||'<tr><td colspan="7" class="empty-note">ما في موظفين نشطين</td></tr>'}
+        </table></div>
+      </div>`;
+    window.__HR_ROWS = rows;
+  }
+  function applyHrFilter(){
+    HR_FILTER.from = document.getElementById('hr_from')?.value || HR_FILTER.from;
+    HR_FILTER.to = document.getElementById('hr_to')?.value || HR_FILTER.to;
+    renderHR();
+  }
+  function hrStatement(staffId){
+    const r = (window.__HR_ROWS||[]).find(x=>x.staff.id===staffId); if(!r) return;
+    modal(`<h3>📋 كشف — ${esc(r.staff.full_name)}</h3>
+      <div style="color:var(--muted);font-weight:700;margin-bottom:10px">الفترة: ${HR_FILTER.from} → ${HR_FILTER.to}</div>
+      <div class="tbl-wrap"><table class="tbl">
+        <tr><td>سعر ساعة العمل</td><td><b>${fmt(r.staff.hourly_wage||0)} ${CURRENCY}</b></td></tr>
+        <tr><td>عدد الدوامات (شيفتات)</td><td><b>${r.attendance}</b></td></tr>
+        <tr><td>مجموع ساعات العمل</td><td><b>${r.hours.toFixed(1)} ساعة</b></td></tr>
+        <tr><td>إجمالي الراتب (قبل السلف)</td><td><b>${fmt(r.gross)} ${CURRENCY}</b></td></tr>
+        <tr><td>مجموع السلف المسحوبة بالفترة</td><td><b style="color:var(--warn)">${fmt(r.advTotal)} ${CURRENCY}</b></td></tr>
+        <tr><td><b>صافي المستحق له</b></td><td><b style="color:${r.net<0?'var(--red)':'var(--ok)'}">${fmt(r.net)} ${CURRENCY}</b></td></tr>
+      </table></div>
+      <div class="m-act">
+        <button class="save" onclick="staffAdvancesView('${staffId}','${esc(r.staff.full_name)}')">💰 عرض تفاصيل السلف</button>
+        <button class="cancel" onclick="closeModal()">إغلاق</button>
+      </div>`);
+  }
+  function printHRPDF(){
+    const rows = window.__HR_ROWS||[];
+    const totalNet = rows.reduce((a,r)=>a+r.net,0);
+    const html = `<html dir="rtl"><head><meta charset="UTF-8">
+      <style>body{font-family:Cairo,Arial;padding:28px}h1{color:#4a1010}table{width:100%;border-collapse:collapse;margin-top:14px}td,th{padding:8px 10px;border:1px solid #eadfd4;text-align:right;font-size:.85rem}th{background:#FFF8EE}.tot{font-weight:900;color:#F60100}@media print{.no-print{display:none}}</style>
+      </head><body>
+      <button class="no-print" onclick="window.print()" style="margin-bottom:16px;background:#4a1010;color:#FDE507;border:none;border-radius:10px;padding:10px 20px;font-weight:800;cursor:pointer">🖨️ طباعة / حفظ PDF</button>
+      <h1>🧑‍💼 تقرير HR — Saber Jo Snack</h1>
+      <div>الفترة: ${HR_FILTER.from} → ${HR_FILTER.to}</div>
+      <table><tr><th>الموظف</th><th>سعر الساعة</th><th>ساعات العمل</th><th>عدد الدوامات</th><th>السلف</th><th>صافي الراتب</th></tr>
+      ${rows.map(r=>`<tr><td>${esc(r.staff.full_name)}</td><td>${fmt(r.staff.hourly_wage||0)}</td><td>${r.hours.toFixed(1)}</td><td>${r.attendance}</td><td>${fmt(r.advTotal)}</td><td>${fmt(r.net)}</td></tr>`).join('')}
+      </table>
+      <h2>إجمالي صافي الرواتب: <span class="tot">${fmt(totalNet)} ${CURRENCY}</span></h2>
+      </body></html>`;
+    const win = window.open('','_blank');
+    win.document.write(html); win.document.close();
+  }
+
   /* ================= شاشة المصاري ================= */
   let TR_FILTER = { from:'', to:'', account:'', type:'' };
   const TR_TYPE_AR = {
@@ -6426,6 +6534,7 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
       if(error){ R.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message)}</div>`; return; }
       const list = purchases||[];
       const total = list.reduce((a,p)=>a+parseFloat(p.total||0),0);
+      const debt = list.filter(p=>!p.payment_status||p.payment_status==='unpaid').reduce((a,p)=>a+parseFloat(p.total||0),0);
       // تجميع كل المواد المشتراة من هالمورد بهاي الفترة
       const byItem = {};
       list.forEach(p=>(p.purchase_items||[]).forEach(i=>{
@@ -6434,38 +6543,100 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
         byItem[nm].qty += parseFloat(i.quantity||0);
         byItem[nm].cost += (i.quantity||0)*(i.unit_cost||0);
       }));
-      window.__lastSupplierStmt = { supplierName, from, to, list, total, byItem };
+      window.__lastSupplierStmt = { supplierName, from, to, list, total, debt, byItem };
+      const payLbl = p => p.payment_status==='cash'?'✅ كاش':p.payment_status==='bank'?'✅ كليك/بنك':'<b style="color:var(--red)">🔴 دين</b>';
       R.innerHTML = `
         <div class="day-head" style="margin:10px 0">
           <div class="stat">عدد الفواتير<b>${list.length}</b></div>
           <div class="stat">إجمالي المشتريات<b style="color:var(--red)">${fmt(total)} ${CURRENCY}</b></div>
+          <div class="stat">الدين المستحق حاليًا<b style="color:var(--red)">${fmt(debt)} ${CURRENCY}</b></div>
         </div>
-        <div style="font-weight:900;color:var(--maroon);margin-bottom:8px">📦 المواد المشتراة (مجمّعة)</div>
+        <div style="font-weight:900;color:var(--maroon);margin-bottom:8px">📦 المواد المشتراة (مجمّعة كل الفترة)</div>
         <div class="tbl-wrap" style="margin-bottom:14px"><table class="tbl">
           <tr><th>المادة</th><th>الكمية الإجمالية</th><th>التكلفة</th></tr>
           ${Object.entries(byItem).map(([nm,d])=>`<tr><td><b>${esc(nm)}</b></td><td>${fmt(d.qty)} ${esc(d.unit)}</td><td>${fmt(d.cost)}</td></tr>`).join('')||'<tr><td colspan="3" class="empty-note">لا شي</td></tr>'}
         </table></div>
-        <div style="font-weight:900;color:var(--maroon);margin-bottom:8px">🧾 كل فاتورة لحالها</div>
-        <div class="tbl-wrap"><table class="tbl">
-          <tr><th>التاريخ</th><th>الفرع</th><th>المواد</th><th>الإجمالي</th></tr>
-          ${list.map(p=>`<tr><td>${p.purchase_date}</td><td>${esc(p.branches?.name_ar||'—')}</td>
-            <td style="font-size:.82rem;color:var(--muted)">${(p.purchase_items||[]).map(i=>i.quantity+'×'+esc(i.ingredients?.name||'—')).join('، ')}</td>
-            <td><b>${fmt(p.total)}</b></td></tr>`).join('')||'<tr><td colspan="4" class="empty-note">ما في فواتير بهاي الفترة</td></tr>'}
-        </table></div>
-        <button class="mini edit" style="margin-top:10px;width:100%" onclick="printSupplierStatement()">🖨️ طباعة كشف الحساب</button>`;
+        <div style="font-weight:900;color:var(--maroon);margin-bottom:8px">🧾 تفصيل كل فاتورة على حدة</div>
+        ${list.map(p=>`
+          <div style="border:1.5px solid var(--line);border-radius:12px;padding:10px 12px;margin-bottom:10px;background:#fff">
+            <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;font-weight:800;margin-bottom:6px">
+              <span>📅 ${p.purchase_date} — 🏪 ${esc(p.branches?.name_ar||'—')}</span>
+              <span>${payLbl(p)}</span>
+            </div>
+            <table class="tbl"><tr><th>المادة</th><th>الكمية</th><th>سعر الوحدة</th><th>الإجمالي</th></tr>
+              ${(p.purchase_items||[]).map(i=>`<tr>
+                <td>${esc(i.ingredients?.name||'—')}</td>
+                <td>${fmt(i.quantity)} ${esc(i.ingredients?.unit||'')}</td>
+                <td>${fmt(i.unit_cost||0)}</td>
+                <td><b>${fmt((i.quantity||0)*(i.unit_cost||0))}</b></td>
+              </tr>`).join('')||'<tr><td colspan="4" class="empty-note">لا شي</td></tr>'}
+            </table>
+            <div style="text-align:left;font-weight:900;margin-top:6px;color:var(--red)">إجمالي الفاتورة: ${fmt(p.total)} ${CURRENCY}</div>
+            ${p.notes?`<div style="font-size:.8rem;color:var(--muted);margin-top:4px">📝 ${esc(p.notes)}</div>`:''}
+          </div>`).join('') || '<div class="empty-note">ما في فواتير بهاي الفترة</div>'}
+        <div style="display:flex;gap:8px;margin-top:10px">
+          <button class="mini edit" style="flex:1" onclick="printSupplierStatement()">🖨️ طباعة (فاتورة)</button>
+          <button class="mini ok" style="flex:1;background:var(--maroon)" onclick="printSupplierStatementPDF()">📄 PDF منسّق</button>
+        </div>`;
     }catch(e){ R.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
   }
   function printSupplierStatement(){
     const d = window.__lastSupplierStmt; if(!d) return;
     const text = 'كشف حساب مورد — '+d.supplierName+'\n— Saber Jo Snack —\n'+d.from+' → '+d.to+'\n════════════════\n'+
-      'عدد الفواتير: '+d.list.length+'\nالإجمالي: '+fmt(d.total)+' '+CURRENCY+'\n────────────────\n'+
+      'عدد الفواتير: '+d.list.length+'\nالإجمالي: '+fmt(d.total)+' '+CURRENCY+'\nالدين المستحق: '+fmt(d.debt)+' '+CURRENCY+'\n────────────────\n'+
       Object.entries(d.byItem).map(([nm,x])=>nm+': '+fmt(x.qty)+' '+x.unit+' — '+fmt(x.cost)+' '+CURRENCY).join('\n')+'\n';
     const html = `<html dir="rtl"><head><meta charset="UTF-8"><style>body{font-family:Cairo,Arial;padding:16px}table{width:100%;border-collapse:collapse}td,th{padding:6px;border:1px solid #ccc;text-align:right}</style></head><body>
       <h2>كشف حساب — ${esc(d.supplierName)}</h2><div>${d.from} إلى ${d.to}</div>
       <table><tr><th>المادة</th><th>الكمية</th><th>التكلفة</th></tr>
       ${Object.entries(d.byItem).map(([nm,x])=>`<tr><td>${esc(nm)}</td><td>${fmt(x.qty)} ${esc(x.unit)}</td><td>${fmt(x.cost)}</td></tr>`).join('')}
-      </table><h3>الإجمالي: ${fmt(d.total)} ${CURRENCY}</h3></body></html>`;
+      </table><h3>الإجمالي: ${fmt(d.total)} ${CURRENCY} — الدين المستحق: ${fmt(d.debt)} ${CURRENCY}</h3></body></html>`;
     printRaw(text, html);
+  }
+  function printSupplierStatementPDF(){
+    const d = window.__lastSupplierStmt; if(!d) return;
+    const payLbl = p => p.payment_status==='cash'?'✅ مدفوعة كاش':p.payment_status==='bank'?'✅ مدفوعة كليك/بنك':'🔴 دين (غير مدفوعة)';
+    const html = `<html dir="rtl"><head><meta charset="UTF-8">
+      <style>
+        body{font-family:Cairo,Arial;padding:28px;color:#241414}
+        h1{color:#4a1010;margin-bottom:2px} .sub{color:#8a7a72;font-weight:700;margin-bottom:18px}
+        h2{color:#4a1010;font-size:1.05rem;margin:20px 0 8px;border-bottom:2px solid #F60100;padding-bottom:4px}
+        table{width:100%;border-collapse:collapse;margin-bottom:8px}
+        td,th{padding:6px 8px;border:1px solid #eadfd4;text-align:right;font-size:.82rem}
+        th{background:#FFF8EE;font-weight:900}
+        .inv{border:1.5px solid #eadfd4;border-radius:10px;padding:10px 12px;margin-bottom:12px;page-break-inside:avoid}
+        .inv-head{display:flex;justify-content:space-between;font-weight:800;margin-bottom:6px}
+        .tot{font-weight:900;color:#F60100}
+        @media print{ .no-print{display:none} }
+      </style></head><body>
+      <button class="no-print" onclick="window.print()" style="margin-bottom:16px;background:#4a1010;color:#FDE507;border:none;border-radius:10px;padding:10px 20px;font-weight:800;cursor:pointer">🖨️ طباعة / حفظ PDF</button>
+      <h1>📄 كشف حساب مورد — ${esc(d.supplierName)}</h1>
+      <div class="sub">الفترة: ${d.from} → ${d.to} — Saber Jo Snack — تاريخ الطباعة: ${new Date().toLocaleString('ar-JO')}</div>
+
+      <h2>الملخص</h2>
+      <table><tr><th>عدد الفواتير</th><th>إجمالي المشتريات</th><th>الدين المستحق حاليًا</th></tr>
+        <tr><td>${d.list.length}</td><td><b>${fmt(d.total)} ${CURRENCY}</b></td><td><b style="color:#F60100">${fmt(d.debt)} ${CURRENCY}</b></td></tr>
+      </table>
+
+      <h2>📦 المواد المشتراة (مجمّعة كل الفترة)</h2>
+      <table><tr><th>المادة</th><th>الكمية</th><th>التكلفة</th></tr>
+      ${Object.entries(d.byItem).map(([nm,x])=>`<tr><td>${esc(nm)}</td><td>${fmt(x.qty)} ${esc(x.unit)}</td><td>${fmt(x.cost)}</td></tr>`).join('')}
+      </table>
+
+      <h2>🧾 تفصيل كل فاتورة</h2>
+      ${d.list.map(p=>`
+        <div class="inv">
+          <div class="inv-head"><span>📅 ${p.purchase_date} — 🏪 ${esc(p.branches?.name_ar||'—')}</span><span>${payLbl(p)}</span></div>
+          <table><tr><th>المادة</th><th>الكمية</th><th>سعر الوحدة</th><th>الإجمالي</th></tr>
+          ${(p.purchase_items||[]).map(i=>`<tr><td>${esc(i.ingredients?.name||'—')}</td><td>${fmt(i.quantity)} ${esc(i.ingredients?.unit||'')}</td><td>${fmt(i.unit_cost||0)}</td><td>${fmt((i.quantity||0)*(i.unit_cost||0))}</td></tr>`).join('')}
+          </table>
+          <div style="text-align:left;font-weight:900;color:#F60100">إجمالي الفاتورة: ${fmt(p.total)} ${CURRENCY}</div>
+          ${p.notes?`<div style="font-size:.8rem;color:#8a7a72">📝 ${esc(p.notes)}</div>`:''}
+        </div>`).join('')}
+
+      <h2>الإجمالي الكلي: <span class="tot">${fmt(d.total)} ${CURRENCY}</span></h2>
+      </body></html>`;
+    const win = window.open('','_blank');
+    win.document.write(html); win.document.close();
   }
 
   async function deleteSupplier(id, name){
@@ -7066,6 +7237,8 @@ try {
         </select></div>
       <div class="fld"><label>الفرع</label><select id="f_sb"><option value="">كل الفروع</option>
         ${BRANCHES.map(b=>`<option value="${b.id}" ${st.branch_id===b.id?'selected':''}>${esc(b.name_ar)}</option>`).join('')}</select></div>
+      <div class="fld"><label>💰 سعر ساعة العمل (${CURRENCY}) — لحساب الراتب بشاشة HR</label>
+        <input id="f_swage" type="number" step="0.01" min="0" value="${st.hourly_wage||''}" placeholder="مثال: 1.5"></div>
       <div class="fld" id="permsBox"><label>الصلاحيات * <span style="font-weight:600">(عدّل زي ما بدك — بتنحفظ لهاد الموظف تحديدًا)</span></label>
         <div style="display:flex;gap:8px;margin:6px 0">
           <button type="button" class="mini ok" onclick="document.querySelectorAll('.permChk').forEach(c=>c.checked=true)">تحديد الكل</button>
@@ -7100,7 +7273,7 @@ try {
     let roleVal = f_sr ? f_sr.value : 'cashier';
     let roleId = null;
     if(roleVal.startsWith('custom:')){ roleId = roleVal.split(':')[1]; roleVal='custom'; }
-    const rec={full_name: f_sn ? f_sn.value.trim() : '', username: f_su ? f_su.value.trim() : '', pin: f_sp ? f_sp.value.trim() : '', role: roleVal, role_id: roleId, branch_id: f_sb ? f_sb.value||null : null, permissions};
+    const rec={full_name: f_sn ? f_sn.value.trim() : '', username: f_su ? f_su.value.trim() : '', pin: f_sp ? f_sp.value.trim() : '', role: roleVal, role_id: roleId, branch_id: f_sb ? f_sb.value||null : null, permissions, hourly_wage: parseFloat(document.getElementById('f_swage')?.value)||0};
     if(!rec.full_name||!rec.username||!/^\d{4}$/.test(rec.pin)){ toast('⚠️ جميع الحقول مطلوبة'); return; }
     if(rec.role==='cashier'&&!rec.branch_id){ toast('⚠️ الكاشير يحتاج فرع'); return; }
     const dup=STAFF.find(x=>x.pin===rec.pin&&x.id!==id&&x.is_active);
