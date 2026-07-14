@@ -339,6 +339,7 @@
     <div id="readyBadge" class="hidden" style="background:var(--warn);color:#fff;border-radius:999px;padding:4px 12px;font-weight:900;font-size:.85rem;animation:blink 1s infinite">📦 طلبات جاهزة!</div>
     <div class="who"><span id="whoName"></span><br><span id="whoBranch"></span></div>
     <button onclick="showDevicePrinterSettings()" style="background:var(--yellow);color:var(--maroon);border-radius:999px;padding:6px 14px;font-weight:900;margin-left:6px">🖨️ الطابعة</button>
+    <button onclick="openCallDirectory()" style="background:var(--ok);color:#fff;border-radius:999px;padding:6px 14px;font-weight:900;margin-left:6px">📞 اتصال <span id="onlineCountBadge"></span></button>
     <button onclick="checkForUpdate()" style="background:rgba(255,255,255,.2);color:#fff;border-radius:999px;padding:6px 14px;font-weight:900;margin-left:6px">🔄 تحقق من تحديث</button>
     <button id="btnLogout" onclick="window.logout()">خروج</button>
   </header>
@@ -1270,7 +1271,9 @@
     setTimeout(sendDeviceHeartbeat, 2000);
     setInterval(sendDeviceHeartbeat, 45000);
     setInterval(checkDevicesOffline, 60000);
-    // (نظام الاتصال الصوتي بين الموظفين اتشال)
+    initCallSignaling();
+    setTimeout(updateOnlineCount, 2500);
+    setInterval(updateOnlineCount, 30000);
     checkShift();
     if (shiftCheckInterval) clearInterval(shiftCheckInterval);
     shiftCheckInterval = setInterval(checkShift, 30000);
@@ -7919,6 +7922,285 @@ try {
         if(firstOk) admView = firstOk;
       }
       renderAdmin();
+    }
+  }
+
+  /* ================= 📞 اتصال صوتي بين الموظفين (WebRTC + Supabase Realtime) ================= */
+  // ملاحظات استقرار:
+  // - كل جهاز بيشترك بقناة خاصة فيه (call-<id>) عشان يستقبل الإشارات (offer/answer/ice/hangup...)
+  // - الصوت نفسه مباشر بين الجهازين (WebRTC P2P) — مش عن طريق Supabase، فبيشتغل بسلاسة لو الشبكة كويسة
+  // - كل الأحداث (قبول/رفض/انقطاع/مشغول) بتسكّر المكالمة صح من الطرفين — ما في حالة "علقانة"
+  // - أكتر من STUN سيرفر عشان يزيد فرصة نجاح الاتصال المباشر
+  const ICE_SERVERS = [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun.cloudflare.com:3478' },
+  ];
+  let CALL_STATE = null;      // {pc, localStream, remoteAudio, targetId, targetName, role, status, pendingIce}
+  let PENDING_OFFER = null;   // مكالمة واردة بانتظار قبول/رفض
+  let callTimerInterval = null, ringInterval = null, ringTimeout = null;
+  let __callChannel = null;
+
+  function initCallSignaling(){
+    try{
+      if(__callChannel){ try{ db.removeChannel(__callChannel); }catch(e){} }
+      __callChannel = db.channel('call-'+ME.id, { config: { broadcast: { self: false } } });
+      __callChannel.on('broadcast', {event:'signal'}, ({payload}) => handleCallSignal(payload));
+      __callChannel.subscribe();
+    }catch(e){ console.error('initCallSignaling failed:', e); }
+  }
+
+  async function sendCallSignal(targetId, payload){
+    try{
+      const ch = db.channel('call-'+targetId, { config: { broadcast: { self: false } } });
+      await new Promise((resolve)=>{
+        ch.subscribe((status)=>{ if(status==='SUBSCRIBED') resolve(); });
+        setTimeout(resolve, 1500); // ما نعلق لو ما اشترك بسرعة
+      });
+      await ch.send({ type:'broadcast', event:'signal', payload });
+      setTimeout(()=>{ try{ db.removeChannel(ch); }catch(e){} }, 2000);
+    }catch(e){ console.error('sendCallSignal failed:', e); }
+  }
+
+  async function updateOnlineCount(){
+    try{
+      const cutoff = new Date(Date.now()-90000).toISOString();
+      const { data, error } = await db.from('devices').select('staff_id, staff_name, branch_id, last_seen').gte('last_seen', cutoff).not('staff_id','is',null);
+      if(error){ window.__callDirError = error.message; console.error('updateOnlineCount failed:', error); return; }
+      window.__callDirError = null;
+      const map = {};
+      (data||[]).forEach(d=>{ if(d.staff_id) map[d.staff_id] = d; }); // آخر جهاز لكل موظف
+      ONLINE_STAFF = Object.values(map).filter(d=>d.staff_id!==ME.id);
+      const badge = document.getElementById('onlineCountBadge');
+      if(badge) badge.textContent = ONLINE_STAFF.length ? '('+ONLINE_STAFF.length+')' : '';
+    }catch(e){ window.__callDirError = e.message; console.error('updateOnlineCount failed:', e); }
+  }
+
+  async function openCallDirectory(){
+    await updateOnlineCount();
+    const branchName = id => BRANCHES.find(b=>b.id===id)?.name_ar || 'بدون فرع';
+    modal(`<h3>📞 اتصال بموظف</h3>
+      <div style="color:var(--muted);font-weight:700;font-size:.82rem;margin-bottom:10px">قائمة الموظفين المتصلين بالنظام حاليًا (بأي فرع) — اتصال صوتي مباشر ثنائي الاتجاه.</div>
+      ${window.__callDirError ? `<div class="alert-red" style="margin-bottom:10px">⚠️ تعذّر جلب قائمة المتاحين: ${esc(window.__callDirError)}<br>غالبًا ناقص عمود بجدول devices — نفّذ SQL الإصلاح (fix_devices_presence.sql).</div>` : ''}
+      <div class="tbl-wrap"><table class="tbl">
+        <tr><th>الموظف</th><th>الفرع</th><th></th></tr>
+        ${ONLINE_STAFF.map(d=>`<tr>
+          <td><b>🟢 ${esc(d.staff_name||'—')}</b></td>
+          <td>${esc(branchName(d.branch_id))}</td>
+          <td><button class="mini ok" onclick="closeModal();callEmployee('${d.staff_id}','${esc(d.staff_name||'')}')">📞 اتصال</button></td>
+        </tr>`).join('')||'<tr><td colspan="3" class="empty-note">ما في موظفين متاحين هلأ</td></tr>'}
+      </table></div>
+      <div class="m-act"><button class="cancel" onclick="closeModal()">إغلاق</button></div>`);
+  }
+
+  function cleanupCall(){
+    if(callTimerInterval){ clearInterval(callTimerInterval); callTimerInterval=null; }
+    if(ringInterval){ clearInterval(ringInterval); ringInterval=null; }
+    if(ringTimeout){ clearTimeout(ringTimeout); ringTimeout=null; }
+    if(CALL_STATE){
+      try{ CALL_STATE.pc?.close(); }catch(e){}
+      try{ CALL_STATE.localStream?.getTracks().forEach(t=>t.stop()); }catch(e){}
+      try{ if(CALL_STATE.remoteAudio){ CALL_STATE.remoteAudio.pause(); CALL_STATE.remoteAudio.srcObject=null; CALL_STATE.remoteAudio.remove(); } }catch(e){}
+    }
+    CALL_STATE = null;
+    PENDING_OFFER = null;
+    document.getElementById('callBar')?.remove();
+    document.getElementById('incomingCallBox')?.remove();
+  }
+
+  function setupPeerConnection(pc, remoteTargetIdGetter){
+    // 🔊 مهم للاستقرار الثنائي: أي مسار صوتي واصل من الطرف التاني بيتشغّل فورًا،
+    // ولو الأوتوبلاي انحظر من المتصفح، منجرب نشغّله يدويًا ومنوريك تنبيه بسيط
+    const remoteAudio = document.createElement('audio');
+    remoteAudio.autoplay = true;
+    remoteAudio.setAttribute('playsinline','');
+    document.body.appendChild(remoteAudio);
+    pc.ontrack = e => {
+      remoteAudio.srcObject = e.streams[0];
+      remoteAudio.play().catch(()=>{
+        toast('🔊 دوس أي مكان بالشاشة عشان يشتغل صوت المكالمة');
+        const enableOnce = ()=>{ remoteAudio.play().catch(()=>{}); document.removeEventListener('click', enableOnce); };
+        document.addEventListener('click', enableOnce, {once:true});
+      });
+    };
+    pc.onconnectionstatechange = () => {
+      console.log('call connectionState:', pc.connectionState);
+      if(['failed','disconnected','closed'].includes(pc.connectionState) && CALL_STATE?.status==='connected'){
+        toast('📞 انقطعت المكالمة'); cleanupCall();
+      }
+    };
+    pc.oniceconnectionstatechange = () => {
+      if(pc.iceConnectionState==='failed'){
+        toast('⚠️ فشل الاتصال المباشر — الشبكة عند حد الطرفين ممكن تكون تمنع الاتصال المباشر (شبكة جامعة/مؤسسة)');
+      }
+    };
+    return remoteAudio;
+  }
+
+  async function callEmployee(targetId, targetName){
+    if(CALL_STATE){ toast('⚠️ في مكالمة شغالة أصلًا'); return; }
+    try{
+      const stream = await navigator.mediaDevices.getUserMedia({audio:true});
+      const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+      stream.getTracks().forEach(t=>pc.addTrack(t, stream));
+      const remoteAudio = setupPeerConnection(pc);
+      pc.onicecandidate = e => { if(e.candidate) sendCallSignal(targetId, {action:'ice', from:ME.id, candidate:e.candidate}); };
+      CALL_STATE = { pc, localStream:stream, remoteAudio, targetId, targetName, role:'caller', status:'calling', pendingIce:[] };
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      await sendCallSignal(targetId, { action:'offer', from:ME.id, fromName:ME.full_name, sdp:offer });
+      showCallBar('calling');
+      ringTimeout = setTimeout(()=>{
+        if(CALL_STATE && CALL_STATE.status==='calling' && CALL_STATE.targetId===targetId){
+          sendCallSignal(targetId, {action:'cancel', from:ME.id});
+          toast('📞 ما في رد'); cleanupCall();
+        }
+      }, 30000);
+    }catch(e){
+      console.error('callEmployee failed:', e);
+      if(e.name==='NotAllowedError') toast('⛔ لازم تسمح للمتصفح باستخدام المايكروفون');
+      else toast('✗ فشل بدء المكالمة: '+(e.message||''));
+      cleanupCall();
+    }
+  }
+
+  function handleCallSignal(payload){
+    try{
+      const { action, from, fromName, sdp, candidate } = payload;
+      if(action==='offer'){
+        if(CALL_STATE){ sendCallSignal(from, {action:'busy', from:ME.id}); return; } // مشغول بمكالمة تانية
+        PENDING_OFFER = { from, fromName, sdp };
+        showIncomingCall(fromName);
+        return;
+      }
+      if(action==='answer'){
+        if(CALL_STATE && CALL_STATE.role==='caller' && CALL_STATE.status==='calling'){
+          if(ringTimeout){ clearTimeout(ringTimeout); ringTimeout=null; }
+          CALL_STATE.pc.setRemoteDescription(sdp).then(()=>{
+            CALL_STATE.status = 'connected';
+            (CALL_STATE.pendingIce||[]).forEach(c=>CALL_STATE.pc.addIceCandidate(c).catch(()=>{}));
+            CALL_STATE.pendingIce = [];
+            showCallBar('connected');
+          }).catch(e=>console.error('setRemoteDescription (answer) failed:', e));
+        }
+        return;
+      }
+      if(action==='ice'){
+        if(CALL_STATE && CALL_STATE.pc){
+          if(CALL_STATE.pc.remoteDescription) CALL_STATE.pc.addIceCandidate(candidate).catch(()=>{});
+          else (CALL_STATE.pendingIce = CALL_STATE.pendingIce||[]).push(candidate);
+        }
+        return;
+      }
+      // busy / reject / hangup / cancel — كلهم بينهو المكالمة من عندي
+      if(action==='busy') toast('📞 '+(fromName||'الطرف الآخر')+' مشغول بمكالمة تانية');
+      else if(action==='reject') toast('📞 رفض المكالمة');
+      else if(action==='cancel') { /* الطرف التاني ألغى قبل ما نرد — سكّر صندوق الوارد بصمت */ }
+      else toast('📞 انتهت المكالمة');
+      if(PENDING_OFFER && PENDING_OFFER.from===from) PENDING_OFFER=null;
+      document.getElementById('incomingCallBox')?.remove();
+      cleanupCall();
+    }catch(e){ console.error('handleCallSignal error:', e); }
+  }
+
+  function showIncomingCall(fromName){
+    const old = document.getElementById('incomingCallBox'); if(old) old.remove();
+    const box = document.createElement('div');
+    box.id = 'incomingCallBox';
+    box.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:99999;display:flex;align-items:center;justify-content:center';
+    box.innerHTML = `
+      <div style="background:#fff;border-radius:20px;padding:28px 32px;text-align:center;min-width:260px">
+        <div style="font-size:3rem;margin-bottom:6px;animation:blink 1s infinite">📞</div>
+        <div style="font-weight:900;font-size:1.2rem;margin-bottom:4px">مكالمة واردة</div>
+        <div style="font-weight:700;color:var(--muted);margin-bottom:18px">${esc(fromName||'موظف')}</div>
+        <div style="display:flex;gap:12px;justify-content:center">
+          <button onclick="rejectIncomingCall()" style="background:var(--red);color:#fff;border:none;border-radius:999px;padding:12px 24px;font-weight:900;font-size:1rem">❌ رفض</button>
+          <button onclick="acceptIncomingCall()" style="background:var(--ok);color:#fff;border:none;border-radius:999px;padding:12px 24px;font-weight:900;font-size:1rem">✅ قبول</button>
+        </div>
+      </div>`;
+    document.body.appendChild(box);
+    beepUrgentIncoming();
+    ringInterval = setInterval(()=>{ if(PENDING_OFFER) beepUrgentIncoming(); else clearInterval(ringInterval); }, 2500);
+    ringTimeout = setTimeout(()=>{
+      if(PENDING_OFFER && PENDING_OFFER.fromName===fromName){ rejectIncomingCall(true); }
+    }, 30000);
+  }
+
+  window.rejectIncomingCall = async function(silent){
+    if(!PENDING_OFFER) return;
+    const from = PENDING_OFFER.from;
+    PENDING_OFFER = null;
+    if(ringInterval){ clearInterval(ringInterval); ringInterval=null; }
+    if(ringTimeout){ clearTimeout(ringTimeout); ringTimeout=null; }
+    document.getElementById('incomingCallBox')?.remove();
+    if(!silent) await sendCallSignal(from, {action:'reject', from:ME.id});
+  };
+
+  window.acceptIncomingCall = async function(){
+    if(!PENDING_OFFER) return;
+    const { from, fromName, sdp } = PENDING_OFFER;
+    if(ringInterval){ clearInterval(ringInterval); ringInterval=null; }
+    if(ringTimeout){ clearTimeout(ringTimeout); ringTimeout=null; }
+    document.getElementById('incomingCallBox')?.remove();
+    try{
+      const stream = await navigator.mediaDevices.getUserMedia({audio:true});
+      const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+      stream.getTracks().forEach(t=>pc.addTrack(t, stream));
+      const remoteAudio = setupPeerConnection(pc);
+      pc.onicecandidate = e => { if(e.candidate) sendCallSignal(from, {action:'ice', from:ME.id, candidate:e.candidate}); };
+      CALL_STATE = { pc, localStream:stream, remoteAudio, targetId:from, targetName:fromName, role:'callee', status:'connected', pendingIce:[] };
+      await pc.setRemoteDescription(sdp);
+      (CALL_STATE.pendingIce||[]).forEach(c=>pc.addIceCandidate(c).catch(()=>{}));
+      CALL_STATE.pendingIce = [];
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      await sendCallSignal(from, { action:'answer', from:ME.id, sdp:answer });
+      PENDING_OFFER = null;
+      showCallBar('connected');
+    }catch(e){
+      console.error('acceptIncomingCall failed:', e);
+      if(e.name==='NotAllowedError') toast('⛔ لازم تسمح للمتصفح باستخدام المايكروفون');
+      sendCallSignal(from, {action:'reject', from:ME.id});
+      cleanupCall();
+    }
+  };
+
+  window.hangupCall = function(){
+    if(!CALL_STATE) return;
+    sendCallSignal(CALL_STATE.targetId, {action:'hangup', from:ME.id});
+    cleanupCall();
+  };
+
+  window.toggleCallMute = function(){
+    if(!CALL_STATE?.localStream) return;
+    const track = CALL_STATE.localStream.getAudioTracks()[0];
+    if(!track) return;
+    track.enabled = !track.enabled;
+    const btn = document.getElementById('muteCallBtn');
+    if(btn) btn.textContent = track.enabled ? '🔊' : '🔇';
+  };
+
+  function showCallBar(status){
+    const old = document.getElementById('callBar'); if(old) old.remove();
+    if(!CALL_STATE) return;
+    const bar = document.createElement('div');
+    bar.id = 'callBar';
+    bar.style.cssText = 'position:fixed;bottom:16px;left:50%;transform:translateX(-50%);z-index:99996;background:var(--maroon);color:#fff;border-radius:999px;padding:10px 18px;display:flex;align-items:center;gap:12px;box-shadow:0 10px 30px rgba(0,0,0,.35);font-weight:800';
+    bar.innerHTML = `
+      <span>📞</span>
+      <span>${esc(CALL_STATE.targetName)}</span>
+      <span id="callTimer" style="color:var(--yellow)">${status==='calling'?'... يرن':'00:00'}</span>
+      <button id="muteCallBtn" onclick="toggleCallMute()" style="background:rgba(255,255,255,.2);border-radius:999px;padding:6px 10px;color:#fff">🔊</button>
+      <button onclick="hangupCall()" style="background:var(--red);border-radius:999px;padding:6px 14px;color:#fff">☎️ إنهاء</button>`;
+    document.body.appendChild(bar);
+    if(callTimerInterval) clearInterval(callTimerInterval);
+    if(status==='connected'){
+      const start = Date.now();
+      callTimerInterval = setInterval(()=>{
+        const s = Math.floor((Date.now()-start)/1000);
+        const el = document.getElementById('callTimer');
+        if(el) el.textContent = String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');
+      }, 1000);
     }
   }
 
