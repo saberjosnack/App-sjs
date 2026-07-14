@@ -1,3 +1,144 @@
+
+Claude finished the response
+
+Implementing click handlers and expanding order statuses
+Implementing click handlers and expanding order statuses
+الآن نضيف حالة "بدأت التحضير" لقائمة الطلبات نفسها:
+
+
+Weighed system compatibility concerns before implementing status changes
+Weighed system compatibility concerns before implementing status changes
+الآن حذف عميل من شاشة العملاء:
+
+
+Diagnosed permission override bug and architected solution
+Diagnosed permission override bug and architected solution
+وجدت السبب الحقيقي والدقيق للمشكلة! لما تحفظ أي موظف (حتى لو خليته على دور مخصص)، الكود كان "يجمّد" نسخة من كل الصلاحيات وقتها بشكل فردي لهاد الموظف تحديدًا — فبعدين لما ترجع تعدّل صلاحيات الدور نفسه، التعديل ما كان يوصل للموظف لأنه عنده نسخته الخاصة الجامدة اللي بتطغى دايمًا. بصلحها:
+
+
+Verified syntax and structural integrity
+Verified syntax and structural integrity
+Good, they're defined correctly (just as window.X = function). Everything checks out. Let's finalize:
+
+
+Ran a command, created a file, read a file
+Ran a command, created a file, read a file
+ملخص كل الإصلاحات
+🔴 الأهم — مشكلة الفراطة/الفاصلة (بكل النظام): لقيت السبب — لما لوحة مفاتيح الجهاز عربية، الأرقام بتنكتب ٧٨٫٩ بدل 78.9 والنظام ما كان يفهمها فيقص أي شي بعد الفاصلة. صلحتها بمكان واحد يغطي كل حقل إدخال بالنظام تلقائيًا — أي رقم عربي أو فاصلة عربية بتتحول إنجليزي أوتوماتيك وانت بتكتب.
+
+فتح/إغلاق الشيفت — صار نموذج فيه 3 حقول منفصلة: كاش، فيزا، كليك — بكل من الفتح والإغلاق، وبيحسبلك المتوقع والفرق لكل واحد لحاله بالتقرير المطبوع.
+
+الخصومات — أضفتها كبطاقة واضحة على اللوحة الرئيسية، وكعمود جديد بجدول الشيفتات.
+
+تفاصيل الطلب — دوس على أي طلب بشاشة "📋 الطلبات" وبيفتحلك كل التفاصيل (الأصناف، الأسعار، الخصم، العميل، إلخ).
+
+حذف عميل — زر "حذف" جديد لليوزر المدير بس بشاشة العملاء.
+
+الأدوار — كانت السبب الحقيقي: كل مرة تحفظ موظف، كان النظام "يجمّد" نسخة صلاحيات خاصة فيه بغض النظر عن دوره، فتعديل الدور بعدين ما كان يوصله. صلحتها: أي موظف على دور مخصص بيتبع صلاحيات الدور مباشرة ودايمًا. مهم: الموظفين يلي كانوا مضافين قبل هالإصلاح لازم تفتحهم من "تعديل" وتحفظ مرة وحدة (بدون أي تغيير) عشان يتحرروا من النسخة القديمة المجمّدة.
+
+المصاري — زر جديد "🔄 ترحيل كل مبيعات اليوم" بشاشة المصاري، يرحّل كل طلبات اليوم المالي الحالي (حتى يلي قبل ما فعّلنا الترحيل التلقائي) — وما بيكرر أي طلب اترحّل مسبقًا.
+
+حالة الطلب الجديدة — صار فيه 3 خطوات بدل خطوتين: 🔥 بلشت التحضير ← ✅ جاهز ← 📦 تم الاستلام.
+
+⚠️ SQL لازم تنفذه: ملف setup_shift_multitender.sql الجديد (أعمدة الفيزا والكليك بجدول الشيفتات). باقي الإصلاحات ما احتاجت SQL جديد.
+
+ارفع الملف، نفّذ الـSQL، وجرب — خصوصًا جرب تكتب رقم فيه فاصلة بأي حقل وشوف هل ضلت الفراطة معك هالمرة.
+
+
+Index
+Code · HTML 
+
+Setup shift multitender
+Code · SQL 
+1784066364770_image.png
+بعطيني مافي حد متاح
+
+
+تحقق من سبب عدم ظهور الموظفين المتاحين بالنظام
+تحقق من سبب عدم ظهور الموظفين المتاحين بالنظام
+هاي فعليًا طبيعية ومش خطأ — القائمة بتستثني حسابك انت نفسك عن قصد (المفروض ما تقدر تتصل بنفسك 😄). فإذا كنت مسجل دخول من جهاز واحد بس وقت ما جربت، طبيعي يطلعلك "ما في حدا متاح" — لأنه ما في حدا غيرك مسجل دخول بنفس اللحظة.
+
+اها في 4 اجهزه فاتحه و داخل من كروم انا 
+و كمان شغله طباعه كشف حساب للموظف مافي و خيار تعديل للموظف مافي مشان ادخل سعر ساعه العمل  و بدي اقدر اطبعلو كشف مفصل
+
+
+توضيح حساب المستخدم وإضافة ميزة تصحيح الدليل
+توضيح حساب المستخدم وإضافة ميزة تصحيح الدليل
+بخصوص كشف موظف HR — تمام صلحتهم:
+
+
+Ran a command, read a file
+Ran a command, read a file
+شاشة HR — تم:
+
+زر "✏️ تعديل" جديد جنب كل موظف — فيه تقدر تدخل/تعدّل سعر ساعة العمل ونسبة خصم الوجبة
+زر "📄 طباعة كشف" جديد (وكمان داخل نافذة "📋 كشف" نفسها) — بيطلعلك تقرير PDF كامل ومفصّل: ملخص + كل يوم عمل مسجّل بتاريخه + كل وجبة أخذها برقم فاتورتها + كل سلفة أخذها وحالتها
+بخصوص الاتصال — 4 أجهزة وبرضو ما في حدا يطلع:
+هاي مش طبيعية (4 أجهزة المفروض يطلع فيهم على الأقل 3 غيرك). في احتمالين أقوى شي:
+
+Q: الآ04 أجهزة، كل واحد دخل برقم PIN تابع لموظف تاني حقيقي، ولا كلهم دخلو بنفس PIN المالك؟
+A: موظف تاني مش نفس اليوزر تاعي
+
+Q: بعد ما رفعت الملف الجديد على الأربع أجهزة، عملت تحديث قوي للصفحة ولا بس ريفرش عادي؟</br>(المتصفحات بتحتفظ بنسخة قديمة من الملف لحد ما تعمل تحديث قوي)</br>
+A: لا هارد رفريش
+
+
+شخّص مشكلة الذاكرة المؤقتة وصاغ إرشادات تحديث شاملة
+شخّص مشكلة الذاكرة المؤقتة وصاغ إرشادات تحديث شاملة
+لقيناها — هاي بالضبط السبب. رفريش عادي مش كافي، لازم "هارد رفريش" (تحديث قوي) عشان المتصفح يرمي النسخة القديمة المخزّنة عنده ويجيب الملف الجديد فعليًا. هاي خطوات التحديث القوي حسب نوع الجهاز:
+
+💻 كمبيوتر (Chrome/Edge):
+اضغط Ctrl + Shift + R (وندوز) أو Cmd + Shift + R (ماك)
+
+📱 موبايل/تابلت أندرويد (Chrome):
+مافي زر مباشر — بدك تعمل:
+
+افتح إعدادات Chrome ← الخصوصية والأمان ← مسح بيانات التصفح
+اختار "الصور والملفات المخزنة مؤقتًا" (Cached images and files) بس — ما تختار "كلمات المرور" أو "بيانات الموقع" حتى ما يطير تسجيل الدخول
+امسح، وارجع افتح الصفحة من جديد
+أو أسهل طريقة على أي جهاز: سكّر التطبيق/التبويب كامل (اقفله من الخلفية مش بس ارجع للخلف)، وافتحه من جديد من الرابط.
+
+اعمل هيك على الأربع أجهزة (أو جرب على جهازين بالأول للتأكد)، وبعدين افتح "📞 اتصال" من أي جهاز وشوف هل طلعت باقي الأجهزة الثلاثة. قولي شو صار.
+
+لا ما طلع
+
+
+تشخيص خلل صامت وصياغة حل شامل
+تشخيص خلل صامت وصياغة حل شامل
+غالبًا نفس نوع المشكلة يلي واجهناها قبل هيك مع خصم الـVIP — الكود بيحاول يحفظ عمودين (staff_id وstaff_name) بجدول devices عشان يعرف مين المسجل دخول على كل جهاز، بس على الأغلب هالعمودين مش موجودين أصلًا بجدول devices عندك (لأنه الجدول انعمل قبل ميزة الاتصال). فالـheartbeat بيفشل بصمت كل شوي، وما بينعرض أي حدا "متاح".
+
+الحل — نفّذ هاد بـ Supabase SQL Editor:
+
+
+تحسين معالجة الأخطاء وتعزيز رؤية الإخفاقات للمستخدم
+تحسين معالجة الأخطاء وتعزيز رؤية الإخفاقات للمستخدم
+عشان بالمرة الجاية أي مشكلة زي هاي تكون أوضح فورًا (مش لازم نكتشفها بالتجربة)، خليت الكود يوريك رسالة خطأ واضحة بدل ما يطلع فاضي بصمت:
+
+
+Ran 2 commands, edited a file, read a file
+Ran 2 commands, edited a file, read a file
+الخطوات:
+
+نفّذ fix_devices_presence.sql بـ Supabase
+ارفع index.html الجديد
+هارد رفريش على الأجهزة زي ما عملت قبل
+افتح "📞 اتصال" — لو لسا في مشكلة، هلأ رح تطلعلك رسالة حمراء بالضبط شو الخطأ (بدل ما تطلع فاضية بصمت)، ابعتهالي وبنعرف فورًا وين المشكلة بالضبط
+
+Fix devices presence
+Code · SQL 
+
+Index
+Code · HTML 
+
+
+
+
+
+Claude is AI and can make mistakes. Please double-check responses.
+
+
+Index · HTML
+Syntax highlighting has been disabled due to code size.
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
@@ -5810,9 +5951,11 @@
             <td>${r.advTotal>0?`<b style="color:var(--warn)">${fmt(r.advTotal)}</b>`:'—'}</td>
             <td><b style="color:${r.net<0?'var(--red)':'var(--ok)'}">${fmt(r.net)} ${CURRENCY}</b></td>
             <td style="white-space:nowrap">
+              <button class="mini edit" onclick="mealNameForm('${r.emp.id}')">✏️ تعديل</button>
               <button class="mini edit" onclick="attendanceForm('${r.emp.id}','${esc(r.emp.name)}')">🕐 ساعات</button>
               <button class="mini ok" onclick="hrAdvancesView('${r.emp.id}','${esc(r.emp.name)}')">💰 سلف</button>
               <button class="mini tog" onclick="hrStatement('${r.emp.id}')">📋 كشف</button>
+              <button class="mini ok" style="background:var(--maroon)" onclick="printHrEmployeePDF('${r.emp.id}')">📄 طباعة كشف</button>
             </td>
           </tr>`).join('')||'<tr><td colspan="9" class="empty-note">ما في موظفي HR بعد — ضيف واحد من الزر فوق</td></tr>'}
         </table></div>
@@ -5862,8 +6005,65 @@
       </table></div>
       <div class="m-act">
         <button class="save" onclick="hrAdvancesView('${empId}','${esc(r.emp.name)}')">💰 تفاصيل السلف</button>
+        <button class="mini ok" style="background:var(--maroon);color:#fff" onclick="printHrEmployeePDF('${empId}')">📄 طباعة كشف مفصل</button>
         <button class="cancel" onclick="closeModal()">إغلاق</button>
       </div>`);
+  }
+  async function printHrEmployeePDF(empId){
+    const r = (window.__HR_ROWS||[]).find(x=>x.emp.id===empId); if(!r) return;
+    // جلب تفصيل الحضور والوجبات والسلف لهاد الموظف بالفترة المحددة
+    const [attRes, advRes, ordRes] = await Promise.all([
+      db.from('hr_attendance').select('work_date, hours, note').eq('employee_id', empId)
+        .gte('work_date', HR_FILTER.from).lte('work_date', HR_FILTER.to).order('work_date'),
+      db.from('hr_advances').select('created_at, amount, account, note, status').eq('employee_id', empId)
+        .gte('created_at', HR_FILTER.from+'T00:00:00').lte('created_at', HR_FILTER.to+'T23:59:59').order('created_at'),
+      db.from('orders').select('created_at, order_number, total').eq('employee_tab_name', r.emp.name).neq('status','cancelled')
+        .gte('created_at', HR_FILTER.from+'T00:00:00').lte('created_at', HR_FILTER.to+'T23:59:59').order('created_at'),
+    ]);
+    const att = attRes.data||[], adv = advRes.data||[], meals = ordRes.data||[];
+    const html = `<html dir="rtl"><head><meta charset="UTF-8">
+      <style>
+        body{font-family:Cairo,Arial;padding:28px;color:#241414}
+        h1{color:#4a1010;margin-bottom:2px} .sub{color:#8a7a72;font-weight:700;margin-bottom:18px}
+        h2{color:#4a1010;font-size:1.05rem;margin:20px 0 8px;border-bottom:2px solid #F60100;padding-bottom:4px}
+        table{width:100%;border-collapse:collapse;margin-bottom:8px}
+        td,th{padding:6px 8px;border:1px solid #eadfd4;text-align:right;font-size:.85rem}
+        th{background:#FFF8EE;font-weight:900}
+        .tot{font-weight:900;color:#F60100}
+        @media print{ .no-print{display:none} }
+      </style></head><body>
+      <button class="no-print" onclick="window.print()" style="margin-bottom:16px;background:#4a1010;color:#FDE507;border:none;border-radius:10px;padding:10px 20px;font-weight:800;cursor:pointer">🖨️ طباعة / حفظ PDF</button>
+      <h1>📋 كشف حساب موظف — ${esc(r.emp.name)}</h1>
+      <div class="sub">الفترة: ${HR_FILTER.from} → ${HR_FILTER.to} — Saber Jo Snack — تاريخ الطباعة: ${new Date().toLocaleString('ar-JO')}</div>
+
+      <h2>الملخص</h2>
+      <table>
+        <tr><td>سعر ساعة العمل</td><td><b>${fmt(r.emp.hourly_wage||0)} ${CURRENCY}</b></td></tr>
+        <tr><td>أيام الحضور</td><td><b>${r.days}</b></td></tr>
+        <tr><td>مجموع ساعات العمل</td><td><b>${r.hours.toFixed(1)} ساعة</b></td></tr>
+        <tr><td>إجمالي الراتب (قبل الخصومات)</td><td><b>${fmt(r.gross)} ${CURRENCY}</b></td></tr>
+        <tr><td>قيمة الوجبات المخصومة</td><td><b>${fmt(r.mealsTotal)} ${CURRENCY}</b></td></tr>
+        <tr><td>السلف المخصومة</td><td><b>${fmt(r.advTotal)} ${CURRENCY}</b></td></tr>
+        <tr><td><b>صافي المستحق له</b></td><td><b class="tot">${fmt(r.net)} ${CURRENCY}</b></td></tr>
+      </table>
+
+      <h2>🕐 تفصيل ساعات العمل (${att.length})</h2>
+      <table><tr><th>التاريخ</th><th>الساعات</th><th>ملاحظة</th></tr>
+      ${att.map(a=>`<tr><td>${a.work_date}</td><td>${a.hours}</td><td>${esc(a.note||'—')}</td></tr>`).join('')||'<tr><td colspan="3">لا شي مسجّل</td></tr>'}
+      </table>
+
+      <h2>🍽️ تفصيل الوجبات (${meals.length})</h2>
+      <table><tr><th>التاريخ</th><th>رقم الفاتورة</th><th>القيمة</th></tr>
+      ${meals.map(m=>`<tr><td>${new Date(m.created_at).toLocaleDateString('ar-JO')}</td><td>${m.order_number}</td><td>${fmt(m.total)}</td></tr>`).join('')||'<tr><td colspan="3">لا شي</td></tr>'}
+      </table>
+
+      <h2>💰 تفصيل السلف (${adv.length})</h2>
+      <table><tr><th>التاريخ</th><th>المبلغ</th><th>من</th><th>الحالة</th><th>ملاحظة</th></tr>
+      ${adv.map(a=>`<tr><td>${new Date(a.created_at).toLocaleDateString('ar-JO')}</td><td>${fmt(a.amount)}</td><td>${a.account==='cash'?'كاش':'بنك'}</td><td>${a.status==='open'?'قائمة':'متسددة'}</td><td>${esc(a.note||'—')}</td></tr>`).join('')||'<tr><td colspan="5">لا شي</td></tr>'}
+      </table>
+      </body></html>`;
+    const win = window.open('','_blank');
+    win.document.write(html); win.document.close();
   }
   function printHRPDF(){
     const rows = window.__HR_ROWS||[];
@@ -7793,13 +7993,15 @@ try {
   async function updateOnlineCount(){
     try{
       const cutoff = new Date(Date.now()-90000).toISOString();
-      const { data } = await db.from('devices').select('staff_id, staff_name, branch_id, last_seen').gte('last_seen', cutoff).not('staff_id','is',null);
+      const { data, error } = await db.from('devices').select('staff_id, staff_name, branch_id, last_seen').gte('last_seen', cutoff).not('staff_id','is',null);
+      if(error){ window.__callDirError = error.message; console.error('updateOnlineCount failed:', error); return; }
+      window.__callDirError = null;
       const map = {};
       (data||[]).forEach(d=>{ if(d.staff_id) map[d.staff_id] = d; }); // آخر جهاز لكل موظف
       ONLINE_STAFF = Object.values(map).filter(d=>d.staff_id!==ME.id);
       const badge = document.getElementById('onlineCountBadge');
       if(badge) badge.textContent = ONLINE_STAFF.length ? '('+ONLINE_STAFF.length+')' : '';
-    }catch(e){ console.error('updateOnlineCount failed:', e); }
+    }catch(e){ window.__callDirError = e.message; console.error('updateOnlineCount failed:', e); }
   }
 
   async function openCallDirectory(){
@@ -7807,6 +8009,7 @@ try {
     const branchName = id => BRANCHES.find(b=>b.id===id)?.name_ar || 'بدون فرع';
     modal(`<h3>📞 اتصال بموظف</h3>
       <div style="color:var(--muted);font-weight:700;font-size:.82rem;margin-bottom:10px">قائمة الموظفين المتصلين بالنظام حاليًا (بأي فرع) — اتصال صوتي مباشر.</div>
+      ${window.__callDirError ? `<div class="alert-red" style="margin-bottom:10px">⚠️ تعذّر جلب قائمة المتاحين: ${esc(window.__callDirError)}<br>غالبًا ناقص عمود بجدول devices — نفّذ SQL الإصلاح.</div>` : ''}
       <div class="tbl-wrap"><table class="tbl">
         <tr><th>الموظف</th><th>الفرع</th><th></th></tr>
         ${ONLINE_STAFF.map(d=>`<tr>
@@ -8022,3 +8225,4 @@ try {
 </script>
 </body>
 </html>
+
