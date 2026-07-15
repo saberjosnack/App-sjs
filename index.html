@@ -3986,19 +3986,25 @@
     if(!K) return;
     const ok=(orders||[]).filter(o=>o.status!=='cancelled');
     const cancelled=(orders||[]).filter(o=>o.status==='cancelled');
-    const gross=ok.reduce((a,o)=>a+parseFloat(o.subtotal||0),0);
+    const itemsSales=ok.reduce((a,o)=>a+parseFloat(o.subtotal||0),0); // مبيعات الأصناف بس (قبل الخصم والتوصيل)
     const discounts=ok.reduce((a,o)=>a+parseFloat(o.discount||0),0);
-    const net=ok.reduce((a,o)=>a+parseFloat(o.total||0),0);
+    const deliveryTotal=ok.reduce((a,o)=>a+parseFloat(o.delivery_fee||0),0);
+    const grandTotal=ok.reduce((a,o)=>a+parseFloat(o.total||0),0); // = itemsSales - discounts + deliveryTotal (المحصّل فعليًا)
+    const mealsOrders=ok.filter(o=>o.employee_tab_name);
+    const mealsTotal=mealsOrders.reduce((a,o)=>a+parseFloat(o.total||0),0);
     const delivery=ok.filter(o=>o.order_type==='delivery');
     const takeaway=ok.filter(o=>o.order_type==='takeaway');
-    const avgOrder=ok.length?net/ok.length:0;
+    const avgOrder=ok.length?grandTotal/ok.length:0;
     const byBranch={};
     ok.forEach(o=>{ const b=BRANCHES.find(x=>x.id===o.branch_id)?.name_ar||'—'; byBranch[b]=(byBranch[b]||0)+parseFloat(o.total||0); });
     K.innerHTML = `
+      <div style="color:var(--muted);font-weight:700;font-size:.78rem;margin-bottom:6px">💡 سلسلة الحساب: مبيعات الأصناف − الخصومات + أجور التوصيل = الإجمالي المحصّل فعليًا</div>
       <div class="day-head" style="margin-bottom:10px">
-        <div class="stat">إجمالي المبيعات<b>${fmt(gross)} ${CURRENCY}</b></div>
-        <div class="stat">صافي المبيعات<b style="color:var(--red)">${fmt(net)} ${CURRENCY}</b></div>
-        <div class="stat">الخصومات<b style="color:var(--warn)">${fmt(discounts)} ${CURRENCY}</b></div>
+        <div class="stat">مبيعات الأصناف (قبل الخصم)<b>${fmt(itemsSales)} ${CURRENCY}</b></div>
+        <div class="stat">الخصومات (−)<b style="color:var(--warn)">${fmt(discounts)} ${CURRENCY}</b></div>
+        <div class="stat">أجور التوصيل (+)<b style="color:var(--ok)">${fmt(deliveryTotal)} ${CURRENCY}</b></div>
+        <div class="stat">= الإجمالي المحصّل فعليًا<b style="color:var(--red)">${fmt(grandTotal)} ${CURRENCY}</b></div>
+        <div class="stat">🍽️ وجبات الموظفين (ضمن الإجمالي)<b>${mealsOrders.length} <small>(${fmt(mealsTotal)})</small></b></div>
         <div class="stat">عدد الطلبات<b>${ok.length}</b></div>
         <div class="stat">متوسط الفاتورة<b>${fmt(avgOrder)} ${CURRENCY}</b></div>
         <div class="stat">طلبات ملغاة<b style="color:var(--red)">${cancelled.length}</b></div>
@@ -4139,10 +4145,18 @@
     const fromDate = new Date(range.from);
     const toDate   = new Date(range.to);
 
-
-
     const salesBranch = document.getElementById('salesBranch');
     const salesStaff = document.getElementById('salesStaff');
+    // 🔧 كانت قائمة الموظفين هون بتتعبى بس لو زرت شاشة "الموظفين" بالإدارة قبلها بنفس الجلسة —
+    // هلأ بتتعبى مباشرة من هون، مش معتمدة على شاشة تانية
+    if(salesStaff && salesStaff.options.length<=1){
+      const staffList = STAFF.length ? STAFF : (await db.from('staff').select('id, full_name').order('full_name')).data||[];
+      if(!STAFF.length) STAFF = staffList;
+      salesStaff.innerHTML = '<option value="">كل الموظفين</option>' + staffList.map(s=>`<option value="${s.id}">${esc(s.full_name)}</option>`).join('');
+    }
+    if(salesBranch && salesBranch.options.length<=1){
+      salesBranch.innerHTML = '<option value="">كل الفروع</option>' + BRANCHES.map(b=>`<option value="${b.id}">${esc(b.name_ar)}</option>`).join('');
+    }
     const branchFilter = salesBranch ? salesBranch.value : '';
     const staffFilter = salesStaff ? salesStaff.value : '';
 
@@ -4264,7 +4278,10 @@
       try {
         const {data}=await db.from('staff').select('*, branches(name_ar)').order('created_at');
         STAFF=data||[];
-        C.innerHTML=`<button class="add-btn" onclick="staffForm()">＋ إضافة موظف</button><div class="tbl-wrap"><table class="tbl"><tr><th>الاسم</th><th>الدور</th><th>الفرع</th><th>PIN</th><th>الحالة</th><th></th></tr>${STAFF.map(s=>`<tr class="${s.is_active?'':'off'}"><td>${esc(s.full_name)}</td><td>${ROLE_AR[s.role]||esc(s.role)}</td><td>${esc(s.branches?.name_ar||'كل الفروع')}</td><td>${s.pin}</td><td>${s.is_active?'✅':'🚫'}</td><td style="white-space:nowrap"><button class="mini edit" onclick="staffForm('${s.id}')">تعديل</button>${s.id!==ME.id?`<button class="mini tog" onclick="toggleStaff('${s.id}',${!s.is_active})">${s.is_active?'تعطيل/أرشفة':'تفعيل'}</button><button class="mini del" onclick="deleteStaff('${s.id}','${esc(s.full_name)}')">حذف نهائي</button>`:''}</td></tr>`).join('')}</table></div>`;
+        C.innerHTML=`<button class="add-btn" onclick="staffForm()">＋ إضافة موظف</button>
+          <input id="staffSearch" placeholder="🔍 ابحث بالاسم أو الدور..." oninput="renderStaffTable()" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:10px">
+          <div id="staffTableWrap"></div>`;
+        renderStaffTable();
         const salesStaff = document.getElementById('salesStaff');
         if (salesStaff) salesStaff.innerHTML = '<option value="">كل الموظفين</option>' + STAFF.map(s=>`<option value="${s.id}">${esc(s.full_name)}</option>`).join('');
       } catch(e) { console.error(e); }
@@ -5300,16 +5317,19 @@
     if(mode==='financial'){
       const range=getRepRange();
       const dateStr=document.getElementById('repDateLabel')?.textContent||'';
-      const [ord,exp,pur]=await Promise.all([
-        db.from('orders').select('total,subtotal,discount,delivery_fee,payment_method,status,order_type').gte('created_at',range.from).lte('created_at',range.to),
-        db.from('expenses').select('amount,category').gte('created_at',(range.from||'').split('T')[0]||range.from).lte('created_at',(range.to||'').split('T')[0]||range.to),
-        db.from('purchases').select('total').gte('purchase_date',(range.from||'').split('T')[0]||range.from).lte('purchase_date',(range.to||'').split('T')[0]||range.to),
+      const [ord,exp,pur,openShifts]=await Promise.all([
+        db.from('orders').select('total,subtotal,discount,delivery_fee,payment_method,status,order_type,branch_id,employee_tab_name').gte('created_at',range.from).lte('created_at',range.to),
+        db.from('expenses').select('amount,category,branch_id,shift_id').gte('created_at',(range.from||'').split('T')[0]||range.from).lte('created_at',(range.to||'').split('T')[0]||range.to),
+        db.from('purchases').select('total,branch_id').gte('purchase_date',(range.from||'').split('T')[0]||range.from).lte('purchase_date',(range.to||'').split('T')[0]||range.to),
+        db.from('cash_shifts').select('id,branch_id,opening_balance,start_time,staff(full_name)').eq('status','open'),
       ]);
       const ok=(ord.data||[]).filter(o=>o.status!=='cancelled');
       const cancelled=(ord.data||[]).filter(o=>o.status==='cancelled');
       const sales=ok.reduce((a,o)=>a+parseFloat(o.total||0),0);
       const discounts=ok.reduce((a,o)=>a+parseFloat(o.discount||0),0);
       const delivery=ok.reduce((a,o)=>a+parseFloat(o.delivery_fee||0),0);
+      const mealsOrders=ok.filter(o=>o.employee_tab_name);
+      const mealsTotal=mealsOrders.reduce((a,o)=>a+parseFloat(o.total||0),0);
       const byPay={cash:0,card:0,cliq:0}; ok.forEach(o=>{ byPay[o.payment_method]=(byPay[o.payment_method]||0)+parseFloat(o.total||0); });
       const expAll=exp.data||[];
       const expBycat={}; expAll.forEach(x=>{expBycat[x.category||'أخرى']=(expBycat[x.category||'أخرى']||0)+parseFloat(x.amount||0);});
@@ -5319,17 +5339,54 @@
       const totalCosts=expTotal+purTotal;
       const netProfit=sales-totalCosts;
       const margin=sales>0?Math.round(netProfit/sales*100):0;
+
+      // 🏪 تفصيل كل فرع لحاله: مبيعات، خصومات، مصاريف، سحوبات من الدرج
+      const byBr = {};
+      const brName = id => BRANCHES.find(b=>b.id===id)?.name_ar || 'بدون فرع';
+      ok.forEach(o=>{
+        const b = brName(o.branch_id);
+        if(!byBr[b]) byBr[b] = {sales:0, discounts:0, delivery:0, expenses:0, withdrawals:0};
+        byBr[b].sales += parseFloat(o.total||0);
+        byBr[b].discounts += parseFloat(o.discount||0);
+        byBr[b].delivery += parseFloat(o.delivery_fee||0);
+      });
+      expAll.forEach(x=>{
+        const b = brName(x.branch_id);
+        if(!byBr[b]) byBr[b] = {sales:0, discounts:0, delivery:0, expenses:0, withdrawals:0};
+        if(x.category==='سحب من الدرج') byBr[b].withdrawals += parseFloat(x.amount||0);
+        else byBr[b].expenses += parseFloat(x.amount||0);
+      });
+
+      // 💵 كاش الدرج الحالي لحظيًا (لأي شيفت مفتوح الآن) — افتتاحي + مبيعات كاش الشيفت − سحوباته لحد الآن
+      const openList = openShifts.data||[];
+      let drawerRows = '';
+      if(openList.length){
+        const drawerData = await Promise.all(openList.map(async sh=>{
+          const [{data:os},{data:ws}] = await Promise.all([
+            db.from('orders').select('total,delivery_fee,payment_method,order_type,status').eq('shift_id', sh.id),
+            db.from('expenses').select('amount').eq('shift_id', sh.id).eq('category','سحب من الدرج'),
+          ]);
+          const cashSales = (os||[]).filter(o=>o.status!=='cancelled' && o.payment_method==='cash')
+            .reduce((a,o)=>a+Math.max(0,parseFloat(o.total||0)-(o.order_type==='delivery'?parseFloat(o.delivery_fee||0):0)),0);
+          const withdrawn = (ws||[]).reduce((a,w)=>a+parseFloat(w.amount||0),0);
+          const nowInDrawer = parseFloat(sh.opening_balance||0) + cashSales - withdrawn;
+          return { branch: brName(sh.branch_id), staff: sh.staff?.full_name||'—', nowInDrawer, started: sh.start_time };
+        }));
+        drawerRows = drawerData.map(d=>`<tr><td>🏪 ${esc(d.branch)}</td><td>${esc(d.staff)}</td><td>${new Date(d.started).toLocaleTimeString('ar-JO',{hour:'2-digit',minute:'2-digit'})}</td><td><b style="color:var(--ok)">${fmt(d.nowInDrawer)} ${CURRENCY}</b></td></tr>`).join('');
+      }
+
       D.innerHTML=`
         <div style="background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:16px;box-shadow:var(--shadow);margin-bottom:14px">
           <h3 style="color:var(--maroon);margin-bottom:12px;font-size:1.1rem">📊 التقرير المالي الشامل — ${esc(dateStr)}</h3>
           <table class="tbl" style="margin-bottom:14px">
             <tr style="background:#f0faf4"><td colspan="2" style="font-weight:900;color:var(--ok);padding:10px">💰 الإيرادات</td></tr>
-            <tr><td>إجمالي المبيعات</td><td class="tl"><b>${fmt(sales)} ${CURRENCY}</b></td></tr>
+            <tr><td>إجمالي المبيعات (المحصّل)</td><td class="tl"><b>${fmt(sales)} ${CURRENCY}</b></td></tr>
             <tr><td>كاش</td><td class="tl">${fmt(byPay.cash)}</td></tr>
             <tr><td>كرت</td><td class="tl">${fmt(byPay.card)}</td></tr>
             <tr><td>كليك</td><td class="tl">${fmt(byPay.cliq)}</td></tr>
-            <tr><td>توصيل</td><td class="tl">${ok.filter(o=>o.order_type==='delivery').length} طلب</td></tr>
+            <tr><td>توصيل</td><td class="tl">${ok.filter(o=>o.order_type==='delivery').length} طلب — أجور: ${fmt(delivery)}</td></tr>
             <tr><td>استلام</td><td class="tl">${ok.filter(o=>o.order_type==='takeaway').length} طلب</td></tr>
+            <tr><td>🍽️ وجبات الموظفين (ضمن المبيعات)</td><td class="tl">${mealsOrders.length} — ${fmt(mealsTotal)}</td></tr>
             <tr><td style="color:var(--red)">خصومات (−)</td><td class="tl" style="color:var(--red)">− ${fmt(discounts)}</td></tr>
             <tr><td style="color:var(--red)">ملغي</td><td class="tl" style="color:var(--red)">${cancelled.length} طلب</td></tr>
             <tr style="background:#fff0f0"><td colspan="2" style="font-weight:900;color:var(--red);padding:10px">💸 التكاليف والمصاريف</td></tr>
@@ -5344,7 +5401,27 @@
             <tr><td>نسبة الربح</td><td class="tl"><b style="color:${margin>=20?'var(--ok)':margin>=10?'var(--warn)':'var(--red)'}">${margin}%</b></td></tr>
             ${adsCost>0?`<tr><td>تكلفة الإعلانات</td><td class="tl" style="color:var(--warn)">${fmt(adsCost)} (${sales>0?Math.round(adsCost/sales*100):0}% من المبيعات)</td></tr>`:''}
           </table>
-          <button class="ghost-btn" style="width:100%" onclick="window.print()">🖨️ طباعة / حفظ PDF</button>
+
+          <h3 style="color:var(--maroon);margin-bottom:8px;font-size:1.05rem">🏪 تفصيل كل فرع لحاله</h3>
+          <div class="tbl-wrap" style="margin-bottom:14px"><table class="tbl">
+            <tr><th>الفرع</th><th>مبيعات</th><th>خصومات</th><th>توصيل</th><th>مصاريف</th><th>سحوبات درج</th></tr>
+            ${Object.entries(byBr).map(([b,d])=>`<tr>
+              <td><b>${esc(b)}</b></td>
+              <td><b>${fmt(d.sales)}</b></td>
+              <td style="color:var(--warn)">${fmt(d.discounts)}</td>
+              <td>${fmt(d.delivery)}</td>
+              <td style="color:var(--red)">${fmt(d.expenses)}</td>
+              <td style="color:var(--red)">${fmt(d.withdrawals)}</td>
+            </tr>`).join('')||'<tr><td colspan="6" class="empty-note">لا شي</td></tr>'}
+          </table></div>
+
+          <h3 style="color:var(--maroon);margin-bottom:8px;font-size:1.05rem">💵 كاش الدرج الآن (شيفتات مفتوحة حاليًا)</h3>
+          <div class="tbl-wrap"><table class="tbl">
+            <tr><th>الفرع</th><th>الكاشير</th><th>فتح الشيفت</th><th>الكاش بالدرج الآن</th></tr>
+            ${drawerRows || '<tr><td colspan="4" class="empty-note">ما في شيفتات مفتوحة حاليًا</td></tr>'}
+          </table></div>
+
+          <button class="ghost-btn" style="width:100%;margin-top:14px" onclick="window.print()">🖨️ طباعة / حفظ PDF</button>
         </div>`;
       return;
     }
@@ -5483,7 +5560,7 @@
         </div>
         <table class="tbl"><tr><th>المادة</th>${admin?'<th>المخزون الحالي</th>':''}<th>الوحدة</th>${admin?'<th>الحد الأدنى</th><th>الحالة</th><th></th>':''}</tr>
           ${br.items.map(i=>{
-            const low = (i.stock||0) <= (i.min_stock||0);
+            const low = (i.min_stock||0) > 0 && (i.stock||0) <= (i.min_stock||0);
             return `<tr class="${admin&&low?'late':''}">
               <td><b>${esc(i.ingredients?.name||'—')}</b></td>
               ${admin?`<td><b style="color:${low?'var(--red)':'var(--ok)'}">${i.stock||0}</b></td>`:''}
@@ -5493,7 +5570,7 @@
         </table>
       </div>`).join('') || '<div class="empty-note">ما في مخزون مسجل بفرعك</div>';
 
-    const lowAlerts = admin ? (inv||[]).filter(x=>(x.stock||0)<=(x.min_stock||0)) : [];
+    const lowAlerts = admin ? (inv||[]).filter(x=>(x.min_stock||0)>0 && (x.stock||0)<=(x.min_stock||0)) : [];
     C.innerHTML = `
       ${admin ? (lowAlerts.length ? `<div class="alert-red" style="margin-bottom:12px">⚠️ ${lowAlerts.length} مادة تحتاج تعبئة: ${lowAlerts.map(x=>esc(x.ingredients?.name||'—')).join('، ')}</div>` : '<div class="alert-ok" style="margin-bottom:12px">✅ المخزون كافي في كل الفروع</div>') : ''}
       <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">
@@ -5990,6 +6067,7 @@
 
   /* ================= 🧑‍💼 HR — رواتب وساعات عمل وسلف ووجبات ================= */
   let HR_FILTER = { from:'', to:'' };
+  let HR_SEARCH = '';
   function hrsBetween(a,b){ return Math.max(0,(new Date(b)-new Date(a))/3600000); }
   async function renderHR(){
     const C = document.getElementById('admContent');
@@ -6043,6 +6121,7 @@
       return { emp:e, hours, days, advTotal, mealsCount, mealsTotal, shiftDeduction, gross, net };
     });
     const totalNet = rows.reduce((a,r)=>a+r.net,0);
+    window.__HR_ROWS = rows;
 
     C.innerHTML = `
       <div class="panel" style="margin-bottom:14px">
@@ -6054,34 +6133,42 @@
           <button class="add-btn" style="align-self:end;margin:0" onclick="mealNameForm()">＋ إضافة موظف HR</button>
           <button class="mini edit" style="align-self:end" onclick="printHRPDF()">📄 PDF منسّق</button>
         </div>
+        <input id="hr_search" placeholder="🔍 ابحث باسم الموظف..." value="${esc(HR_SEARCH)}" oninput="HR_SEARCH=this.value;renderHrTable()" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px">
         <div style="color:var(--muted);font-size:.78rem;font-weight:600">💡 موظفو HR منفصلين تمامًا عن موظفي تسجيل الدخول للنظام — هدول قائمة أسماء (زي "🍽️ وجبات الموظفين") مالها علاقة بصلاحيات أو PIN. سجّل ساعات العمل يدويًا لكل واحد من زر "🕐 تسجيل ساعات".</div>
       </div>
 
       <div class="panel">
         <div style="margin-bottom:10px;font-weight:800">إجمالي صافي المستحق بالفترة: <span style="color:var(--red)">${fmt(totalNet)} ${CURRENCY}</span></div>
-        <div class="tbl-wrap"><table class="tbl">
-          <tr><th>الموظف</th><th>سعر الساعة</th><th>ساعات العمل</th><th>أيام الحضور</th><th>الوجبات</th><th>قيمة الوجبات</th><th>السلف</th><th>خصم الشيفتات</th><th>صافي المستحق</th><th></th></tr>
-          ${rows.map(r=>`<tr>
-            <td><b>${esc(r.emp.name)}</b></td>
-            <td>${fmt(r.emp.hourly_wage||0)}</td>
-            <td>${r.hours.toFixed(1)}</td>
-            <td>${r.days}</td>
-            <td>${r.mealsCount}</td>
-            <td>${r.mealsTotal>0?`<b style="color:var(--warn)">${fmt(r.mealsTotal)}</b>`:'—'}</td>
-            <td>${r.advTotal>0?`<b style="color:var(--warn)">${fmt(r.advTotal)}</b>`:'—'}</td>
-            <td>${r.shiftDeduction>0?`<b style="color:var(--red)">${fmt(r.shiftDeduction)}</b>`:'—'}</td>
-            <td><b style="color:${r.net<0?'var(--red)':'var(--ok)'}">${fmt(r.net)} ${CURRENCY}</b></td>
-            <td style="white-space:nowrap">
-              <button class="mini edit" onclick="mealNameForm('${r.emp.id}')">✏️ تعديل</button>
-              <button class="mini edit" onclick="attendanceForm('${r.emp.id}','${esc(r.emp.name)}')">🕐 ساعات</button>
-              <button class="mini ok" onclick="hrAdvancesView('${r.emp.id}','${esc(r.emp.name)}')">💰 سلف</button>
-              <button class="mini tog" onclick="hrStatement('${r.emp.id}')">📋 كشف</button>
-              <button class="mini ok" style="background:var(--maroon)" onclick="printHrEmployeePDF('${r.emp.id}')">📄 طباعة كشف</button>
-            </td>
-          </tr>`).join('')||'<tr><td colspan="10" class="empty-note">ما في موظفي HR بعد — ضيف واحد من الزر فوق</td></tr>'}
-        </table></div>
+        <div id="hrTableWrap"></div>
       </div>`;
-    window.__HR_ROWS = rows;
+    renderHrTable();
+  }
+  function renderHrTable(){
+    const wrap = document.getElementById('hrTableWrap'); if(!wrap) return;
+    const rows = window.__HR_ROWS||[];
+    const hrQ = (HR_SEARCH||'').trim().toLowerCase();
+    const filteredRows = hrQ ? rows.filter(r=>(r.emp.name||'').toLowerCase().includes(hrQ)) : rows;
+    wrap.innerHTML = `<div class="tbl-wrap"><table class="tbl">
+        <tr><th>الموظف</th><th>سعر الساعة</th><th>ساعات العمل</th><th>أيام الحضور</th><th>الوجبات</th><th>قيمة الوجبات</th><th>السلف</th><th>خصم الشيفتات</th><th>صافي المستحق</th><th></th></tr>
+        ${filteredRows.map(r=>`<tr>
+          <td><b>${esc(r.emp.name)}</b></td>
+          <td>${fmt(r.emp.hourly_wage||0)}</td>
+          <td>${r.hours.toFixed(1)}</td>
+          <td>${r.days}</td>
+          <td>${r.mealsCount}</td>
+          <td>${r.mealsTotal>0?`<b style="color:var(--warn)">${fmt(r.mealsTotal)}</b>`:'—'}</td>
+          <td>${r.advTotal>0?`<b style="color:var(--warn)">${fmt(r.advTotal)}</b>`:'—'}</td>
+          <td>${r.shiftDeduction>0?`<b style="color:var(--red)">${fmt(r.shiftDeduction)}</b>`:'—'}</td>
+          <td><b style="color:${r.net<0?'var(--red)':'var(--ok)'}">${fmt(r.net)} ${CURRENCY}</b></td>
+          <td style="white-space:nowrap">
+            <button class="mini edit" onclick="mealNameForm('${r.emp.id}')">✏️ تعديل</button>
+            <button class="mini edit" onclick="attendanceForm('${r.emp.id}','${esc(r.emp.name)}')">🕐 ساعات</button>
+            <button class="mini ok" onclick="hrAdvancesView('${r.emp.id}','${esc(r.emp.name)}')">💰 سلف</button>
+            <button class="mini tog" onclick="hrStatement('${r.emp.id}')">📋 كشف</button>
+            <button class="mini ok" style="background:var(--maroon)" onclick="printHrEmployeePDF('${r.emp.id}')">📄 طباعة كشف</button>
+          </td>
+        </tr>`).join('')||'<tr><td colspan="10" class="empty-note">ما في نتائج</td></tr>'}
+      </table></div>`;
   }
   function applyHrFilter(){
     HR_FILTER.from = document.getElementById('hr_from')?.value || HR_FILTER.from;
@@ -7768,6 +7855,12 @@ try {
     toast('✓ انحذف التصنيف'); renderAdmin(); bootData();
   }
   async function toggleCat(id,v){ try { const r=await db.from('categories').update({is_active:v}).eq('id',id); if(r.error){toast('✗ '+r.error.message);console.error(r.error);return;} toast(v?'✓ ظاهر':'✓ مخفي'); renderAdmin(); bootData(); } catch(e) { toast('✗ '+e.message); console.error(e); } }
+  function renderStaffTable(){
+    const wrap = document.getElementById('staffTableWrap'); if(!wrap) return;
+    const q = (document.getElementById('staffSearch')?.value||'').trim().toLowerCase();
+    const list = q ? STAFF.filter(s=>(s.full_name||'').toLowerCase().includes(q) || (ROLE_AR[s.role]||s.role||'').toLowerCase().includes(q)) : STAFF;
+    wrap.innerHTML = `<div class="tbl-wrap"><table class="tbl"><tr><th>الاسم</th><th>الدور</th><th>الفرع</th><th>PIN</th><th>الحالة</th><th></th></tr>${list.map(s=>`<tr class="${s.is_active?'':'off'}"><td>${esc(s.full_name)}</td><td>${ROLE_AR[s.role]||esc(s.role)}</td><td>${esc(s.branches?.name_ar||'كل الفروع')}</td><td>${s.pin}</td><td>${s.is_active?'✅':'🚫'}</td><td style="white-space:nowrap"><button class="mini edit" onclick="staffForm('${s.id}')">تعديل</button>${s.id!==ME.id?`<button class="mini tog" onclick="toggleStaff('${s.id}',${!s.is_active})">${s.is_active?'تعطيل/أرشفة':'تفعيل'}</button><button class="mini del" onclick="deleteStaff('${s.id}','${esc(s.full_name)}')">حذف نهائي</button>`:''}</td></tr>`).join('')||'<tr><td colspan="6" class="empty-note">ما في نتائج</td></tr>'}</table></div>`;
+  }
   async function staffForm(id){
     await loadCustomRoles();
     const st = STAFF.find(x=>x.id===id)||{};
