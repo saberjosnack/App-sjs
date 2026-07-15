@@ -6464,6 +6464,7 @@
 
     C.innerHTML = `
       <div id="hrAdvReqBox"></div>
+      <div id="hrDeviceReqBox"></div>
       <div class="panel" style="margin-bottom:14px">
         <h3>🧑‍💼 HR — الرواتب والدوام والوجبات والسلف</h3>
         <div class="two" style="flex-wrap:wrap;gap:10px;margin-bottom:8px">
@@ -6484,6 +6485,7 @@
       </div>`;
     renderHrTable();
     renderHrAdvanceRequests();
+    renderHrDeviceRequests();
   }
   function renderHrTable(){
     const wrap = document.getElementById('hrTableWrap'); if(!wrap) return;
@@ -6554,6 +6556,44 @@
   async function rejectHrAdvanceRequest(reqId){
     if(!confirm('تأكيد رفض هالطلب؟')) return;
     await db.from('hr_advance_requests').update({ status:'rejected', approved_by: ME.full_name, approved_at: new Date().toISOString() }).eq('id', reqId);
+    toast('✓ اترفض الطلب'); renderHR();
+  }
+
+  /* ---- طلبات تغيير جهاز الموظف (قفل الجهاز — حماية من البصمة عن الغير) ---- */
+  async function renderHrDeviceRequests(){
+    const box = document.getElementById('hrDeviceReqBox'); if(!box) return;
+    try{
+      const { data, error } = await db.from('hr_device_requests').select('*').eq('status','pending').order('created_at',{ascending:false});
+      if(error){ box.innerHTML=''; return; } // الجدول لسا مش موجود — تجاهل بصمت لحد ما ينفذ SQL
+      const list = data||[];
+      if(!list.length){ box.innerHTML=''; return; }
+      box.innerHTML = `<div class="panel" style="margin-bottom:14px;border:2px solid var(--red)">
+        <h4 style="color:var(--red);margin-bottom:8px">📱 طلبات تسجيل من جهاز جديد (${list.length}) — لمنع تسجيل حضور نيابة عن حد تاني</h4>
+        <div class="tbl-wrap"><table class="tbl">
+          <tr><th>الموظف</th><th>التاريخ</th><th></th></tr>
+          ${list.map(r=>`<tr>
+            <td><b>${esc(r.employee_name)}</b></td>
+            <td>${new Date(r.created_at).toLocaleString('ar-JO')}</td>
+            <td style="white-space:nowrap">
+              <button class="mini ok" onclick="approveHrDeviceRequest('${r.id}','${r.employee_id}','${esc((r.new_device_id||'').replace(/'/g,"\\'")) }')">✅ موافقة على الجهاز الجديد</button>
+              <button class="mini del" onclick="rejectHrDeviceRequest('${r.id}')">❌ رفض</button>
+            </td>
+          </tr>`).join('')}
+        </table></div>
+      </div>`;
+    }catch(e){ console.error(e); }
+  }
+  async function approveHrDeviceRequest(reqId, empId, newDeviceId){
+    if(!confirm('تأكيد الموافقة؟ الجهاز الجديد رح يصير هو المعتمد لهاد الموظف من هلأ.')) return;
+    try{
+      await db.from('meal_names').update({ device_id: newDeviceId }).eq('id', empId);
+      await db.from('hr_device_requests').update({ status:'approved', approved_by: ME.full_name, approved_at: new Date().toISOString() }).eq('id', reqId);
+      toast('✓ اتوافق على الجهاز الجديد'); renderHR();
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
+  }
+  async function rejectHrDeviceRequest(reqId){
+    if(!confirm('تأكيد رفض هالطلب؟')) return;
+    await db.from('hr_device_requests').update({ status:'rejected', approved_by: ME.full_name, approved_at: new Date().toISOString() }).eq('id', reqId);
     toast('✓ اترفض الطلب'); renderHR();
   }
 
@@ -9044,7 +9084,7 @@ try {
               <div class="fld" style="flex:1"><label>Lng</label><input id="hl_lng" inputmode="decimal" readonly style="background:#f5f0e8"></div>
             </div>
             <button type="button" class="mini ok" onclick="useMyLocationForHl()" style="margin-bottom:8px">📍 استخدم موقعي الحالي (وقف بمكان العمل ودوسها)</button>
-            <div class="fld"><label>نطاق السماح (متر) — افتراضي 150</label><input id="hl_radius" type="number" min="10" value="150"></div>
+            <div class="fld"><label>نطاق السماح (متر) — افتراضي 200</label><input id="hl_radius" type="number" min="10" value="200"></div>
             <button class="add-btn" onclick="addHrLocation()">＋ إضافة الموقع</button>
           </div>
         </div>`;
@@ -9063,7 +9103,7 @@ try {
     const name = document.getElementById('hl_name')?.value.trim();
     const lat = parseFloat(document.getElementById('hl_lat')?.value);
     const lng = parseFloat(document.getElementById('hl_lng')?.value);
-    const radius_m = parseFloat(document.getElementById('hl_radius')?.value)||150;
+    const radius_m = parseFloat(document.getElementById('hl_radius')?.value)||200;
     if(!name){ toast('⚠️ اكتب اسم الموقع'); return; }
     if(isNaN(lat)||isNaN(lng)){ toast('⚠️ دوس "استخدم موقعي الحالي" وانت واقف بمكان العمل'); return; }
     const { error } = await db.from('hr_locations').insert({ name, lat, lng, radius_m });
@@ -9159,8 +9199,22 @@ try {
     errEl.textContent = '';
     if(!user || !pin){ errEl.textContent = '⚠️ اكتب اسم المستخدم والرقم السري'; return; }
     try{
-      const { data, error } = await db.from('meal_names').select('*').eq('username', user).eq('pin', pin).eq('is_active', true).maybeSingle();
+      const { data, error } = await db.from('meal_names').select('*').eq('username', user).eq('pin', pin).maybeSingle();
       if(error || !data){ errEl.textContent = '⛔ اسم المستخدم أو الرقم السري غلط'; return; }
+      if(data.is_active===false){ errEl.textContent = '⛔ حسابك معطّل — راجع الإدارة'; return; }
+      // 🔒 قفل الجهاز — أول جهاز يسجّل فيه الموظف يصير هو المعتمد تلقائيًا،
+      // أي جهاز تاني بعده يحتاج موافقة صريحة من المدير (عشان يمنع "حد يبصم عن التاني")
+      const myDeviceId = getDeviceId();
+      if(!data.device_id){
+        await db.from('meal_names').update({ device_id: myDeviceId, device_name: navigator.userAgent.slice(0,80) }).eq('id', data.id);
+      } else if(data.device_id !== myDeviceId){
+        const { data: existingReq } = await db.from('hr_device_requests').select('id').eq('employee_id', data.id).eq('new_device_id', myDeviceId).eq('status','pending').maybeSingle();
+        if(!existingReq){
+          await db.from('hr_device_requests').insert({ employee_id: data.id, employee_name: data.name, old_device_id: data.device_id, new_device_id: myDeviceId, status:'pending' });
+        }
+        errEl.innerHTML = '⛔ هاد جهاز جديد مش معتمد لهاد الحساب.<br>لازم موافقة المدير أول — تم إرسال طلب، جرب تاني بعد ما يوافق.';
+        return;
+      }
       EMP = data;
       document.getElementById('empPortalLogin').classList.add('hidden');
       document.getElementById('empPortalApp').classList.remove('hidden');
@@ -9260,7 +9314,7 @@ try {
     const { data: locs } = await db.from('hr_locations').select('*');
     if(!locs || !locs.length) return { ok:true, name:null }; // ما في قيود محددة بعد — نسمح
     for(const loc of locs){
-      if(distMeters(lat,lng,loc.lat,loc.lng) <= (loc.radius_m||150)) return { ok:true, name:loc.name };
+      if(distMeters(lat,lng,loc.lat,loc.lng) <= (loc.radius_m||200)) return { ok:true, name:loc.name };
     }
     return { ok:false, name:null };
   }
