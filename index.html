@@ -2066,9 +2066,87 @@
     if(orderType==='delivery' && !perm('order_delivery')){ toast('⛔ ما عندك صلاحية طلبات التوصيل'); return; }
     if(!perm('order_create')){ toast('⛔ ما عندك صلاحية إنشاء طلب'); return; }
     const item = ITEMS.find(i=>i.id===id); if(!item) return;
+    if(item.item_type==='composite'){ openCompositeOrderModal(item); return; }
     const ex = cart.find(l=>l.item.id===id && !l.note);
     if(ex) ex.qty++; else cart.push({item, qty:1, note:''});
     renderCart();
+  }
+
+  /* ================= 🧩 اختيار تركيبة الوجبة المركّبة بالكاشير ================= */
+  async function openCompositeOrderModal(item){
+    modal(`<h3>🧩 ${esc(item.name_ar)}</h3><div id="compOrderBody" class="empty-note">... جاري التحميل</div>`);
+    try{
+      const [fixedRes, groupsRes] = await Promise.all([
+        db.from('composite_fixed').select('*, menu_items!composite_fixed_component_item_id_fkey(name_ar,unit)').eq('menu_item_id', item.id),
+        db.from('composite_groups').select('*, composite_options(*, menu_items!composite_options_component_item_id_fkey(name_ar))').eq('menu_item_id', item.id).order('sort_order'),
+      ]);
+      const body = document.getElementById('compOrderBody'); if(!body) return;
+      if(fixedRes.error||groupsRes.error){ body.innerHTML = `<div class="alert-red">⚠️ ما قدرنا نجيب تركيبة هاد الصنف — تأكد المدير ضبطها من شاشة الأصناف</div>`; return; }
+      const fixed = fixedRes.data||[];
+      const groups = groupsRes.data||[];
+      window.__compOrder = { item, groups, picks: {} }; // picks[groupId][optionId] = qty
+      groups.forEach(g=>{ window.__compOrder.picks[g.id] = {}; (g.composite_options||[]).forEach(o=>{ window.__compOrder.picks[g.id][o.id]=0; }); });
+      body.innerHTML = `
+        ${fixed.length?`<div style="background:#fff8e1;border-radius:10px;padding:8px 12px;margin-bottom:12px;font-weight:700;font-size:.85rem">📦 ثابت مع الوجبة: ${fixed.map(f=>f.qty+'× '+esc(f.menu_items?.name_ar||'—')).join('، ')}</div>`:''}
+        ${groups.map(g=>`
+          <div style="margin-bottom:14px">
+            <div style="font-weight:900;color:var(--maroon);margin-bottom:6px">${esc(g.name)} — اختر <span id="compRemain_${g.id}">${g.slot_count}</span> من ${g.slot_count}</div>
+            ${(g.composite_options||[]).map(o=>`
+              <div style="display:flex;align-items:center;justify-content:space-between;background:#fff;border:1.5px solid var(--line);border-radius:10px;padding:8px 12px;margin-bottom:6px">
+                <span style="font-weight:700">${esc(o.menu_items?.name_ar||'—')}${o.max_qty?` <small style="color:var(--muted)">(حد أقصى ${o.max_qty})</small>`:''}</span>
+                <div style="display:flex;align-items:center;gap:10px">
+                  <button class="mini del" onclick="compQtyChange('${g.id}','${o.id}',-1)">−</button>
+                  <b id="compQty_${g.id}_${o.id}" style="min-width:20px;text-align:center">0</b>
+                  <button class="mini ok" onclick="compQtyChange('${g.id}','${o.id}',1)">+</button>
+                </div>
+              </div>`).join('')}
+          </div>`).join('')}
+        <div class="m-act">
+          <button class="save" onclick="confirmCompositeOrder()">إضافة للسلة ✓</button>
+          <button class="cancel" onclick="closeModal()">إلغاء</button>
+        </div>`;
+    }catch(e){ console.error(e); toast('✗ خطأ بتحميل التركيبة'); }
+  }
+  function compQtyChange(groupId, optionId, delta){
+    const st = window.__compOrder; if(!st) return;
+    const group = st.groups.find(g=>g.id===groupId); if(!group) return;
+    const opt = (group.composite_options||[]).find(o=>o.id===optionId); if(!opt) return;
+    const picks = st.picks[groupId];
+    const current = picks[optionId]||0;
+    const totalPicked = Object.values(picks).reduce((a,v)=>a+v,0);
+    if(delta>0){
+      if(totalPicked>=group.slot_count){ toast('⚠️ خلصت العدد المسموح لـ'+group.name); return; }
+      if(opt.max_qty!=null && current>=opt.max_qty){ toast('⚠️ الحد الأقصى لـ'+(opt.menu_items?.name_ar||'')+' هو '+opt.max_qty); return; }
+    }
+    const next = current+delta;
+    if(next<0) return;
+    picks[optionId] = next;
+    document.getElementById('compQty_'+groupId+'_'+optionId).textContent = next;
+    const remain = group.slot_count - Object.values(picks).reduce((a,v)=>a+v,0);
+    const remainEl = document.getElementById('compRemain_'+groupId);
+    if(remainEl) remainEl.textContent = remain;
+  }
+  function confirmCompositeOrder(){
+    const st = window.__compOrder; if(!st) return;
+    for(const g of st.groups){
+      const total = Object.values(st.picks[g.id]).reduce((a,v)=>a+v,0);
+      if(total !== g.slot_count){ toast('⚠️ لازم تختار بالظبط '+g.slot_count+' لـ'+g.name+' (اخترت '+total+')'); return; }
+    }
+    // نبني وصف التركيبة وكائن الحفظ
+    const composition = [];
+    const descParts = [];
+    st.groups.forEach(g=>{
+      (g.composite_options||[]).forEach(o=>{
+        const qty = st.picks[g.id][o.id]||0;
+        if(qty>0){
+          composition.push({ group_id:g.id, group_name:g.name, option_id:o.id, component_item_id:o.component_item_id, name:o.menu_items?.name_ar||'—', qty });
+          descParts.push(qty+'× '+(o.menu_items?.name_ar||'—'));
+        }
+      });
+    });
+    cart.push({ item: st.item, qty:1, note:'', composition, compositionDesc: descParts.join('، ') });
+    closeModal(); renderCart();
+    window.__compOrder = null;
   }
   function changeQty(idx,d){ cart[idx].qty+=d; if(cart[idx].qty<1) cart.splice(idx,1); renderCart(); }
   function showOrderReview(){
@@ -2414,7 +2492,7 @@
     if (cartBody) {
       cartBody.innerHTML = cart.length ? cart.map((l,i)=>
         `<div class="cline">
-          <div class="n" onclick="lineNote(${i})">${esc(l.item.name_ar)}${l.note?`<small>📝 ${esc(l.note)}</small>`:''}</div>
+          <div class="n" onclick="lineNote(${i})">${esc(l.item.name_ar)}${l.compositionDesc?`<small>🧩 ${esc(l.compositionDesc)}</small>`:''}${l.note?`<small>📝 ${esc(l.note)}</small>`:''}</div>
           <div class="qty"><button onclick="changeQty(${i},-1)">−</button><span>${l.qty}</span><button onclick="changeQty(${i},1)">+</button></div>
           <div class="lp">${fmt(l.item.price*l.qty)}</div>
         </div>`).join('')
@@ -2498,7 +2576,7 @@
           <hr style="border-top:1px dashed #ccc">
           ${lines.map(l => {
             const qty = l.qty ?? l.quantity;
-            const nm = l.item ? l.item.name_ar : l.item_name;
+            const nm = l.item ? (l.item.name_ar + (l.compositionDesc?' — '+l.compositionDesc:'')) : l.item_name;
             const pr = l.item ? l.item.price : l.unit_price;
             return `<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #f0f0f0">
               <span>${qty}× ${nm}</span>
@@ -2534,7 +2612,7 @@
           <hr style="border-top:1px dashed #000">
           ${lines.map(l => {
             const qty = l.qty ?? l.quantity;
-            const nm = l.item ? l.item.name_ar : l.item_name;
+            const nm = l.item ? (l.item.name_ar + (l.compositionDesc?' — '+l.compositionDesc:'')) : l.item_name;
             const pr = l.item ? l.item.price : l.unit_price;
             return `<div style="display:flex;justify-content:space-between;font-size:12px;padding:2px 0">
               <span>${qty}× ${nm}</span>
@@ -2565,7 +2643,7 @@
           ${cust && (cust.name||cust.phone) ? `<div style="font-size:10px;color:#666">👤 ${esc(cust.name||'')}${cust.phone?` — 📞 ${esc(cust.phone)}`:''}</div>${cust.addr?`<div style="font-size:10px;color:#666">📍 ${esc(cust.addr)}</div>`:''}` : ''}
           ${lines.map(l => {
             const qty = l.qty ?? l.quantity;
-            const nm = l.item ? l.item.name_ar : l.item_name;
+            const nm = l.item ? (l.item.name_ar + (l.compositionDesc?' — '+l.compositionDesc:'')) : l.item_name;
             const pr = l.item ? l.item.price : l.unit_price;
             return `<div style="display:flex;justify-content:space-between;font-size:11px;padding:2px 0">
               <span>${qty}× ${nm}</span>
@@ -2624,9 +2702,11 @@
     text += '─'.repeat(32) + '\n';
     lines.forEach(l => {
       const qty = l.qty ?? l.quantity;
-      const nm = l.item ? l.item.name_ar : l.item_name;
+      const nm = l.item ? l.item.name_ar : (l.item_name||'').split(' — 🧩')[0];
+      const compDesc = l.compositionDesc || (l.item_name && l.item_name.includes(' — 🧩') ? l.item_name.split(' — 🧩')[1] : '');
       const pr = l.item ? l.item.price : l.unit_price;
       text += `${qty}× ${nm.padEnd(20)} ${(pr*qty).toFixed(2)}\n`;
+      if (compDesc) text += `  🧩 ${compDesc}\n`;
       if (l.note || l.notes) text += `  📝 ${l.note || l.notes}\n`;
     });
     text += '─'.repeat(32) + '\n';
@@ -3070,15 +3150,35 @@
   }
   async function deductInventoryForSale(branchId, cartItems){
     if(!branchId || !cartItems?.length) return;
-    const itemIds = cartItems.map(l=>l.item.id).filter(Boolean);
+    // 🧩 الأصناف المركّبة (وجبات عائلية) ما إلها وصفة مباشرة — لازم نوسّعها لمكوناتها الحقيقية
+    // (المكونات الثابتة + التركيبة المختارة فعليًا) قبل ما نحسب الاستهلاك
+    const compositeLines = cartItems.filter(l=>l.item.item_type==='composite');
+    const expanded = []; // {itemId, qty}
+    cartItems.forEach(line=>{
+      if(line.item.item_type==='composite') return; // بتتعامل معه لحاله تحت
+      expanded.push({ itemId: line.item.id, qty: line.qty });
+    });
+    if(compositeLines.length){
+      const compIds = compositeLines.map(l=>l.item.id);
+      const { data: fixedRows } = await db.from('composite_fixed').select('menu_item_id, component_item_id, qty').in('menu_item_id', compIds);
+      compositeLines.forEach(line=>{
+        (fixedRows||[]).filter(f=>f.menu_item_id===line.item.id).forEach(f=>{
+          expanded.push({ itemId: f.component_item_id, qty: (f.qty||0)*line.qty });
+        });
+        (line.composition||[]).forEach(c=>{
+          expanded.push({ itemId: c.component_item_id, qty: (c.qty||0)*line.qty });
+        });
+      });
+    }
+    const itemIds = [...new Set(expanded.map(l=>l.itemId))].filter(Boolean);
     if(!itemIds.length) return;
     const {data: recipes} = await db.from('recipes')
       .select('menu_item_id, recipe_items(ingredient_id, quantity)')
       .in('menu_item_id', itemIds);
     if(!recipes || !recipes.length) return; // ما في وصفات معبّاة بعد
     const consumption = {}; // ingredient_id -> total qty consumed
-    cartItems.forEach(line=>{
-      const recipe = recipes.find(r=>r.menu_item_id===line.item.id);
+    expanded.forEach(line=>{
+      const recipe = recipes.find(r=>r.menu_item_id===line.itemId);
       if(!recipe) return;
       (recipe.recipe_items||[]).forEach(ri=>{
         const amt = (ri.quantity||0) * (line.qty||1);
@@ -3205,10 +3305,11 @@
       const lines = cartCopy.map(l=>({
         order_id: ord.id,
         menu_item_id: l.item.id,
-        item_name: l.item.name_ar,
+        item_name: l.item.name_ar + (l.compositionDesc ? ' — 🧩'+l.compositionDesc : ''),
         unit_price: l.item.price,
         quantity: l.qty,
-        notes: l.note ? (l.note + (l.noteBy ? ' — ' + l.noteBy : '')) : null
+        notes: l.note ? (l.note + (l.noteBy ? ' — ' + l.noteBy : '')) : null,
+        composition: l.composition && l.composition.length ? l.composition : null
       }));
 
       const { error: e2 } = await db.from('order_items').insert(lines);
@@ -3946,23 +4047,31 @@
 
   function printSalesReport(){
     const orders = (REP_ORDERS||[]);
-    const ok = orders.filter(o=>o.status!=='cancelled');
+    const allOk = orders.filter(o=>o.status!=='cancelled');
     const cancelled = orders.filter(o=>o.status==='cancelled');
+    const mealsOrders = allOk.filter(o=>o.employee_tab_name);
+    const mealsTotal = mealsOrders.reduce((a,o)=>a+parseFloat(o.total||0),0);
+    const ok = allOk.filter(o=>!o.employee_tab_name);
     const gross = ok.reduce((a,o)=>a+parseFloat(o.subtotal||0),0);
     const discounts = ok.reduce((a,o)=>a+parseFloat(o.discount||0),0);
-    const net = ok.reduce((a,o)=>a+parseFloat(o.total||0),0);
+    const netItemsSales = gross-discounts;
+    const deliveryTotal = ok.reduce((a,o)=>a+parseFloat(o.delivery_fee||0),0);
+    const grandTotal = ok.reduce((a,o)=>a+parseFloat(o.total||0),0);
     const delivery = ok.filter(o=>o.order_type==='delivery');
     const takeaway = ok.filter(o=>o.order_type==='takeaway');
-    const avgOrder = ok.length?net/ok.length:0;
+    const avgOrder = ok.length?grandTotal/ok.length:0;
     const label = document.getElementById('repDateLabel')?.textContent || '';
 
     const text = 'تقرير المبيعات\n'+
       '— Saber Jo Snack —\n'+
       (label?label+'\n':'')+
       '════════════════\n'+
-      'إجمالي المبيعات: '+fmt(gross)+' '+CURRENCY+'\n'+
-      'صافي المبيعات: '+fmt(net)+' '+CURRENCY+'\n'+
+      'مبيعات الأصناف (قبل الخصم): '+fmt(gross)+' '+CURRENCY+'\n'+
       'الخصومات: '+fmt(discounts)+' '+CURRENCY+'\n'+
+      'صافي مبيعات الأصناف: '+fmt(netItemsSales)+' '+CURRENCY+'\n'+
+      'أجور التوصيل: '+fmt(deliveryTotal)+' '+CURRENCY+'\n'+
+      'إجمالي الفواتير المحصّلة: '+fmt(grandTotal)+' '+CURRENCY+'\n'+
+      'وجبات الموظفين (مستبعدة من فوق): '+mealsOrders.length+' ('+fmt(mealsTotal)+')\n'+
       'عدد الطلبات: '+ok.length+'\n'+
       'متوسط الفاتورة: '+fmt(avgOrder)+' '+CURRENCY+'\n'+
       'طلبات ملغاة: '+cancelled.length+'\n'+
@@ -3993,20 +4102,22 @@
     const ok=allOk.filter(o=>!o.employee_tab_name);
     const itemsSales=ok.reduce((a,o)=>a+parseFloat(o.subtotal||0),0); // مبيعات الأصناف بس (قبل الخصم والتوصيل) — بدون الوجبات
     const discounts=ok.reduce((a,o)=>a+parseFloat(o.discount||0),0);
+    const netItemsSales=itemsSales-discounts; // 💡 هاد هو "الصافي" الحقيقي — مبيعات الأصناف بعد خصم الخصومات، قبل ما نضيف التوصيل
     const deliveryTotal=ok.reduce((a,o)=>a+parseFloat(o.delivery_fee||0),0);
-    const grandTotal=ok.reduce((a,o)=>a+parseFloat(o.total||0),0); // = itemsSales - discounts + deliveryTotal (المحصّل فعليًا، بدون وجبات)
+    const grandTotal=ok.reduce((a,o)=>a+parseFloat(o.total||0),0); // = netItemsSales + deliveryTotal — إجمالي الفاتورة الكلي (مش "صافي"، لأنه بيكبر بإضافة التوصيل)
     const delivery=ok.filter(o=>o.order_type==='delivery');
     const takeaway=ok.filter(o=>o.order_type==='takeaway');
     const avgOrder=ok.length?grandTotal/ok.length:0;
     const byBranch={};
     ok.forEach(o=>{ const b=BRANCHES.find(x=>x.id===o.branch_id)?.name_ar||'—'; byBranch[b]=(byBranch[b]||0)+parseFloat(o.total||0); });
     K.innerHTML = `
-      <div style="color:var(--muted);font-weight:700;font-size:.78rem;margin-bottom:6px">💡 سلسلة الحساب: مبيعات الأصناف − الخصومات + أجور التوصيل = الإجمالي المحصّل فعليًا (وجبات الموظفين مستبعدة ومحسوبة لحالها تحت)</div>
+      <div style="color:var(--muted);font-weight:700;font-size:.78rem;margin-bottom:6px">💡 سلسلة الحساب: مبيعات الأصناف − الخصومات = صافي المبيعات، وبعدين + أجور التوصيل = إجمالي الفواتير المحصّلة (وجبات الموظفين مستبعدة ومحسوبة لحالها تحت)</div>
       <div class="day-head" style="margin-bottom:10px">
         <div class="stat">مبيعات الأصناف (قبل الخصم)<b>${fmt(itemsSales)} ${CURRENCY}</b></div>
         <div class="stat">الخصومات (−)<b style="color:var(--warn)">${fmt(discounts)} ${CURRENCY}</b></div>
+        <div class="stat">= صافي مبيعات الأصناف<b style="color:var(--maroon)">${fmt(netItemsSales)} ${CURRENCY}</b></div>
         <div class="stat">أجور التوصيل (+)<b style="color:var(--ok)">${fmt(deliveryTotal)} ${CURRENCY}</b></div>
-        <div class="stat">= الإجمالي المحصّل فعليًا (صافي)<b style="color:var(--red)">${fmt(grandTotal)} ${CURRENCY}</b></div>
+        <div class="stat">= إجمالي الفواتير المحصّلة<b style="color:var(--red)">${fmt(grandTotal)} ${CURRENCY}</b></div>
         <div class="stat">عدد الطلبات<b>${ok.length}</b></div>
         <div class="stat">متوسط الفاتورة<b>${fmt(avgOrder)} ${CURRENCY}</b></div>
         <div class="stat">طلبات ملغاة<b style="color:var(--red)">${cancelled.length}</b></div>
@@ -4014,7 +4125,7 @@
         <div class="stat">استلام<b>${takeaway.length} <small>(${fmt(takeaway.reduce((a,o)=>a+parseFloat(o.total||0),0))})</small></b></div>
       </div>
       <div class="day-head" style="margin-bottom:10px">
-        <div class="stat" style="border:1.5px solid var(--muted)">🍽️ وجبات الموظفين (مستبعدة من الإجمالي)<b>${mealsOrders.length} <small>(${fmt(mealsTotal)})</small></b></div>
+        <div class="stat" style="border:1.5px solid var(--muted)">🍽️ وجبات الموظفين (مستبعدة من كل الأرقام فوق)<b>${mealsOrders.length} <small>(${fmt(mealsTotal)})</small></b></div>
       </div>
       ${Object.keys(byBranch).length>1?`<div class="day-head" style="margin-bottom:10px">
         ${Object.entries(byBranch).map(([b,v])=>`<div class="stat">🏪 ${esc(b)}<b>${fmt(v)} ${CURRENCY}</b></div>`).join('')}
@@ -4488,6 +4599,7 @@
               <td style="white-space:nowrap">
                 <button class="mini ok" onclick="approveShiftAdjustment('${a.id}')">✅ موافقة على الخصم</button>
                 <button class="mini del" onclick="rejectShiftAdjustment('${a.id}')">❌ رفض</button>
+                <button class="mini del" onclick="deleteShiftAdjustment('${a.id}')">🗑️ حذف نهائي</button>
               </td>
             </tr>`).join('')}
           </table></div>
@@ -4505,8 +4617,8 @@
           </table></div>
           <details style="margin-top:8px"><summary style="cursor:pointer;font-weight:800;color:var(--muted)">📜 عرض كل الحركات المعتمدة بالتفصيل</summary>
             <div class="tbl-wrap" style="margin-top:8px"><table class="tbl">
-              <tr><th>الموظف</th><th>التاريخ</th><th>المبلغ</th><th>وافق عليه</th><th>تاريخ الموافقة</th></tr>
-              ${approved.map(a=>`<tr><td>${esc(a.staff_name)}</td><td>${new Date(a.created_at).toLocaleDateString('ar-JO')}</td><td style="color:var(--red)">− ${fmt(Math.abs(a.amount))}</td><td>${esc(a.approved_by||'—')}</td><td>${a.approved_at?new Date(a.approved_at).toLocaleString('ar-JO'):'—'}</td></tr>`).join('')}
+              <tr><th>الموظف</th><th>التاريخ</th><th>المبلغ</th><th>وافق عليه</th><th>تاريخ الموافقة</th><th></th></tr>
+              ${approved.map(a=>`<tr><td>${esc(a.staff_name)}</td><td>${new Date(a.created_at).toLocaleDateString('ar-JO')}</td><td style="color:var(--red)">− ${fmt(Math.abs(a.amount))}</td><td>${esc(a.approved_by||'—')}</td><td>${a.approved_at?new Date(a.approved_at).toLocaleString('ar-JO'):'—'}</td><td><button class="mini del" onclick="deleteShiftAdjustment('${a.id}')">🗑️ حذف</button></td></tr>`).join('')}
             </table></div>
           </details>
         </div>`;
@@ -4521,7 +4633,10 @@
               <td>${new Date(a.created_at).toLocaleDateString('ar-JO')}</td>
               <td>− ${fmt(Math.abs(a.amount))}</td>
               <td>${esc(a.note||'—')}</td>
-              <td><button class="mini ok" onclick="restoreShiftAdjustment('${a.id}')">↩️ إرجاع (بانتظار الموافقة تاني)</button></td>
+              <td style="white-space:nowrap">
+                <button class="mini ok" onclick="restoreShiftAdjustment('${a.id}')">↩️ إرجاع (بانتظار الموافقة تاني)</button>
+                <button class="mini del" onclick="deleteShiftAdjustment('${a.id}')">🗑️ حذف نهائي</button>
+              </td>
             </tr>`).join('')}
           </table></div>
         </div>`;
@@ -4606,6 +4721,15 @@
       const { error } = await db.from('shift_adjustments').update({ status:'pending', approved_by:null, approved_at:null }).eq('id', id);
       if(error){ toast('✗ '+error.message); console.error(error); return; }
       toast('✓ رجعت بانتظار الموافقة'); renderShiftAdjustments();
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
+  }
+  async function deleteShiftAdjustment(id){
+    if(!isAdmin()){ toast('⛔ صلاحية المالك فقط'); return; }
+    if(!confirm('⚠️ حذف طلب التسوية هاد نهائيًا؟ هاد الإجراء ما ينرجع.')) return;
+    try{
+      const { error } = await db.from('shift_adjustments').delete().eq('id', id);
+      if(error){ toast('✗ '+error.message); console.error(error); return; }
+      toast('✓ انحذف'); renderShiftAdjustments();
     }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
   async function createAdjustmentManually(shiftId, staffName, diff){
@@ -7847,7 +7971,8 @@ try {
     } catch(e) { console.error(e); }
   }
   async function toggleCode(id,v){ try { const r=await db.from('discount_codes').update({is_active:v}).eq('id',id); if(r.error){toast('✗ '+r.error.message);console.error(r.error);return;} toast(v?'✓ فعال':'✓ موقوف'); renderAdmin(); } catch(e) { toast('✗ '+e.message); console.error(e); } }
-  function itemForm(id){ const it=ITEMS.find(x=>x.id===id)||{}; modal(`<h3>${id?'تعديل صنف':'صنف جديد'}</h3><div class="fld"><label>اسم الصنف</label><input id="f_nm" value="${esc(it.name_ar||'')}"></div><div class="fld"><label>السعر</label><input id="f_pr" inputmode="decimal" value="${it.price??''}"></div><div class="fld"><label>التكلفة (اختياري — لحساب الأرباح)</label><input id="f_cost" inputmode="decimal" value="${it.cost??''}"></div><div class="fld"><label>صورة الصنف (اختياري)</label><input type="file" id="f_img" accept="image/*" onchange="resizeItemImage(this)"><div id="f_imgPrev" style="margin-top:6px">${it.image_url?`<img src="${it.image_url}" style="width:76px;height:76px;object-fit:cover;border-radius:10px;border:1px solid var(--line)"> <button type="button" class="mini del" onclick="window.__itemImg='';document.getElementById('f_imgPrev').innerHTML='(انحذفت)'">حذف</button>`:''}</div></div><div class="fld"><label>التصنيف</label><select id="f_cat"><option value="">— بدون —</option>${CATS.map(c=>`<option ${c.name_ar===it.category?'selected':''}>${esc(c.name_ar)}</option>`).join('')}</select></div><div class="fld"><label>الترتيب</label><input id="f_so" inputmode="numeric" value="${it.sort_order??0}"></div><div class="m-act"><button class="save" onclick="saveItem('${id||''}')">حفظ</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`); }
+  function itemForm(id){ const it=ITEMS.find(x=>x.id===id)||{}; modal(`<h3>${id?'تعديل صنف':'صنف جديد'}</h3><div class="fld"><label>اسم الصنف</label><input id="f_nm" value="${esc(it.name_ar||'')}"></div><div class="fld"><label>السعر</label><input id="f_pr" inputmode="decimal" value="${it.price??''}"></div><div class="fld"><label>التكلفة (اختياري — لحساب الأرباح)</label><input id="f_cost" inputmode="decimal" value="${it.cost??''}"></div><div class="fld"><label>صورة الصنف (اختياري)</label><input type="file" id="f_img" accept="image/*" onchange="resizeItemImage(this)"><div id="f_imgPrev" style="margin-top:6px">${it.image_url?`<img src="${it.image_url}" style="width:76px;height:76px;object-fit:cover;border-radius:10px;border:1px solid var(--line)"> <button type="button" class="mini del" onclick="window.__itemImg='';document.getElementById('f_imgPrev').innerHTML='(انحذفت)'">حذف</button>`:''}</div></div><div class="fld"><label>التصنيف</label><select id="f_cat"><option value="">— بدون —</option>${CATS.map(c=>`<option ${c.name_ar===it.category?'selected':''}>${esc(c.name_ar)}</option>`).join('')}</select></div><div class="fld"><label>الترتيب</label><input id="f_so" inputmode="numeric" value="${it.sort_order??0}"></div><div class="fld"><label>🧩 نوع الصنف</label><select id="f_type"><option value="simple" ${(!it.item_type||it.item_type==='simple')?'selected':''}>عادي</option><option value="composite" ${it.item_type==='composite'?'selected':''}>مركّب (وجبة عائلية بمكونات قابلة للاختيار)</option></select>
+      ${id?`<div style="margin-top:6px"><button type="button" class="mini ok" onclick="closeModal();compositeManagerModal('${id}','${esc(it.name_ar||'')}')">🧩 إدارة تركيبة الوجبة</button></div>`:'<div style="font-size:.78rem;color:var(--muted);margin-top:4px">احفظ الصنف الأول، وبعدين افتحه من جديد لتضيف تركيبته</div>'}</div><div class="m-act"><button class="save" onclick="saveItem('${id||''}')">حفظ</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`); }
   window.__itemImg = undefined;
   window.resizeItemImage = function(input){
     const f = input.files && input.files[0]; if(!f) return;
@@ -7868,16 +7993,125 @@ try {
     const f_cat = document.getElementById('f_cat');
     const f_so = document.getElementById('f_so');
     const f_cost = document.getElementById('f_cost');
-    const rec={name_ar: f_nm ? f_nm.value.trim() : '', category: f_cat ? f_cat.value||null : null, price: f_pr ? parseFloat(f_pr.value) : 0, cost: f_cost && f_cost.value ? parseFloat(f_cost.value)||0 : 0, sort_order: f_so ? parseInt(f_so.value)||0 : 0};
+    const f_type = document.getElementById('f_type');
+    const rec={name_ar: f_nm ? f_nm.value.trim() : '', category: f_cat ? f_cat.value||null : null, price: f_pr ? parseFloat(f_pr.value) : 0, cost: f_cost && f_cost.value ? parseFloat(f_cost.value)||0 : 0, sort_order: f_so ? parseInt(f_so.value)||0 : 0, item_type: f_type ? f_type.value : 'simple'};
     if(window.__itemImg !== undefined){ rec.image_url = window.__itemImg || null; }
     window.__itemImg = undefined;
     if(!rec.name_ar||!(rec.price>0)){ toast('⚠️ الاسم وسعر صحيح'); return; }
     try {
-      const r=id?await db.from('menu_items').update(rec).eq('id',id):await db.from('menu_items').insert(rec);
+      const r=id?await db.from('menu_items').update(rec).eq('id',id):await db.from('menu_items').insert(rec).select().single();
       if(r.error){ toast('✗ فشل'); return; }
-      closeModal(); toast('✓ انحفظ'); renderAdmin(); bootData();
+      const newId = id || r.data?.id;
+      closeModal(); toast('✓ انحفظ'); renderAdmin(); await bootData();
+      if(!id && rec.item_type==='composite' && newId){ compositeManagerModal(newId, rec.name_ar); }
     } catch(e) { console.error(e); }
   }
+  /* ================= 🧩 إدارة الأصناف المركّبة ================= */
+  async function compositeManagerModal(itemId, itemName){
+    modal(`<h3>🧩 تركيبة — ${esc(itemName)}</h3><div id="compBody" class="empty-note">... جاري التحميل</div>`);
+    await loadCompositeData(itemId, itemName);
+  }
+  async function loadCompositeData(itemId, itemName){
+    const body = document.getElementById('compBody'); if(!body) return;
+    try{
+      const [fixedRes, groupsRes] = await Promise.all([
+        db.from('composite_fixed').select('*, menu_items!composite_fixed_component_item_id_fkey(name_ar)').eq('menu_item_id', itemId),
+        db.from('composite_groups').select('*, composite_options(*, menu_items!composite_options_component_item_id_fkey(name_ar))').eq('menu_item_id', itemId).order('sort_order'),
+      ]);
+      if(fixedRes.error || groupsRes.error){
+        body.innerHTML = `<div class="alert-red">⚠️ ${esc((fixedRes.error||groupsRes.error).message||'الجداول غير موجودة — نفّذ SQL أولاً')}</div>`;
+        return;
+      }
+      const fixed = fixedRes.data||[];
+      const groups = groupsRes.data||[];
+      window.__COMP_ITEM = { id: itemId, name: itemName };
+      body.innerHTML = `
+        <div style="font-weight:900;color:var(--maroon);margin-bottom:6px">📦 مكونات ثابتة (ما بتتغيّر — زي بطاطا 4 وببسي 2)</div>
+        <div class="tbl-wrap" style="margin-bottom:8px"><table class="tbl">
+          <tr><th>الصنف</th><th>الكمية</th><th></th></tr>
+          ${fixed.map(f=>`<tr><td>${esc(f.menu_items?.name_ar||'—')}</td><td>${f.qty}</td><td><button class="mini del" onclick="deleteCompFixed('${f.id}')">حذف</button></td></tr>`).join('')||'<tr><td colspan="3" class="empty-note">ما في مكونات ثابتة بعد</td></tr>'}
+        </table></div>
+        <div style="display:flex;gap:6px;margin-bottom:16px">
+          <select id="cf_item" style="flex:1;border:1.5px solid var(--line);border-radius:8px;padding:6px">
+            ${ITEMS.filter(i=>i.item_type!=='composite').map(i=>`<option value="${i.id}">${esc(i.name_ar)}</option>`).join('')}
+          </select>
+          <input id="cf_qty" type="number" min="1" value="1" style="width:70px;border:1.5px solid var(--line);border-radius:8px;padding:6px">
+          <button class="mini ok" onclick="addCompFixed()">+ إضافة</button>
+        </div>
+
+        <div style="font-weight:900;color:var(--maroon);margin-bottom:6px">🎯 مجموعات قابلة للاختيار (زي "6 ساندويشات")</div>
+        <div id="compGroupsWrap">${groups.map(g=>renderCompGroup(g)).join('')||'<div class="empty-note">ما في مجموعات بعد</div>'}</div>
+        <div style="display:flex;gap:6px;margin-top:10px">
+          <input id="cg_name" placeholder="اسم المجموعة (مثال: ساندويش)" style="flex:1;border:1.5px solid var(--line);border-radius:8px;padding:6px">
+          <input id="cg_slots" type="number" min="1" placeholder="العدد" value="1" style="width:80px;border:1.5px solid var(--line);border-radius:8px;padding:6px">
+          <button class="mini ok" onclick="addCompGroup()">+ إضافة مجموعة</button>
+        </div>
+        <div class="m-act" style="margin-top:14px"><button class="cancel" onclick="closeModal()">إغلاق</button></div>`;
+    }catch(e){ body.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
+  }
+  function renderCompGroup(g){
+    const opts = g.composite_options||[];
+    return `<div style="border:1.5px solid var(--line);border-radius:12px;padding:10px 12px;margin-bottom:10px;background:#fff">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <b>${esc(g.name)} — ${g.slot_count} حبة إجمالي</b>
+        <button class="mini del" onclick="deleteCompGroup('${g.id}')">حذف المجموعة</button>
+      </div>
+      <table class="tbl"><tr><th>الخيار</th><th>حد أقصى</th><th></th></tr>
+        ${opts.map(o=>`<tr><td>${esc(o.menu_items?.name_ar||'—')}</td><td>${o.max_qty??'بدون حد'}</td><td><button class="mini del" onclick="deleteCompOption('${o.id}')">حذف</button></td></tr>`).join('')||'<tr><td colspan="3" class="empty-note">ما في خيارات بعد</td></tr>'}
+      </table>
+      <div style="display:flex;gap:6px;margin-top:6px">
+        <select id="co_item_${g.id}" style="flex:1;border:1.5px solid var(--line);border-radius:8px;padding:6px">
+          ${ITEMS.filter(i=>i.item_type!=='composite').map(i=>`<option value="${i.id}">${esc(i.name_ar)}</option>`).join('')}
+        </select>
+        <input id="co_max_${g.id}" type="number" min="1" placeholder="حد أقصى (اختياري)" style="width:130px;border:1.5px solid var(--line);border-radius:8px;padding:6px">
+        <button class="mini ok" onclick="addCompOption('${g.id}')">+ خيار</button>
+      </div>
+    </div>`;
+  }
+  async function addCompFixed(){
+    const it = window.__COMP_ITEM; if(!it) return;
+    const componentId = document.getElementById('cf_item')?.value;
+    const qty = parseFloat(document.getElementById('cf_qty')?.value)||1;
+    if(!componentId){ toast('⚠️ اختر صنف'); return; }
+    const { error } = await db.from('composite_fixed').insert({ menu_item_id: it.id, component_item_id: componentId, qty });
+    if(error){ toast('✗ '+error.message); return; }
+    loadCompositeData(it.id, it.name);
+  }
+  async function deleteCompFixed(id){
+    const it = window.__COMP_ITEM; if(!it) return;
+    await db.from('composite_fixed').delete().eq('id', id);
+    loadCompositeData(it.id, it.name);
+  }
+  async function addCompGroup(){
+    const it = window.__COMP_ITEM; if(!it) return;
+    const name = document.getElementById('cg_name')?.value.trim();
+    const slots = parseInt(document.getElementById('cg_slots')?.value)||0;
+    if(!name || slots<1){ toast('⚠️ اكتب اسم المجموعة والعدد'); return; }
+    const { error } = await db.from('composite_groups').insert({ menu_item_id: it.id, name, slot_count: slots });
+    if(error){ toast('✗ '+error.message); return; }
+    loadCompositeData(it.id, it.name);
+  }
+  async function deleteCompGroup(id){
+    const it = window.__COMP_ITEM; if(!it) return;
+    await db.from('composite_groups').delete().eq('id', id);
+    loadCompositeData(it.id, it.name);
+  }
+  async function addCompOption(groupId){
+    const it = window.__COMP_ITEM; if(!it) return;
+    const componentId = document.getElementById('co_item_'+groupId)?.value;
+    const maxRaw = document.getElementById('co_max_'+groupId)?.value;
+    const max_qty = maxRaw ? parseInt(maxRaw) : null;
+    if(!componentId){ toast('⚠️ اختر صنف'); return; }
+    const { error } = await db.from('composite_options').insert({ group_id: groupId, component_item_id: componentId, max_qty });
+    if(error){ toast('✗ '+error.message); return; }
+    loadCompositeData(it.id, it.name);
+  }
+  async function deleteCompOption(id){
+    const it = window.__COMP_ITEM; if(!it) return;
+    await db.from('composite_options').delete().eq('id', id);
+    loadCompositeData(it.id, it.name);
+  }
+
   async function toggleItem(id,v){ try { const r=await db.from('menu_items').update({is_available:v}).eq('id',id); if(r.error){toast('✗ '+r.error.message);console.error(r.error);return;} toast(v?'✓ ظاهر':'✓ مخفي'); renderAdmin(); bootData(); } catch(e) { toast('✗ '+e.message); console.error(e); } }
   function catForm(id){ const list=window.__ALLCATS||CATS; const c=list.find(x=>x.id===id)||{}; modal(`<h3>${id?'تعديل تصنيف':'تصنيف جديد'}</h3><div class="fld"><label>اسم التصنيف</label><input id="f_cn" value="${esc(c.name_ar||'')}"></div><div class="fld"><label>الترتيب</label><input id="f_cs" inputmode="numeric" value="${c.sort_order??0}"></div><div class="m-act"><button class="save" onclick="saveCat('${id||''}')">حفظ</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`); }
   async function saveCat(id){
