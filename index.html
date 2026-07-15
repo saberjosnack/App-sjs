@@ -9199,8 +9199,13 @@ try {
     errEl.textContent = '';
     if(!user || !pin){ errEl.textContent = '⚠️ اكتب اسم المستخدم والرقم السري'; return; }
     try{
-      const { data, error } = await db.from('meal_names').select('*').ilike('username', user).eq('pin', pin).maybeSingle();
+      // 🔍 نجيب كل موظفي HR عندهم اسم مستخدم، ونقارن يدويًا بجافاسكربت (بعد تطبيع الأرقام العربية/الإنجليزية
+      // بالطرفين) — هيك ما بيصير فرق لو الرقم السري كان محفوظ بأرقام عربية بالغلط أو أي فرق ترميز خفي
+      const { data: allEmp, error } = await db.from('meal_names').select('*').not('username','is',null);
       if(error){ errEl.textContent = '⚠️ خطأ تقني: '+(error.message||'')+' — تأكد المدير نفّذ SQL بوابة الموظف'; console.error(error); return; }
+      const userNorm = normalizeDigits(user).trim().toLowerCase();
+      const pinNorm = normalizeDigits(pin).trim();
+      const data = (allEmp||[]).find(e => normalizeDigits(e.username||'').trim().toLowerCase()===userNorm && normalizeDigits(e.pin||'').trim()===pinNorm);
       if(!data){ errEl.textContent = '⛔ اسم المستخدم أو الرقم السري غلط'; return; }
       if(data.is_active===false){ errEl.textContent = '⛔ حسابك معطّل — راجع الإدارة'; return; }
       // 🔒 قفل الجهاز — أول جهاز يسجّل فيه الموظف يصير هو المعتمد تلقائيًا،
