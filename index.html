@@ -578,6 +578,7 @@
         <button data-a="branches" onclick="admTab('branches')">🏪 الفروع</button>
         <button data-a="inventory" onclick="admTab('inventory')" style="background:var(--yellow);border-color:#d9c400">📋 جرد المخزون</button>
         <button data-a="warehouse" onclick="admTab('warehouse')" style="background:#d9c8ff;border-color:#7b2cbf">🏬 المستودع</button>
+        <button data-a="dailyAudits" onclick="admTab('dailyAudits')" style="background:#c2f0e0;border-color:#0d9c6c">📋 جرد الفرع اليومي</button>
         <button data-a="treasury" onclick="admTab('treasury')" style="background:#c8f7d4;border-color:#1a9c4b">💰 المصاري</button>
         <button data-a="hr" onclick="admTab('hr')" style="background:#ffe0c2;border-color:#e8890c">🧑‍💼 HR</button>
         <button data-a="chats" onclick="admTab('chats')" style="background:#d0ecff;border-color:#0d6efd">💬 المحادثات</button>
@@ -4364,7 +4365,7 @@
   const ADMIN_TAB_PERM = {
     items:'items_manage', cats:'cats_manage', codes:'codes_manage', staff:'staff_manage', roles:'admin_only', branches:'branches_manage', sett:'settings_manage', devices:'devices_manage',
     ingredients:'inventory_view', recipes:'inventory_view',
-    inventory:'inventory_audit', transfers:'inventory_transfer', warehouse:'admin_only', treasury:'admin_only', hr:'admin_only', chats:'admin_only',
+    inventory:'inventory_audit', transfers:'inventory_transfer', warehouse:'admin_only', treasury:'admin_only', hr:'admin_only', chats:'admin_only', dailyAudits:'admin_only',
     expenses:'expenses_view', purchases:'purchases_view',
     platforms:'platforms_view', empmeals:'empmeals_view', topcust:'topcust_view', waste:'waste_log', suppliers:'purchases_view',
   };
@@ -4434,6 +4435,7 @@
     if(admView==='inventory'){ renderInventory(); return; }
     if(admView==='transfers'){ renderTransfers(); return; }
     if(admView==='warehouse'){ renderWarehouse(); return; }
+    if(admView==='dailyAudits'){ renderDailyAudits(); return; }
     if(admView==='treasury'){ renderTreasury(); return; }
     if(admView==='hr'){ renderHR(); return; }
     if(admView==='chats'){ renderChatAdmin(); return; }
@@ -5118,8 +5120,8 @@
       <div class="fld"><label>المبلغ (${CURRENCY})</label><input id="fe_amt" inputmode="decimal" value="${e.amount||''}"></div>
       <div class="fld"><label>الفرع</label><select id="fe_br"><option value="">كل الفروع</option>
         ${BRANCHES.map(b=>`<option value="${b.id}" ${e.branch_id===b.id?'selected':''}>${esc(b.name_ar)}</option>`).join('')}</select></div>
-      ${id?'':`<div class="fld"><label>💰 دفع من حساب</label>
-        <select id="fe_acc"><option value="cash">💵 كاش</option><option value="bank">🏦 بنك/كليك</option></select></div>`}
+      ${id?'':`<div class="fld"><label>💰 دفع من</label>
+        <select id="fe_acc"><option value="capital" selected>🏦 رأس المال (الافتراضي لمصاريف المالك)</option><option value="cash">💵 كاش (مصاري الفرع)</option><option value="bank">🏦 بنك/كليك (مصاري الفرع)</option></select></div>`}
       <div class="m-act"><button class="save" onclick="saveExpense('${id||''}')">حفظ ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
   }
   async function saveExpense(id){
@@ -5135,9 +5137,12 @@
     const r = id ? await db.from('expenses').update(rec).eq('id',id) : await db.from('expenses').insert(rec);
     if(r.error){toast('✗ '+r.error.message);return;}
     if(!id){
-      const acc = document.getElementById('fe_acc')?.value||'cash';
-      try{ await addTreasuryTx(acc, -rec.amount, 'expense', null, rec.category+' — '+rec.title, rec.branch_id); }
-      catch(e){ console.error('post expense to treasury failed:', e); }
+      const acc = document.getElementById('fe_acc')?.value||'capital';
+      try{
+        if(acc==='capital') await addCapitalTx(-rec.amount, 'expense', null, rec.category+' — '+rec.title);
+        else await addTreasuryTx(acc, -rec.amount, 'expense', null, rec.category+' — '+rec.title, rec.branch_id);
+      }
+      catch(e){ console.error('post expense failed:', e); }
     }
     await logActivity(id?'edit_expense':'add_expense', 'مصروف: '+rec.category+' - '+fmt(rec.amount));
     closeModal();toast('✓ انحفظ');renderExpenses();
@@ -5191,7 +5196,7 @@
           <td><b>${esc(p.supplier||'—')}</b></td>
           <td>${(p.purchase_items||[]).map(i=>esc(i.ingredients?.name||'—')).join('، ')}</td>
           <td><b style="color:var(--red)">${fmt(p.total)} ${CURRENCY}</b></td>
-          <td>${p.payment_status==='cash'?'✅ كاش':p.payment_status==='bank'?'✅ كليك/بنك':'<b style="color:var(--red)">🔴 دين</b>'}</td>
+          <td>${p.payment_status==='cash'?'✅ كاش':p.payment_status==='bank'?'✅ كليك/بنك':p.payment_status==='capital'?'🏦 رأس المال':'<b style="color:var(--red)">🔴 دين</b>'}</td>
           <td style="white-space:nowrap">
             <button class="mini tog" onclick="showPurchaseDetail('${p.id}')">👁️</button>
             <button class="mini edit" onclick="editPurchaseInfo('${p.id}')">تعديل</button>
@@ -5206,7 +5211,7 @@
     modal(`<h3>💰 تسديد فاتورة — ${esc(p.supplier||'—')}</h3>
       <div style="color:var(--muted);font-weight:700;margin-bottom:10px">المبلغ: <b style="color:var(--red)">${fmt(p.total)} ${CURRENCY}</b></div>
       <div class="fld"><label>الدفع من</label>
-        <select id="settle_acc"><option value="cash">💵 كاش</option><option value="bank">🏦 كليك/بنك</option></select></div>
+        <select id="settle_acc"><option value="cash">💵 كاش (مصاري الفرع)</option><option value="bank">🏦 كليك/بنك (مصاري الفرع)</option><option value="capital">🏦 رأس المال</option></select></div>
       <div class="m-act"><button class="save" onclick="confirmSettlePurchase('${id}')">تأكيد التسديد ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
   }
   async function confirmSettlePurchase(id){
@@ -5214,7 +5219,8 @@
     const acc = document.getElementById('settle_acc')?.value||'cash';
     try{
       await db.from('purchases').update({ payment_status: acc, paid_at: new Date().toISOString() }).eq('id', id);
-      await addTreasuryTx(acc, -p.total, 'purchase', id, 'تسديد فاتورة شراء — '+(p.supplier||''), p.branch_id||null);
+      if(acc==='capital') await addCapitalTx(-p.total, 'purchase', id, 'تسديد فاتورة شراء — '+(p.supplier||''));
+      else await addTreasuryTx(acc, -p.total, 'purchase', id, 'تسديد فاتورة شراء — '+(p.supplier||''), p.branch_id||null);
       closeModal(); toast('✓ اتسددت الفاتورة'); renderPurchases();
     }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
@@ -5248,7 +5254,7 @@
       <h1>🛒 تقرير المشتريات — Saber Jo Snack</h1>
       <div>${filterSup?'المورد: '+esc(filterSup)+' — ':''}تاريخ الطباعة: ${new Date().toLocaleString('ar-JO')}</div>
       <table><tr><th>التاريخ</th><th>المورد</th><th>المواد</th><th>الإجمالي</th><th>الدفع</th></tr>
-      ${filtered.map(p=>`<tr><td>${p.purchase_date}</td><td>${esc(p.supplier||'—')}</td><td>${(p.purchase_items||[]).map(i=>esc(i.ingredients?.name||'—')).join('، ')}</td><td>${fmt(p.total)}</td><td>${p.payment_status==='cash'?'كاش':p.payment_status==='bank'?'بنك/كليك':'دين'}</td></tr>`).join('')}
+      ${filtered.map(p=>`<tr><td>${p.purchase_date}</td><td>${esc(p.supplier||'—')}</td><td>${(p.purchase_items||[]).map(i=>esc(i.ingredients?.name||'—')).join('، ')}</td><td>${fmt(p.total)}</td><td>${p.payment_status==='cash'?'كاش':p.payment_status==='bank'?'بنك/كليك':p.payment_status==='capital'?'رأس المال':'دين'}</td></tr>`).join('')}
       </table>
       <h2>الإجمالي: <span class="tot">${fmt(total)} ${CURRENCY}</span></h2>
       </body></html>`;
@@ -5324,16 +5330,18 @@
         <button type="button" class="mini ok" style="margin-top:6px" onclick="addPiRow()">＋ إضافة مادة</button></div>
       <div class="fld"><label>الفرع المستلم *</label><select id="fp_br" onchange="window.__purchaseBranchId=this.value">
         <option value="">اختر الفرع...</option>
+        <option value="__all__">🌐 توزيع على كل الفروع</option>
         ${BRANCHES.map(b=>`<option value="${b.id}">${esc(b.name_ar)}</option>`).join('')}</select></div>
       <div class="fld"><label>💰 حالة الدفع</label>
         <select id="fp_paystatus" onchange="document.getElementById('fp_payacc_wrap').classList.toggle('hidden', this.value==='unpaid')">
           <option value="unpaid">🔴 غير مدفوعة (دين على المطعم)</option>
-          <option value="cash">✅ مدفوعة — كاش</option>
-          <option value="bank">✅ مدفوعة — كليك/بنك</option>
+          <option value="cash">✅ مدفوعة — كاش (من مصاري الفرع)</option>
+          <option value="bank">✅ مدفوعة — كليك/بنك (من مصاري الفرع)</option>
+          <option value="capital">🏦 مدفوعة — من رأس المال</option>
         </select>
       </div>
       <div class="fld" id="fp_payacc_wrap" style="background:#fff8e1;border-radius:10px;padding:10px 12px">
-        <div style="font-size:.8rem;color:var(--muted);font-weight:700">💡 المبلغ رح ينخصم تلقائيًا من رصيد الحساب المختار بشاشة "💰 المصاري"</div>
+        <div style="font-size:.8rem;color:var(--muted);font-weight:700">💡 المبلغ رح ينخصم تلقائيًا (من مصاري الفرع أو رأس المال حسب اختيارك)</div>
       </div>
       <div class="fld"><label>ملاحظات</label><input id="fp_note" placeholder="اختياري"></div>
       <div class="m-act"><button class="save" onclick="savePurchase()">حفظ ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
@@ -5364,6 +5372,7 @@
     }
     if(!dt||!sup){toast('⚠️ التاريخ والمورد مطلوبين');return;}
     if(!window.__purchaseBranchId){toast('⚠️ اختر الفرع المستلم');return;}
+    const isAllBranches = window.__purchaseBranchId === '__all__';
     const rows=[...document.querySelectorAll('#pi_list .two')];
     const items=rows.map(row=>({
       ingredient_id:row.querySelector('.pi_ing').value,
@@ -5375,22 +5384,23 @@
     const payStatus = document.getElementById('fp_paystatus')?.value || 'unpaid';
     const {data:pur,error}=await db.from('purchases').insert({
       purchase_date:dt,supplier:sup,total,
-      branch_id:window.__purchaseBranchId||null,
+      branch_id: isAllBranches ? null : window.__purchaseBranchId,
       notes:document.getElementById('fp_note').value.trim()||null,
       payment_status: payStatus,
       paid_at: payStatus!=='unpaid' ? new Date().toISOString() : null
     }).select().single();
     if(error){toast('✗ '+error.message);return;}
-    if(payStatus!=='unpaid'){
-      await addTreasuryTx(payStatus, -total, 'purchase', pur.id, 'فاتورة شراء — '+sup, window.__purchaseBranchId||null);
+    if(payStatus==='capital'){
+      await addCapitalTx(-total, 'purchase', pur.id, 'فاتورة شراء — '+sup);
+    } else if(payStatus!=='unpaid'){
+      await addTreasuryTx(payStatus, -total, 'purchase', pur.id, 'فاتورة شراء — '+sup, isAllBranches ? null : window.__purchaseBranchId);
     }
     await db.from('purchase_items').insert(items.map(x=>({...x,purchase_id:pur.id})));
     for(const it of items){
       const {data:ing}=await db.from('ingredients').select('stock').eq('id',it.ingredient_id).single();
       await db.from('ingredients').update({stock:(parseFloat(ing?.stock||0)+it.quantity),unit_cost:it.unit_cost}).eq('id',it.ingredient_id);
         // تحديث مخزون الفرع المختار (أو كل الفروع)
-      const targetBranch = window.__purchaseBranchId || null;
-      const branchesToUpdate = targetBranch ? BRANCHES.filter(b=>b.id===targetBranch) : BRANCHES;
+      const branchesToUpdate = isAllBranches ? BRANCHES : BRANCHES.filter(b=>b.id===window.__purchaseBranchId);
       for(const branch of branchesToUpdate){
         const {data:bi}=await db.from('branch_inventory').select('id,stock').eq('branch_id',branch.id).eq('ingredient_id',it.ingredient_id).maybeSingle();
         if(bi) await db.from('branch_inventory').update({stock:(bi.stock||0)+it.quantity}).eq('id',bi.id);
@@ -5398,7 +5408,7 @@
         logMovement(branch.id, it.ingredient_id, it.quantity, 'purchase', 'فاتورة شراء — '+sup);
       }
     }
-    closeModal();toast('✓ انحفظت الفاتورة والمخزون اتحدث');renderPurchases();
+    closeModal();toast('✓ انحفظت الفاتورة والمخزون اتحدث'+(isAllBranches?' بكل الفروع':''));renderPurchases();
   }
 
   /* ---- تقارير موسعة ---- */
@@ -5678,8 +5688,32 @@
       });
     }catch(e){ console.error('audit log failed:', e); }
     await logActivity('inventory_audit', 'جرد '+branchName+' — '+updated+' مادة، '+totalVarianceItems+' فرق');
+    // 🔔 تنبيه فوري للمالك عبر الشات الداخلي لو الجرد عمله موظف عادي (مش المالك نفسه)
+    if(!isAdmin()){
+      try{
+        const admins = STAFF.filter(s=>s.role==='admin' && s.id!==ME.id);
+        const msgBody = '📋 خلّصت جرد "'+branchName+'" — '+updated+' مادة معدودة'+(totalVarianceItems>0?('، ⚠️ '+totalVarianceItems+' مادة فيها فرق — افتح "جرد الفرع اليومي" للتفصيل'):('، ✅ كل شي مطابق'));
+        for(const adm of admins){
+          await db.from('staff_messages').insert({ from_id: ME.id, from_name: ME.full_name, to_id: adm.id, to_name: adm.full_name, body: msgBody });
+        }
+      }catch(e){ console.error('inventory audit notify failed:', e); }
+    }
     closeModal();
-    toast(totalVarianceItems>0 ? ('⚠️ الجرد اتحفظ — '+totalVarianceItems+' مادة فيها فرق') : '✅ الجرد اتحفظ — كل شي مطابق');
+    toast(totalVarianceItems>0 ? ('⚠️ الجرد اترسل — '+totalVarianceItems+' مادة فيها فرق') : '✅ الجرد اترسل — كل شي مطابق');
+    // 📄 PDF تلقائي للموظف كإثبات إرسال الجرد
+    try{
+      const html = `<html dir="rtl"><head><meta charset="UTF-8">
+        <style>body{font-family:Cairo,Arial;padding:28px}h1{color:#4a1010}table{width:100%;border-collapse:collapse;margin-top:14px}td,th{padding:8px 10px;border:1px solid #eadfd4;text-align:right;font-size:.85rem}th{background:#FFF8EE}@media print{.no-print{display:none}}</style>
+        </head><body>
+        <button class="no-print" onclick="window.print()" style="margin-bottom:16px;background:#4a1010;color:#FDE507;border:none;border-radius:10px;padding:10px 20px;font-weight:800;cursor:pointer">🖨️ طباعة / حفظ PDF</button>
+        <h1>📋 إثبات إرسال جرد — ${esc(branchName)}</h1>
+        <div>${new Date().toLocaleString('ar-JO')} — ${esc(ME.full_name)}</div>
+        <table><tr><th>المادة</th><th>الفعلي</th></tr>
+        ${results.map(r=>`<tr><td>${esc(INGR.find(x=>x.id===r.ingredient_id)?.name||'—')}</td><td>${r.actual}</td></tr>`).join('')}
+        </table></body></html>`;
+      const win = window.open('','_blank');
+      win.document.write(html); win.document.close();
+    }catch(e){ console.error('audit PDF failed:', e); }
     renderInventory();
   }
   async function saveInventory(branchId, branchName){
@@ -5922,7 +5956,113 @@
       <div class="m-act"><button class="cancel" onclick="closeModal()">إغلاق</button></div>`);
   }
 
-  /* ---- تعديل مخزون يدوي ---- */
+  /* ================= 📋 جرد الفرع اليومي (شاشة إدارة مخصصة) ================= */
+  let DA_FILTER = { branch:'', from:'', to:'' };
+  async function renderDailyAudits(){
+    const C = document.getElementById('admContent');
+    C.innerHTML = '<div class="empty-note">... جاري التحميل</div>';
+    if(!DA_FILTER.from){
+      const today = new Date().toISOString().split('T')[0];
+      DA_FILTER.from = today; DA_FILTER.to = today;
+    }
+    let q = db.from('inventory_audits').select('*, branches(name_ar)')
+      .gte('created_at', DA_FILTER.from+'T00:00:00').lte('created_at', DA_FILTER.to+'T23:59:59')
+      .order('created_at',{ascending:false});
+    if(DA_FILTER.branch) q = q.eq('branch_id', DA_FILTER.branch);
+    const { data, error } = await q;
+    if(error){
+      C.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message||'الجدول inventory_audits غير موجود')}</div>`;
+      console.error(error); return;
+    }
+    const audits = data||[];
+    window.__DA_LIST = audits;
+    const totalVariance = audits.reduce((a,x)=>a+(x.items_with_variance||0),0);
+    C.innerHTML = `
+      <div class="panel" style="margin-bottom:14px">
+        <h3>📋 جرد الفرع اليومي</h3>
+        <div class="two" style="flex-wrap:wrap;gap:10px;margin:10px 0">
+          <div><label style="font-weight:700;font-size:.82rem">الفرع</label><br>
+            <select id="da_branch" class="dfield"><option value="">كل الفروع</option>
+              ${BRANCHES.map(b=>`<option value="${b.id}" ${DA_FILTER.branch===b.id?'selected':''}>${esc(b.name_ar)}</option>`).join('')}</select></div>
+          <div><label style="font-weight:700;font-size:.82rem">من تاريخ</label><br><input type="date" id="da_from" value="${DA_FILTER.from}" class="dfield"></div>
+          <div><label style="font-weight:700;font-size:.82rem">إلى تاريخ</label><br><input type="date" id="da_to" value="${DA_FILTER.to}" class="dfield"></div>
+          <button class="mini ok" style="align-self:end" onclick="applyDaFilter()">🔍 فلترة</button>
+          <button class="mini edit" style="align-self:end" onclick="printDailyAuditsPDF()">📄 PDF شامل</button>
+        </div>
+        <div class="day-head">
+          <div class="stat">عدد عمليات الجرد<b>${audits.length}</b></div>
+          <div class="stat">مواد فيها فرق<b style="color:${totalVariance>0?'var(--red)':'var(--ok)'}">${totalVariance}</b></div>
+        </div>
+      </div>
+      <div class="tbl-wrap"><table class="tbl">
+        <tr><th>الوقت</th><th>الفرع</th><th>الموظف</th><th>مواد معدودة</th><th>فروقات</th><th></th></tr>
+        ${audits.map((a,idx)=>`<tr class="${a.items_with_variance>0?'late':''}">
+          <td>${new Date(a.created_at).toLocaleString('ar-JO')}</td>
+          <td><b>${esc(a.branches?.name_ar||'—')}</b></td>
+          <td>${esc(a.staff_name||'—')}</td>
+          <td>${a.items_counted}</td>
+          <td>${a.items_with_variance>0?`<b style="color:var(--red)">⚠️ ${a.items_with_variance}</b>`:'<span style="color:var(--ok)">✓ لا شي</span>'}</td>
+          <td><button class="mini edit" onclick="showDaDetail(${idx})">👁️ تفصيل</button> <button class="mini ok" onclick="printOneAuditPDF(${idx})">📄 PDF</button></td>
+        </tr>`).join('')||'<tr><td colspan="6" class="empty-note">ما في عمليات جرد بهاي الفترة</td></tr>'}
+      </table></div>`;
+  }
+  function applyDaFilter(){
+    DA_FILTER.branch = document.getElementById('da_branch')?.value||'';
+    DA_FILTER.from = document.getElementById('da_from')?.value||DA_FILTER.from;
+    DA_FILTER.to = document.getElementById('da_to')?.value||DA_FILTER.to;
+    renderDailyAudits();
+  }
+  function ingName(id){ return INGR.find(x=>x.id===id)?.name || '—'; }
+  function showDaDetail(idx){
+    const a = (window.__DA_LIST||[])[idx]; if(!a) return;
+    const details = a.details||[];
+    modal(`<h3>📋 تفصيل الجرد — ${esc(a.branches?.name_ar||'—')}</h3>
+      <div style="color:var(--muted);font-weight:700;margin-bottom:10px">${new Date(a.created_at).toLocaleString('ar-JO')} — ${esc(a.staff_name||'—')}</div>
+      <div class="tbl-wrap"><table class="tbl">
+        <tr><th>المادة</th><th>المتوقع</th><th>الفعلي</th><th>الفرق</th></tr>
+        ${details.map(d=>`<tr class="${Math.abs(d.variance)>0.001?'late':''}">
+          <td><b>${esc(ingName(d.ingredient_id))}</b></td>
+          <td>${d.expected}</td>
+          <td>${d.actual}</td>
+          <td><b style="color:${d.variance<0?'var(--red)':d.variance>0?'var(--warn)':'var(--ok)'}">${d.variance>0?'+':''}${d.variance}</b></td>
+        </tr>`).join('')||'<tr><td colspan="4" class="empty-note">لا شي</td></tr>'}
+      </table></div>
+      <div class="m-act"><button class="save" onclick="printOneAuditPDF(${idx})">📄 طباعة PDF</button><button class="cancel" onclick="closeModal()">إغلاق</button></div>`);
+  }
+  function printOneAuditPDF(idx){
+    const a = (window.__DA_LIST||[])[idx]; if(!a) return;
+    const details = a.details||[];
+    const html = `<html dir="rtl"><head><meta charset="UTF-8">
+      <style>body{font-family:Cairo,Arial;padding:28px}h1{color:#4a1010}table{width:100%;border-collapse:collapse;margin-top:14px}td,th{padding:8px 10px;border:1px solid #eadfd4;text-align:right;font-size:.85rem}th{background:#FFF8EE}@media print{.no-print{display:none}}</style>
+      </head><body>
+      <button class="no-print" onclick="window.print()" style="margin-bottom:16px;background:#4a1010;color:#FDE507;border:none;border-radius:10px;padding:10px 20px;font-weight:800;cursor:pointer">🖨️ طباعة / حفظ PDF</button>
+      <h1>📋 تقرير جرد — ${esc(a.branches?.name_ar||'—')}</h1>
+      <div>التاريخ: ${new Date(a.created_at).toLocaleString('ar-JO')} — الموظف: ${esc(a.staff_name||'—')}</div>
+      <table><tr><th>المادة</th><th>المتوقع</th><th>الفعلي</th><th>الفرق</th></tr>
+      ${details.map(d=>`<tr><td>${esc(ingName(d.ingredient_id))}</td><td>${d.expected}</td><td>${d.actual}</td><td>${d.variance>0?'+':''}${d.variance}</td></tr>`).join('')}
+      </table></body></html>`;
+    const win = window.open('','_blank');
+    win.document.write(html); win.document.close();
+  }
+  function printDailyAuditsPDF(){
+    const audits = window.__DA_LIST||[];
+    const html = `<html dir="rtl"><head><meta charset="UTF-8">
+      <style>body{font-family:Cairo,Arial;padding:28px}h1{color:#4a1010}h2{color:#4a1010;font-size:1rem;margin-top:20px;border-bottom:2px solid #F60100;padding-bottom:4px}table{width:100%;border-collapse:collapse;margin-top:8px}td,th{padding:6px 8px;border:1px solid #eadfd4;text-align:right;font-size:.82rem}th{background:#FFF8EE}@media print{.no-print{display:none}}</style>
+      </head><body>
+      <button class="no-print" onclick="window.print()" style="margin-bottom:16px;background:#4a1010;color:#FDE507;border:none;border-radius:10px;padding:10px 20px;font-weight:800;cursor:pointer">🖨️ طباعة / حفظ PDF</button>
+      <h1>📋 تقرير جرد الفروع الشامل</h1>
+      <div>الفترة: ${DA_FILTER.from} → ${DA_FILTER.to}</div>
+      ${audits.map(a=>`
+        <h2>🏪 ${esc(a.branches?.name_ar||'—')} — ${new Date(a.created_at).toLocaleString('ar-JO')} — ${esc(a.staff_name||'—')}</h2>
+        <table><tr><th>المادة</th><th>المتوقع</th><th>الفعلي</th><th>الفرق</th></tr>
+        ${(a.details||[]).map(d=>`<tr><td>${esc(ingName(d.ingredient_id))}</td><td>${d.expected}</td><td>${d.actual}</td><td>${d.variance>0?'+':''}${d.variance}</td></tr>`).join('')}
+        </table>`).join('') || '<div>ما في عمليات جرد بهاي الفترة</div>'}
+      </body></html>`;
+    const win = window.open('','_blank');
+    win.document.write(html); win.document.close();
+  }
+
+
   function adjustStock(invId, branchId, ingId, current){
     const ing = INGR.find(x=>x.id===ingId)||{};
     const br = BRANCHES.find(x=>x.id===branchId)||{};
@@ -7466,7 +7606,7 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
         byItem[nm].cost += (i.quantity||0)*(i.unit_cost||0);
       }));
       window.__lastSupplierStmt = { supplierName, from, to, list, total, debt, byItem };
-      const payLbl = p => p.payment_status==='cash'?'✅ كاش':p.payment_status==='bank'?'✅ كليك/بنك':'<b style="color:var(--red)">🔴 دين</b>';
+      const payLbl = p => p.payment_status==='cash'?'✅ كاش':p.payment_status==='bank'?'✅ كليك/بنك':p.payment_status==='capital'?'🏦 رأس المال':'<b style="color:var(--red)">🔴 دين</b>';
       R.innerHTML = `
         <div class="day-head" style="margin:10px 0">
           <div class="stat">عدد الفواتير<b>${list.length}</b></div>
@@ -7516,7 +7656,7 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
   }
   function printSupplierStatementPDF(){
     const d = window.__lastSupplierStmt; if(!d) return;
-    const payLbl = p => p.payment_status==='cash'?'✅ مدفوعة كاش':p.payment_status==='bank'?'✅ مدفوعة كليك/بنك':'🔴 دين (غير مدفوعة)';
+    const payLbl = p => p.payment_status==='cash'?'✅ مدفوعة كاش':p.payment_status==='bank'?'✅ مدفوعة كليك/بنك':p.payment_status==='capital'?'🏦 مدفوعة من رأس المال':'🔴 دين (غير مدفوعة)';
     const html = `<html dir="rtl"><head><meta charset="UTF-8">
       <style>
         body{font-family:Cairo,Arial;padding:28px;color:#241414}
