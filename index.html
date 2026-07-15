@@ -8,6 +8,8 @@
   <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&display=swap" rel="stylesheet">
   <link rel="manifest" href="manifest.json">
   <meta name="theme-color" content="#F60100">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/esc-pos-encoder@1.2.4/dist/esc-pos-encoder.min.js"></script>
   <style>
@@ -6620,12 +6622,38 @@
             <td>${new Date(l.clock_in).toLocaleTimeString('ar-JO',{hour:'2-digit',minute:'2-digit'})}</td>
             <td>${l.clock_out?new Date(l.clock_out).toLocaleTimeString('ar-JO',{hour:'2-digit',minute:'2-digit'}):'—'}</td>
             <td>${hrs}</td>
-            <td><button class="mini edit" onclick="editHrTimeLog(${idx},'${empId}','${esc(empName)}')">تعديل</button></td>
+            <td style="white-space:nowrap">
+              <button class="mini edit" onclick="editHrTimeLog(${idx},'${empId}','${esc(empName)}')">تعديل</button>
+              ${(l.lat_in||l.lat_out)?`<button class="mini ok" onclick="showHrTimeLogMap(${idx})">🗺️ خريطة</button>`:''}
+            </td>
           </tr>`;
         }).join('')||'<tr><td colspan="5" class="empty-note">ما في سجلات — الموظف لسا ما سجّل حضور من بوابته</td></tr>'}
       </table></div>
       <div class="m-act"><button class="cancel" onclick="closeModal()">إغلاق</button></div>`;
     }catch(e){ const body=document.getElementById('hrTlBody'); if(body) body.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; }
+  }
+  function showHrTimeLogMap(idx){
+    const l = (window.__HR_TL||[])[idx]; if(!l) return;
+    modal(`<h3>🗺️ موقع الدخول والخروج</h3>
+      <div id="tlMap" style="height:340px;border-radius:12px;overflow:hidden;border:1.5px solid var(--line);margin-bottom:10px"></div>
+      <div style="font-size:.82rem;color:var(--muted);font-weight:700">🟢 دخول ${new Date(l.clock_in).toLocaleString('ar-JO')}${l.clock_out?' — 🔴 خروج '+new Date(l.clock_out).toLocaleString('ar-JO'):''}</div>
+      <div class="m-act"><button class="cancel" onclick="closeModal()">إغلاق</button></div>`);
+    setTimeout(()=>{
+      if(typeof L==='undefined') return;
+      const pts = [];
+      if(l.lat_in) pts.push([l.lat_in, l.lng_in]);
+      if(l.lat_out) pts.push([l.lat_out, l.lng_out]);
+      const center = pts[0] || [32.5556, 35.8500];
+      const map = L.map('tlMap').setView(center, 16);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap' }).addTo(map);
+      // 🔵 المواقع المسموحة — للمقارنة
+      (window.__HR_LOCS||[]).forEach(loc=>{
+        L.circle([loc.lat,loc.lng], {radius:loc.radius_m, color:'#0d6efd', fillOpacity:.06}).addTo(map);
+      });
+      if(l.lat_in) L.marker([l.lat_in,l.lng_in], {icon:L.divIcon({html:'🟢',iconSize:[24,24]})}).addTo(map).bindPopup('دخول');
+      if(l.lat_out) L.marker([l.lat_out,l.lng_out], {icon:L.divIcon({html:'🔴',iconSize:[24,24]})}).addTo(map).bindPopup('خروج');
+      if(pts.length>1) map.fitBounds(pts, {padding:[30,30]});
+    }, 80);
   }
   function editHrTimeLog(idx, empId, empName){
     const l = (window.__HR_TL||[])[idx]; if(!l) return;
@@ -9118,18 +9146,49 @@ try {
             </tr>`).join('')||'<tr><td colspan="4" class="empty-note">ما في مواقع محددة بعد</td></tr>'}
           </table></div>
           <div style="border-top:1.5px dashed var(--line);padding-top:10px">
-            <div style="font-weight:800;margin-bottom:6px">➕ إضافة موقع جديد</div>
+            <div style="font-weight:800;margin-bottom:6px">➕ إضافة موقع جديد — دوس على الخريطة أو اسحب الدبوس لتحديد المكان (مش لازم توقف فيه فعليًا)</div>
+            <div id="hlMap" style="height:320px;border-radius:12px;overflow:hidden;margin-bottom:10px;border:1.5px solid var(--line)"></div>
             <div class="fld"><label>اسم الموقع</label><input id="hl_name" placeholder="مثال: فرع الجامعة"></div>
             <div class="two" style="gap:8px">
               <div class="fld" style="flex:1"><label>Lat</label><input id="hl_lat" inputmode="decimal" readonly style="background:#f5f0e8"></div>
               <div class="fld" style="flex:1"><label>Lng</label><input id="hl_lng" inputmode="decimal" readonly style="background:#f5f0e8"></div>
             </div>
-            <button type="button" class="mini ok" onclick="useMyLocationForHl()" style="margin-bottom:8px">📍 استخدم موقعي الحالي (وقف بمكان العمل ودوسها)</button>
-            <div class="fld"><label>نطاق السماح (متر) — افتراضي 200</label><input id="hl_radius" type="number" min="10" value="200"></div>
+            <button type="button" class="mini ok" onclick="useMyLocationForHl()" style="margin-bottom:8px">📍 استخدم موقعي الحالي (لو واقف بمكان العمل)</button>
+            <div class="fld"><label>نطاق السماح (متر) — افتراضي 200</label><input id="hl_radius" type="number" min="10" value="200" oninput="updateHlRadiusCircle()"></div>
             <button class="add-btn" onclick="addHrLocation()">＋ إضافة الموقع</button>
           </div>
         </div>`;
+      setTimeout(()=>initHlMap(locs), 50);
     }catch(e){ C.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
+  }
+  let __hlMap=null, __hlMarker=null, __hlCircle=null;
+  function initHlMap(existingLocs){
+    const mapEl = document.getElementById('hlMap'); if(!mapEl || typeof L==='undefined') return;
+    const center = existingLocs?.[0] ? [existingLocs[0].lat, existingLocs[0].lng] : [32.5556, 35.8500]; // إربد افتراضيًا
+    __hlMap = L.map('hlMap').setView(center, 15);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap' }).addTo(__hlMap);
+    // 🔵 المواقع الموجودة أصلًا — للمرجعية
+    (existingLocs||[]).forEach(l=>{
+      L.circle([l.lat,l.lng], {radius:l.radius_m, color:'#0d6efd', fillOpacity:.08}).addTo(__hlMap);
+      L.marker([l.lat,l.lng]).addTo(__hlMap).bindPopup('📍 '+esc(l.name));
+    });
+    function setPoint(lat, lng){
+      document.getElementById('hl_lat').value = lat.toFixed(6);
+      document.getElementById('hl_lng').value = lng.toFixed(6);
+      const radius = parseFloat(document.getElementById('hl_radius')?.value)||200;
+      if(__hlMarker){ __hlMarker.setLatLng([lat,lng]); __hlCircle.setLatLng([lat,lng]); }
+      else{
+        __hlMarker = L.marker([lat,lng], {draggable:true, icon: L.icon({iconUrl:'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png', shadowUrl:'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png', iconSize:[25,41], iconAnchor:[12,41]})}).addTo(__hlMap);
+        __hlCircle = L.circle([lat,lng], {radius, color:'#F60100', fillOpacity:.15}).addTo(__hlMap);
+        __hlMarker.on('drag', e=>{ const p=e.target.getLatLng(); document.getElementById('hl_lat').value=p.lat.toFixed(6); document.getElementById('hl_lng').value=p.lng.toFixed(6); __hlCircle.setLatLng(p); });
+      }
+    }
+    __hlMap.on('click', e=> setPoint(e.latlng.lat, e.latlng.lng));
+    window.__hlSetPoint = setPoint; // يستخدمها زر "استخدم موقعي الحالي"
+  }
+  function updateHlRadiusCircle(){
+    const radius = parseFloat(document.getElementById('hl_radius')?.value)||200;
+    if(__hlCircle) __hlCircle.setRadius(radius);
   }
   async function useMyLocationForHl(){
     try{
@@ -9137,6 +9196,8 @@ try {
       const geo = await getGeo();
       document.getElementById('hl_lat').value = geo.lat;
       document.getElementById('hl_lng').value = geo.lng;
+      if(window.__hlSetPoint) window.__hlSetPoint(geo.lat, geo.lng);
+      if(__hlMap) __hlMap.setView([geo.lat, geo.lng], 17);
       toast('✓ اتحدد موقعك — كمّل باقي البيانات واضغط إضافة');
     }catch(e){ toast('⛔ '+e.message); }
   }
@@ -9270,6 +9331,7 @@ try {
     }catch(e){ console.error(e); errEl.textContent = '⚠️ صار خطأ، جرب تاني'; }
   }
   function empPortalLogout(){
+    stopGeofenceWatch();
     EMP = null; EMP_OPEN_LOG = null;
     document.getElementById('empPortalApp').classList.add('hidden');
     document.getElementById('loginScreen').classList.remove('hidden');
@@ -9282,6 +9344,7 @@ try {
     try{
       const { data: openLog } = await db.from('hr_time_logs').select('*').eq('employee_id', EMP.id).is('clock_out', null).order('clock_in',{ascending:false}).limit(1).maybeSingle();
       EMP_OPEN_LOG = openLog||null;
+      if(EMP_OPEN_LOG) startGeofenceWatch(); else stopGeofenceWatch();
 
       const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0,0,0,0);
       const [logsRes, advRes, mealsRes] = await Promise.all([
@@ -9306,6 +9369,7 @@ try {
           ${EMP_OPEN_LOG ? `
             <div style="font-weight:800;color:var(--ok);margin-bottom:10px">🟢 مسجل دخول من الساعة ${new Date(EMP_OPEN_LOG.clock_in).toLocaleTimeString('ar-JO',{hour:'2-digit',minute:'2-digit'})}</div>
             <button onclick="empClockOut()" style="width:100%;background:var(--red);color:#fff;border:none;border-radius:14px;padding:18px;font-weight:900;font-size:1.1rem;cursor:pointer">⏹️ تسجيل خروج</button>
+            <div style="font-size:.72rem;color:var(--muted);font-weight:700;margin-top:8px">💡 لو خرجت من منطقة العمل، رح تنسجل خروج تلقائي — بس بشرط تخلي الصفحة مفتوحة وشاشة الموبايل مضوية</div>
           ` : `
             <div style="font-weight:800;color:var(--muted);margin-bottom:10px">⚪ مش مسجل دخول هلأ</div>
             <button onclick="empClockIn()" style="width:100%;background:var(--ok);color:#fff;border:none;border-radius:14px;padding:18px;font-weight:900;font-size:1.1rem;cursor:pointer">▶️ تسجيل دخول</button>
@@ -9339,6 +9403,31 @@ try {
           </div>
         </div>`;
     }catch(e){ console.error(e); body.innerHTML = '<div class="alert-red">⚠️ صار خطأ بالتحميل</div>'; }
+  }
+
+  let __empWatchId = null, __lastAutoCheck = 0;
+  function startGeofenceWatch(){
+    if(__empWatchId!==null || !navigator.geolocation) return;
+    __empWatchId = navigator.geolocation.watchPosition(async pos=>{
+      const now = Date.now();
+      if(now-__lastAutoCheck < 60000) return; // ما نفحص أكتر من مرة بالدقيقة
+      __lastAutoCheck = now;
+      if(!EMP_OPEN_LOG) return;
+      const fence = await checkGeofence(pos.coords.latitude, pos.coords.longitude);
+      if(!fence.ok){
+        try{
+          await db.from('hr_time_logs').update({
+            clock_out: new Date().toISOString(), lat_out: pos.coords.latitude, lng_out: pos.coords.longitude,
+          }).eq('id', EMP_OPEN_LOG.id);
+          stopGeofenceWatch();
+          alert('⚠️ سُجّل خروجك تلقائيًا لأنك خرجت من نطاق العمل المسموح.');
+          loadEmpPortal();
+        }catch(e){ console.error('auto clock-out failed:', e); }
+      }
+    }, err=>console.error('geo watch error:', err), {enableHighAccuracy:false, maximumAge:30000});
+  }
+  function stopGeofenceWatch(){
+    if(__empWatchId!==null){ navigator.geolocation.clearWatch(__empWatchId); __empWatchId=null; }
   }
 
   function getGeo(){
