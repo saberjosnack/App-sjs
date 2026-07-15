@@ -1658,11 +1658,12 @@
       // (مش إنو الزيادة تصير له) — بينسجل كطلب موافقة معلّق، ما بينخصم تلقائي، لازم المالك يوافق من شاشة "الشيفتات"
       if(!ccSkip && Math.abs(totalDiff)>0.005){
         try{
-          await db.from('shift_adjustments').insert({
+          const { error: adjErr } = await db.from('shift_adjustments').insert({
             shift_id: currentShift.id, staff_id: ME.id, staff_name: ME.full_name,
             amount: -Math.abs(totalDiff), note: totalDiff<0?'عجز':'زيادة (تُخصم أيضًا)', status: 'pending'
           });
-        }catch(e){ console.error('shift_adjustments insert failed (نفّذ SQL):', e); }
+          if(adjErr){ console.error('shift_adjustments insert failed:', adjErr); toast('⚠️ تنبيه: ما انسجل طلب الموافقة (نفّذ SQL جدول shift_adjustments) — '+adjErr.message); }
+        }catch(e){ console.error('shift_adjustments insert failed:', e); }
       }
       printZReport(currentShift, rep);
       if(ccSkip) toast('✓ الشيفت مغلق');
@@ -2819,7 +2820,7 @@
         : '<option value="">— ما في أجهزة مقرونة —</option>';
     }catch(e){ console.error(e); }
   };
-  function waitForNativePrintResult(timeoutMs=8000){
+  function waitForNativePrintResult(timeoutMs=12000){
     return new Promise((resolve, reject)=>{
       _pendingNativePrint = { resolve, reject };
       setTimeout(()=>{
@@ -2861,12 +2862,24 @@
       catch(e) { console.error('App bluetooth print failed:', e); toast('⚠️ فشل البلوتوث الأصلي: '+(e.message||'')); if(method==='app_bluetooth') return; }
     }
     if ((method === 'app_network' || method === 'auto') && window.SJSPrinter && SETTINGS.printer_ip) {
-      try { await printViaAppNetwork(text); return; }
-      catch(e) {
-        console.error('App network print failed (محاولة أولى):', e);
-        await new Promise(r=>setTimeout(r, 1800));
-        try { await printViaAppNetwork(text); toast('✅ انطبعت (بعد إعادة محاولة — الطابعة كانت بوضع سكون)'); return; }
-        catch(e2) { console.error('App network print failed (محاولة ثانية):', e2); toast('⚠️ فشل الاتصال بالطابعة مرتين — تأكد إنها شغالة'); if(method==='app_network') return; }
+      let ok = false;
+      for(let attempt=1; attempt<=3 && !ok; attempt++){
+        try{
+          await printViaAppNetwork(text);
+          ok = true;
+          if(attempt>1) toast('✅ انطبعت (محاولة '+attempt+' — الشبكة كانت بطيئة/الطابعة نايمة)');
+          return;
+        }catch(e){
+          console.error('App network print failed (محاولة '+attempt+'):', e);
+          if(attempt<3) await new Promise(r=>setTimeout(r, 2000));
+        }
+      }
+      // 🔌 3 محاولات فشلت — لو الجهاز عندو RawBT كخيار احتياطي، منجربه قبل ما نستسلم
+      // (حتى لو طريقة الطباعة محددة يدويًا "شبكة"، لأنه أفضل من ما تطبع نهائيًا)
+      if(!ok){
+        toast('⚠️ فشل الاتصال بالطابعة بعد 3 محاولات — بنجرب طريقة احتياطية');
+        if(isAndroid){ triggerRawbtIntent(text); return; }
+        if(method==='app_network') { fallbackPrint(htmlFallback); return; }
       }
     }
     if (method === 'rawbt' || (method === 'auto' && isAndroid)) {
@@ -2917,14 +2930,23 @@
       catch(e) { console.error('App bluetooth print failed:', e); toast('⚠️ فشل البلوتوث الأصلي: '+(e.message||'')); if(method==='app_bluetooth') return; }
     }
     if ((method === 'app_network' || method === 'auto') && window.SJSPrinter && SETTINGS.printer_ip) {
-      try { await printViaAppNetwork(generateReceiptText(ord, lines, t, cust)); return; }
-      catch(e) {
-        console.error('App network print failed (محاولة أولى):', e);
-        // 🔌 الطابعات الحرارية الشبكية كثير منها بتنام بوضع توفير طاقة بعد فترة خمول —
-        // أول اتصال بعد الخمول بيفشل بس بيصحّيها، فنعطيها ثانية ونحاول تاني قبل ما نستسلم
-        await new Promise(r=>setTimeout(r, 1800));
-        try { await printViaAppNetwork(generateReceiptText(ord, lines, t, cust)); toast('✅ انطبعت (بعد إعادة محاولة — الطابعة كانت بوضع سكون)'); return; }
-        catch(e2) { console.error('App network print failed (محاولة ثانية):', e2); toast('⚠️ فشل الاتصال بالطابعة مرتين — تأكد إنها شغالة'); if(method==='app_network') return; }
+      const text0 = generateReceiptText(ord, lines, t, cust);
+      let ok = false;
+      for(let attempt=1; attempt<=3 && !ok; attempt++){
+        try{
+          await printViaAppNetwork(text0);
+          ok = true;
+          if(attempt>1) toast('✅ انطبعت (محاولة '+attempt+' — الشبكة كانت بطيئة/الطابعة نايمة)');
+          return;
+        }catch(e){
+          console.error('App network print failed (محاولة '+attempt+'):', e);
+          if(attempt<3) await new Promise(r=>setTimeout(r, 2000));
+        }
+      }
+      if(!ok){
+        toast('⚠️ فشل الاتصال بالطابعة بعد 3 محاولات — بنجرب طريقة احتياطية');
+        if(isAndroid){ triggerRawbtIntent(text0); return; }
+        if(method==='app_network') { fallbackPrint(generateReceiptHTML(ord, lines, t, cust)); return; }
       }
     }
     // احتياطي فقط: RawBT (لو ما في جسر أصلي مضبوط، أو الجسر فشل بوضع "تلقائي")
@@ -4429,6 +4451,7 @@
       const all = data||[];
       const pending = all.filter(a=>a.status==='pending');
       const approved = all.filter(a=>a.status==='approved');
+      const rejected = all.filter(a=>a.status==='rejected');
       let html = '';
       if(pending.length){
         html += `<div class="panel" style="margin-bottom:14px;border:2px solid var(--warn)">
@@ -4440,7 +4463,10 @@
               <td>${new Date(a.created_at).toLocaleString('ar-JO')}</td>
               <td><b style="color:var(--red)">− ${fmt(Math.abs(a.amount))} ${CURRENCY}</b></td>
               <td>${a.note==='عجز'?'🔻 عجز بالدرج':'🟡 زيادة بالدرج (تُخصم كمان — خطأ بالتحاسيب)'}</td>
-              <td><button class="mini ok" onclick="approveShiftAdjustment('${a.id}')">✅ موافقة على الخصم</button></td>
+              <td style="white-space:nowrap">
+                <button class="mini ok" onclick="approveShiftAdjustment('${a.id}')">✅ موافقة على الخصم</button>
+                <button class="mini del" onclick="rejectShiftAdjustment('${a.id}')">❌ رفض</button>
+              </td>
             </tr>`).join('')}
           </table></div>
         </div>`;
@@ -4461,6 +4487,21 @@
               ${approved.map(a=>`<tr><td>${esc(a.staff_name)}</td><td>${new Date(a.created_at).toLocaleDateString('ar-JO')}</td><td style="color:var(--red)">− ${fmt(Math.abs(a.amount))}</td><td>${esc(a.approved_by||'—')}</td><td>${a.approved_at?new Date(a.approved_at).toLocaleString('ar-JO'):'—'}</td></tr>`).join('')}
             </table></div>
           </details>
+        </div>`;
+      }
+      if(rejected.length){
+        html += `<div class="panel" style="margin-bottom:14px">
+          <h4 style="color:var(--muted);margin-bottom:8px">🚫 تسويات مرفوضة (${rejected.length})</h4>
+          <div class="tbl-wrap"><table class="tbl">
+            <tr><th>الموظف</th><th>التاريخ</th><th>المبلغ</th><th>السبب</th><th></th></tr>
+            ${rejected.map(a=>`<tr>
+              <td>${esc(a.staff_name)}</td>
+              <td>${new Date(a.created_at).toLocaleDateString('ar-JO')}</td>
+              <td>− ${fmt(Math.abs(a.amount))}</td>
+              <td>${esc(a.note||'—')}</td>
+              <td><button class="mini ok" onclick="restoreShiftAdjustment('${a.id}')">↩️ إرجاع (بانتظار الموافقة تاني)</button></td>
+            </tr>`).join('')}
+          </table></div>
         </div>`;
       }
       box.innerHTML = html;
@@ -4523,8 +4564,26 @@
     if(!isAdmin()){ toast('⛔ صلاحية المالك فقط'); return; }
     if(!confirm('تأكيد الموافقة على هاد التسوية؟')) return;
     try{
-      await db.from('shift_adjustments').update({ status:'approved', approved_by: ME.full_name, approved_at: new Date().toISOString() }).eq('id', id);
+      const { error } = await db.from('shift_adjustments').update({ status:'approved', approved_by: ME.full_name, approved_at: new Date().toISOString() }).eq('id', id);
+      if(error){ toast('✗ '+error.message); console.error(error); return; }
       toast('✓ اتمت الموافقة'); renderShiftAdjustments();
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
+  }
+  async function rejectShiftAdjustment(id){
+    if(!isAdmin()){ toast('⛔ صلاحية المالك فقط'); return; }
+    if(!confirm('تأكيد رفض هاد التسوية؟ (بتقدر ترجعها لاحقًا)')) return;
+    try{
+      const { error } = await db.from('shift_adjustments').update({ status:'rejected', approved_by: ME.full_name, approved_at: new Date().toISOString() }).eq('id', id);
+      if(error){ toast('✗ '+error.message); console.error(error); return; }
+      toast('✓ اترفضت'); renderShiftAdjustments();
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
+  }
+  async function restoreShiftAdjustment(id){
+    if(!isAdmin()){ toast('⛔ صلاحية المالك فقط'); return; }
+    try{
+      const { error } = await db.from('shift_adjustments').update({ status:'pending', approved_by:null, approved_at:null }).eq('id', id);
+      if(error){ toast('✗ '+error.message); console.error(error); return; }
+      toast('✓ رجعت بانتظار الموافقة'); renderShiftAdjustments();
     }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
 
@@ -4552,23 +4611,32 @@
         sh.__discount = (os||[]).filter(o=>o.status!=='cancelled').reduce((a,o)=>a+parseFloat(o.discount||0),0);
       }
       const closed = SH_LIST.filter(x=>x.status==='closed');
-      const totDiff = closed.reduce((a,x)=>a+((x.closing_balance!==null&&x.expected_balance!==null)?(parseFloat(x.closing_balance)-parseFloat(x.expected_balance)):0),0);
+      const shTotalDiff = sh => {
+        if(sh.closing_balance===null||sh.expected_balance===null) return null;
+        const totExp = parseFloat(sh.expected_balance||0)+parseFloat(sh.expected_card||0)+parseFloat(sh.expected_cliq||0);
+        const totCnt = parseFloat(sh.closing_balance||0)+parseFloat(sh.closing_card||0)+parseFloat(sh.closing_cliq||0);
+        return totCnt - totExp;
+      };
+      const totDiff = closed.reduce((a,x)=>{ const d=shTotalDiff(x); return a+(d===null?0:d); },0);
       const totDiscounts = SH_LIST.reduce((a,x)=>a+(x.__discount||0),0);
       document.getElementById('shStats').innerHTML = `
         <div class="stat">عدد الشيفتات<b>${SH_LIST.length}</b></div>
         <div class="stat">مفتوحة الآن<b>${SH_LIST.filter(x=>x.status==='open').length}</b></div>
         <div class="stat">إجمالي المبيعات<b>${fmt(SH_LIST.reduce((a,x)=>a+(x.__sales||0),0))} ${CURRENCY}</b></div>
         <div class="stat">إجمالي الخصومات<b style="color:var(--warn)">${fmt(totDiscounts)} ${CURRENCY}</b></div>
-        <div class="stat">صافي الفروقات<b style="color:${totDiff<-0.01?'var(--red)':totDiff>0.01?'var(--warn)':'var(--ok)'}">${totDiff>0?'+':''}${fmt(totDiff)}</b></div>`;
+        <div class="stat">صافي الفروقات (المجموع الكلي)<b style="color:${totDiff<-0.01?'var(--red)':totDiff>0.01?'var(--warn)':'var(--ok)'}">${totDiff>0?'+':''}${fmt(totDiff)}</b></div>`;
       const dur = sh => {
         const end = sh.end_time ? new Date(sh.end_time) : new Date();
         const m = Math.floor((end - new Date(sh.start_time))/60000);
         return Math.floor(m/60)+'س '+(m%60)+'د';
       };
-      L.innerHTML = `<table class="tbl"><tr><th>الموظف</th><th>الفرع</th><th>التاريخ</th><th>فتح</th><th>إغلاق</th><th>المدة</th><th>طلبات</th><th>مبيعات</th><th>خصومات</th><th>افتتاحي</th><th>متوقع</th><th>فعلي</th><th>المطابقة</th><th></th></tr>
+      L.innerHTML = `<table class="tbl"><tr><th>الموظف</th><th>الفرع</th><th>التاريخ</th><th>فتح</th><th>إغلاق</th><th>المدة</th><th>طلبات</th><th>مبيعات</th><th>خصومات</th><th>افتتاحي (إجمالي)</th><th>متوقع (إجمالي)</th><th>فعلي (إجمالي)</th><th>المطابقة</th><th></th></tr>
         ${SH_LIST.map(sh=>{
-          const hasC = sh.closing_balance!==null && sh.expected_balance!==null;
-          const diff = hasC ? parseFloat(sh.closing_balance)-parseFloat(sh.expected_balance) : 0;
+          const diff = shTotalDiff(sh);
+          const hasC = diff!==null;
+          const totOpening = parseFloat(sh.opening_balance||0)+parseFloat(sh.opening_card||0)+parseFloat(sh.opening_cliq||0);
+          const totExpected = hasC ? parseFloat(sh.expected_balance||0)+parseFloat(sh.expected_card||0)+parseFloat(sh.expected_cliq||0) : null;
+          const totCounted = hasC ? parseFloat(sh.closing_balance||0)+parseFloat(sh.closing_card||0)+parseFloat(sh.closing_cliq||0) : null;
           const match = sh.status==='open' ? '<b style="color:var(--ok)">🟢 مفتوح</b>'
             : !hasC ? '—'
             : Math.abs(diff)<0.01 ? '<span style="color:var(--ok);font-weight:900">✅ مطابق</span>'
@@ -4584,9 +4652,9 @@
             <td>${sh.__orders||0}</td>
             <td><b>${fmt(sh.__sales||0)}</b></td>
             <td>${sh.__discount>0?`<b style="color:var(--warn)">${fmt(sh.__discount)}</b>`:'—'}</td>
-            <td>${fmt(sh.opening_balance)}</td>
-            <td>${sh.expected_balance!==null?fmt(sh.expected_balance):'—'}</td>
-            <td>${sh.closing_balance!==null?fmt(sh.closing_balance):'—'}</td>
+            <td>${fmt(totOpening)}</td>
+            <td>${totExpected!==null?fmt(totExpected):'—'}</td>
+            <td>${totCounted!==null?fmt(totCounted):'—'}</td>
             <td>${match}</td>
             <td style="white-space:nowrap">${sh.status==='closed'?`<button class="mini tog" onclick="reprintShift('${sh.id}')" title="إعادة طباعة تقرير الإغلاق">🖨️</button>`:''}</td>
           </tr>`;}).join('')||'<tr><td colspan="14" class="empty-note">ما في شيفتات بهاي الفترة</td></tr>'}
@@ -8063,10 +8131,22 @@ try {
         <input id="chatInput" placeholder="اكتب رسالة..." style="flex:1;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px" onkeydown="if(event.key==='Enter')sendChatMessage()">
         <button class="mini ok" onclick="sendChatMessage()">إرسال ↩</button>
       </div>
-      <div class="m-act"><button class="cancel" onclick="closeChatConversation()">إغلاق</button></div>`);
+      <div class="m-act">
+        <button class="mini del" onclick="deleteMyConversation('${staffId}','${esc(staffName)}')">🗑️ حذف المحادثة</button>
+        <button class="cancel" onclick="closeChatConversation()">إغلاق</button>
+      </div>`);
     await loadChatMessages();
     if(CHAT_POLL_TIMER) clearInterval(CHAT_POLL_TIMER);
     CHAT_POLL_TIMER = setInterval(loadChatMessages, 4000);
+  }
+  async function deleteMyConversation(staffId, staffName){
+    if(!confirm(`⚠️ حذف كل المحادثة مع "${staffName}" نهائيًا؟\nهاد الإجراء ما ينرجع.`)) return;
+    try{
+      const { error } = await db.from('staff_messages').delete()
+        .or(`and(from_id.eq.${ME.id},to_id.eq.${staffId}),and(from_id.eq.${staffId},to_id.eq.${ME.id})`);
+      if(error){ toast('✗ '+error.message); console.error(error); return; }
+      toast('✓ انحذفت المحادثة'); closeChatConversation();
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
 
   function closeChatConversation(){
@@ -8149,10 +8229,23 @@ try {
             <td><b>${esc(c.a)}</b> ↔ <b>${esc(c.b)}</b></td>
             <td>${c.msgs.length}</td>
             <td>${new Date(c.last).toLocaleString('ar-JO')}</td>
-            <td><button class="mini ok" onclick="showChatConvoDetail('${key}')">👁️ عرض</button></td>
+            <td style="white-space:nowrap">
+              <button class="mini ok" onclick="showChatConvoDetail('${key}')">👁️ عرض</button>
+              <button class="mini del" onclick="deleteConversation('${key}')">🗑️ حذف المحادثة</button>
+            </td>
           </tr>`).join('')||'<tr><td colspan="4" class="empty-note">ما في محادثات بعد</td></tr>'}
         </table></div>`;
     }catch(e){ C.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
+  }
+  async function deleteConversation(key){
+    const c = (window.__CHAT_CONVOS||{})[key]; if(!c) return;
+    if(!confirm(`⚠️ حذف كل محادثة "${c.a} ↔ ${c.b}" نهائيًا (${c.msgs.length} رسالة)؟\nهاد الإجراء ما ينرجع.`)) return;
+    try{
+      const ids = c.msgs.map(m=>m.id);
+      const { error } = await db.from('staff_messages').delete().in('id', ids);
+      if(error){ toast('✗ '+error.message); console.error(error); return; }
+      toast('✓ انحذفت المحادثة'); renderChatAdmin();
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
   function showChatConvoDetail(key){
     const c = (window.__CHAT_CONVOS||{})[key]; if(!c) return;
@@ -8168,7 +8261,10 @@ try {
           </div>`;
         }).join('')}
       </div>
-      <div class="m-act"><button class="cancel" onclick="closeModal()">إغلاق</button></div>`);
+      <div class="m-act">
+        <button class="mini del" onclick="deleteConversation('${key}')">🗑️ حذف المحادثة</button>
+        <button class="cancel" onclick="closeModal()">إغلاق</button>
+      </div>`);
   }
 
   /* ================= PWA ================= */
