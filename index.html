@@ -301,6 +301,10 @@
   <div class="login-card">
     <div class="login-logo">S<span>J</span>S</div>
     <div class="login-sub">صابر جو سناك — نظام نقاط البيع</div>
+
+    <button type="button" onclick="showEmpPortalLogin()" style="width:100%;background:var(--maroon);color:#fff;border:none;border-radius:12px;padding:14px;font-weight:900;font-size:1rem;cursor:pointer;margin-bottom:16px">👷 دخول الموظفين (تسجيل حضور)</button>
+
+    <div style="text-align:center;color:var(--muted);font-weight:800;font-size:.8rem;margin-bottom:8px">— أو دخول الكاشير / الإدارة —</div>
     <div class="pin-boxes">
       <div class="pin-box" id="pin1" onclick="focusPinInput()"></div>
       <div class="pin-box" id="pin2" onclick="focusPinInput()"></div>
@@ -324,9 +328,6 @@
       <button class="pk-alt" onclick="window.pinClear()">مسح</button>
       <button onclick="window.pinKey('0')">0</button>
       <button class="pk-alt" onclick="window.pinBack()">⌫</button>
-    </div>
-    <div style="text-align:center;margin-top:14px">
-      <button type="button" onclick="showEmpPortalLogin()" style="background:none;border:none;color:var(--muted);font-weight:800;font-size:.82rem;text-decoration:underline;cursor:pointer">👷 دخول الموظفين (تسجيل حضور)</button>
     </div>
   </div>
 </div>
@@ -4967,14 +4968,18 @@
     const it=INGR.find(x=>x.id===id)||{};
     modal(`<h3>${id?'تعديل مكون':'مكون جديد'}</h3>
       <div class="fld"><label>الاسم</label><input id="fi_nm" value="${esc(it.name||'')}"></div>
-      <div class="fld"><label>وحدة القياس</label><select id="fi_un">${UNITS.map(u=>`<option ${u===it.unit?'selected':''}>${u}</option>`).join('')}</select></div>
+      <div class="fld"><label>وحدة القياس</label><select id="fi_un" onchange="document.getElementById('fi_un_custom_wrap').classList.toggle('hidden', this.value!=='__custom__')">${UNITS.map(u=>`<option ${u===it.unit?'selected':''}>${u}</option>`).join('')}<option value="__custom__" ${it.unit&&!UNITS.includes(it.unit)?'selected':''}>✏️ وحدة مخصصة...</option></select>
+        <div id="fi_un_custom_wrap" class="${it.unit&&!UNITS.includes(it.unit)?'':'hidden'}" style="margin-top:6px"><input id="fi_un_custom" placeholder="اكتب اسم الوحدة (مثال: صينية، شوال...)" value="${it.unit&&!UNITS.includes(it.unit)?esc(it.unit):''}"></div></div>
       <div class="fld"><label>سعر الوحدة (${CURRENCY})</label><input id="fi_uc" inputmode="decimal" value="${it.unit_cost||''}"></div>
       <div class="fld"><label>المخزون الحالي</label><input id="fi_st" inputmode="decimal" value="${it.stock||0}"></div>
       <div class="fld"><label>الحد الأدنى (تنبيه نقص)</label><input id="fi_mn" inputmode="decimal" value="${it.min_stock||0}"></div>
       <div class="m-act"><button class="save" onclick="saveIngredient('${id||''}')">حفظ ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
   }
   async function saveIngredient(id){
-    const rec={name:document.getElementById('fi_nm').value.trim(),unit:document.getElementById('fi_un').value,
+    const unitSel = document.getElementById('fi_un').value;
+    const unit = unitSel==='__custom__' ? (document.getElementById('fi_un_custom')?.value.trim()||'') : unitSel;
+    if(!unit){ toast('⚠️ اكتب وحدة القياس'); return; }
+    const rec={name:document.getElementById('fi_nm').value.trim(),unit,
       unit_cost:parseFloat(document.getElementById('fi_uc').value)||0,
       stock:parseFloat(document.getElementById('fi_st').value)||0,
       min_stock:parseFloat(document.getElementById('fi_mn').value)||0};
@@ -7256,8 +7261,20 @@
       <hr style="margin:10px 0"><div style="font-weight:800;color:var(--maroon);margin-bottom:6px">👷 دخول بوابة الموظف (اختياري)</div>
       <div class="fld"><label>اسم المستخدم</label><input id="mn_user" value="${esc(n.username||'')}" placeholder="بدون فراغات، بالإنجليزي مثلًا"></div>
       <div class="fld"><label>الرقم السري</label><input id="mn_pin" inputmode="numeric" value="${esc(n.pin||'')}" placeholder="مثال: 1234"></div>
+      ${id&&n.device_id?`<div class="fld" style="background:#fff8e1;border-radius:10px;padding:10px 12px">
+        <div style="font-weight:800;font-size:.85rem;margin-bottom:6px">📱 الجهاز المعتمد حاليًا: <span style="color:var(--muted);font-weight:600">${esc((n.device_name||n.device_id||'').slice(0,50))}</span></div>
+        <button type="button" class="mini del" onclick="resetEmployeeDevice('${id}')">🔓 إلغاء ربط الجهاز (يسمح بدخول من جهاز جديد فورًا)</button>
+      </div>`:''}
       ${id?`<div class="fld"><label class="chk"><input type="checkbox" id="mn_active" ${n.is_active!==false?'checked':''}> فعال</label></div>`:''}
       <div class="m-act"><button class="save" onclick="saveMealName('${id||''}')">حفظ ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
+  }
+  async function resetEmployeeDevice(id){
+    if(!confirm('⚠️ إلغاء ربط الجهاز الحالي؟ أول جهاز يسجل فيه الموظف بعد هيك رح يصير هو المعتمد الجديد تلقائيًا (بدون ما يحتاج موافقتك).')) return;
+    try{
+      const { error } = await db.from('meal_names').update({ device_id: null, device_name: null }).eq('id', id);
+      if(error){ toast('✗ '+error.message); return; }
+      toast('✓ اتلغى ربط الجهاز'); closeModal(); renderHR();
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
   async function saveMealName(id){
     const name = document.getElementById('mn_name').value.trim();
@@ -7638,8 +7655,8 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
         </table></div>
         <div style="font-weight:900;color:var(--maroon);margin-bottom:8px">📋 التفاصيل الكاملة</div>
         <div class="tbl-wrap"><table class="tbl">
-          <tr><th>التاريخ والساعة</th><th>المادة</th><th>الكمية</th><th>الفرع</th><th>السبب</th><th>الموظف</th><th>ملاحظة</th></tr>
-          ${WASTE_DATA.map(w=>`<tr>
+          <tr><th>التاريخ والساعة</th><th>المادة</th><th>الكمية</th><th>الفرع</th><th>السبب</th><th>الموظف</th><th>ملاحظة</th><th></th></tr>
+          ${WASTE_DATA.map((w,idx)=>`<tr>
             <td>${new Date(w.created_at).toLocaleString('ar-JO')}</td>
             <td><b>${esc(w.ingredients?.name||'—')}</b></td>
             <td>${w.quantity} ${esc(w.ingredients?.unit||'')}</td>
@@ -7647,9 +7664,33 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
             <td><span style="color:var(--warn);font-weight:800">${esc(w.reason||'—')}</span></td>
             <td><b style="color:var(--maroon)">${esc(w.staff_name||'—')}</b></td>
             <td style="font-size:.82rem;color:var(--muted)">${esc(w.notes||'—')}</td>
-          </tr>`).join('')||'<tr><td colspan="7" class="empty-note">ما في إتلافات بهاي الفترة</td></tr>'}
+            <td><button class="mini ok" onclick="printWasteLogPDF(${idx})">🖨️ سند</button></td>
+          </tr>`).join('')||'<tr><td colspan="8" class="empty-note">ما في إتلافات بهاي الفترة</td></tr>'}
         </table></div>`;
     }catch(e){ R.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
+  }
+  function printWasteLogPDF(idx){
+    const w = WASTE_DATA[idx]; if(!w) return;
+    const cost = (w.quantity||0)*(w.ingredients?.unit_cost||0);
+    const html = `<html dir="rtl"><head><meta charset="UTF-8">
+      <style>body{font-family:Cairo,Arial;padding:28px}h1{color:#4a1010}table{width:100%;border-collapse:collapse;margin-top:14px}td,th{padding:8px 10px;border:1px solid #eadfd4;text-align:right;font-size:.9rem}th{background:#FFF8EE;width:35%}@media print{.no-print{display:none}}</style>
+      </head><body>
+      <button class="no-print" onclick="window.print()" style="margin-bottom:16px;background:#4a1010;color:#FDE507;border:none;border-radius:10px;padding:10px 20px;font-weight:800;cursor:pointer">🖨️ طباعة / حفظ PDF</button>
+      <h1>🗑️ سند إتلاف — Saber Jo Snack</h1>
+      <table>
+        <tr><th>التاريخ والساعة</th><td>${new Date(w.created_at).toLocaleString('ar-JO')}</td></tr>
+        <tr><th>الفرع</th><td>${esc(w.branches?.name_ar||'—')}</td></tr>
+        <tr><th>الموظف</th><td>${esc(w.staff_name||'—')}</td></tr>
+        <tr><th>المادة</th><td>${esc(w.ingredients?.name||'—')}</td></tr>
+        <tr><th>الكمية المتلفة</th><td>${w.quantity} ${esc(w.ingredients?.unit||'')}</td></tr>
+        <tr><th>السبب</th><td>${esc(w.reason||'—')}</td></tr>
+        <tr><th>ملاحظة</th><td>${esc(w.notes||'—')}</td></tr>
+        <tr><th>التكلفة التقديرية</th><td><b style="color:#F60100">${fmt(cost)} ${CURRENCY}</b></td></tr>
+      </table>
+      <div style="margin-top:30px">توقيع الموظف: ______________</div>
+      </body></html>`;
+    const win = window.open('','_blank');
+    win.document.write(html); win.document.close();
   }
 
   /* ================= الموردين ================= */
