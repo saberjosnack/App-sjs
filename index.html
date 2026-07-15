@@ -9199,8 +9199,9 @@ try {
     errEl.textContent = '';
     if(!user || !pin){ errEl.textContent = '⚠️ اكتب اسم المستخدم والرقم السري'; return; }
     try{
-      const { data, error } = await db.from('meal_names').select('*').eq('username', user).eq('pin', pin).maybeSingle();
-      if(error || !data){ errEl.textContent = '⛔ اسم المستخدم أو الرقم السري غلط'; return; }
+      const { data, error } = await db.from('meal_names').select('*').ilike('username', user).eq('pin', pin).maybeSingle();
+      if(error){ errEl.textContent = '⚠️ خطأ تقني: '+(error.message||'')+' — تأكد المدير نفّذ SQL بوابة الموظف'; console.error(error); return; }
+      if(!data){ errEl.textContent = '⛔ اسم المستخدم أو الرقم السري غلط'; return; }
       if(data.is_active===false){ errEl.textContent = '⛔ حسابك معطّل — راجع الإدارة'; return; }
       // 🔒 قفل الجهاز — أول جهاز يسجّل فيه الموظف يصير هو المعتمد تلقائيًا،
       // أي جهاز تاني بعده يحتاج موافقة صريحة من المدير (عشان يمنع "حد يبصم عن التاني")
