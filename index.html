@@ -1909,7 +1909,7 @@
         approval_status: 'pending'
       });
       if(error){ toast('✗ '+error.message); console.error(error); return; }
-      await addTreasuryTx('cash', -amt, 'expense', null, 'سحب من الدرج — '+reason);
+      await addTreasuryTx('cash', -amt, 'expense', null, 'سحب من الدرج — '+reason, ME.branch_id||currentShift.branch_id||null);
       await logActivity('drawer_withdraw', 'سحب '+fmt(amt)+' — '+reason);
       closeModal(); toast('✓ اتسجل السحب — بانتظار موافقة المدير');
       printDrawerSlip(amt, reason);
@@ -3015,10 +3015,10 @@
 
   /* ================= 💰 المصاري (كاش + بنك) ================= */
   // account: 'cash' | 'bank' — amount: موجب = دخول، سالب = خروج
-  async function addTreasuryTx(account, amount, type, refId, note){
+  async function addTreasuryTx(account, amount, type, refId, note, branchId){
     try{
       await db.from('treasury_transactions').insert({
-        account, amount, type, ref_id: refId||null, note: note||null, created_by: ME?.full_name||null
+        account, amount, type, ref_id: refId||null, note: note||null, created_by: ME?.full_name||null, branch_id: branchId||null
       });
     }catch(e){ console.error('addTreasuryTx failed (تأكد من تنفيذ SQL جدول treasury_transactions):', e); }
   }
@@ -3035,11 +3035,11 @@
       const d = o.split_details;
       let amt1 = parseFloat(d.amt1||0), amt2 = parseFloat(d.amt2||0);
       if(delFee>0){ if(d.m1==='cash') amt1=Math.max(0,amt1-delFee); else if(d.m2==='cash') amt2=Math.max(0,amt2-delFee); }
-      if(amt1>0) await addTreasuryTx(payAccount(d.m1), amt1*sign, 'sale', o.id, note);
-      if(amt2>0) await addTreasuryTx(payAccount(d.m2), amt2*sign, 'sale', o.id, note);
+      if(amt1>0) await addTreasuryTx(payAccount(d.m1), amt1*sign, 'sale', o.id, note, o.branch_id);
+      if(amt2>0) await addTreasuryTx(payAccount(d.m2), amt2*sign, 'sale', o.id, note, o.branch_id);
     } else {
       const amt = Math.max(0, parseFloat(o.total||0) - delFee);
-      if(amt>0) await addTreasuryTx(payAccount(o.payment_method), amt*sign, 'sale', o.id, note);
+      if(amt>0) await addTreasuryTx(payAccount(o.payment_method), amt*sign, 'sale', o.id, note, o.branch_id);
     }
   }
 
@@ -3984,32 +3984,37 @@
   function renderKPICards(orders){
     const K=document.getElementById('salesKPI');
     if(!K) return;
-    const ok=(orders||[]).filter(o=>o.status!=='cancelled');
+    const allOk=(orders||[]).filter(o=>o.status!=='cancelled');
     const cancelled=(orders||[]).filter(o=>o.status==='cancelled');
-    const itemsSales=ok.reduce((a,o)=>a+parseFloat(o.subtotal||0),0); // مبيعات الأصناف بس (قبل الخصم والتوصيل)
+    // 🍽️ وجبات الموظفين مستبعدة تمامًا من كل أرقام "المبيعات/الإجمالي/الصافي" — هي مو إيراد حقيقي
+    // (مدعومة/مخفّضة للموظف) فبتتحسب لحالها بس، ما تدخل بحساب الإجمالي أو الصافي إطلاقًا
+    const mealsOrders=allOk.filter(o=>o.employee_tab_name);
+    const mealsTotal=mealsOrders.reduce((a,o)=>a+parseFloat(o.total||0),0);
+    const ok=allOk.filter(o=>!o.employee_tab_name);
+    const itemsSales=ok.reduce((a,o)=>a+parseFloat(o.subtotal||0),0); // مبيعات الأصناف بس (قبل الخصم والتوصيل) — بدون الوجبات
     const discounts=ok.reduce((a,o)=>a+parseFloat(o.discount||0),0);
     const deliveryTotal=ok.reduce((a,o)=>a+parseFloat(o.delivery_fee||0),0);
-    const grandTotal=ok.reduce((a,o)=>a+parseFloat(o.total||0),0); // = itemsSales - discounts + deliveryTotal (المحصّل فعليًا)
-    const mealsOrders=ok.filter(o=>o.employee_tab_name);
-    const mealsTotal=mealsOrders.reduce((a,o)=>a+parseFloat(o.total||0),0);
+    const grandTotal=ok.reduce((a,o)=>a+parseFloat(o.total||0),0); // = itemsSales - discounts + deliveryTotal (المحصّل فعليًا، بدون وجبات)
     const delivery=ok.filter(o=>o.order_type==='delivery');
     const takeaway=ok.filter(o=>o.order_type==='takeaway');
     const avgOrder=ok.length?grandTotal/ok.length:0;
     const byBranch={};
     ok.forEach(o=>{ const b=BRANCHES.find(x=>x.id===o.branch_id)?.name_ar||'—'; byBranch[b]=(byBranch[b]||0)+parseFloat(o.total||0); });
     K.innerHTML = `
-      <div style="color:var(--muted);font-weight:700;font-size:.78rem;margin-bottom:6px">💡 سلسلة الحساب: مبيعات الأصناف − الخصومات + أجور التوصيل = الإجمالي المحصّل فعليًا</div>
+      <div style="color:var(--muted);font-weight:700;font-size:.78rem;margin-bottom:6px">💡 سلسلة الحساب: مبيعات الأصناف − الخصومات + أجور التوصيل = الإجمالي المحصّل فعليًا (وجبات الموظفين مستبعدة ومحسوبة لحالها تحت)</div>
       <div class="day-head" style="margin-bottom:10px">
         <div class="stat">مبيعات الأصناف (قبل الخصم)<b>${fmt(itemsSales)} ${CURRENCY}</b></div>
         <div class="stat">الخصومات (−)<b style="color:var(--warn)">${fmt(discounts)} ${CURRENCY}</b></div>
         <div class="stat">أجور التوصيل (+)<b style="color:var(--ok)">${fmt(deliveryTotal)} ${CURRENCY}</b></div>
-        <div class="stat">= الإجمالي المحصّل فعليًا<b style="color:var(--red)">${fmt(grandTotal)} ${CURRENCY}</b></div>
-        <div class="stat">🍽️ وجبات الموظفين (ضمن الإجمالي)<b>${mealsOrders.length} <small>(${fmt(mealsTotal)})</small></b></div>
+        <div class="stat">= الإجمالي المحصّل فعليًا (صافي)<b style="color:var(--red)">${fmt(grandTotal)} ${CURRENCY}</b></div>
         <div class="stat">عدد الطلبات<b>${ok.length}</b></div>
         <div class="stat">متوسط الفاتورة<b>${fmt(avgOrder)} ${CURRENCY}</b></div>
         <div class="stat">طلبات ملغاة<b style="color:var(--red)">${cancelled.length}</b></div>
         <div class="stat">توصيل<b>${delivery.length} <small>(${fmt(delivery.reduce((a,o)=>a+parseFloat(o.total||0),0))})</small></b></div>
         <div class="stat">استلام<b>${takeaway.length} <small>(${fmt(takeaway.reduce((a,o)=>a+parseFloat(o.total||0),0))})</small></b></div>
+      </div>
+      <div class="day-head" style="margin-bottom:10px">
+        <div class="stat" style="border:1.5px solid var(--muted)">🍽️ وجبات الموظفين (مستبعدة من الإجمالي)<b>${mealsOrders.length} <small>(${fmt(mealsTotal)})</small></b></div>
       </div>
       ${Object.keys(byBranch).length>1?`<div class="day-head" style="margin-bottom:10px">
         ${Object.entries(byBranch).map(([b,v])=>`<div class="stat">🏪 ${esc(b)}<b>${fmt(v)} ${CURRENCY}</b></div>`).join('')}
@@ -4603,6 +4608,19 @@
       toast('✓ رجعت بانتظار الموافقة'); renderShiftAdjustments();
     }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
+  async function createAdjustmentManually(shiftId, staffName, diff){
+    if(!isAdmin()){ toast('⛔ صلاحية المالك فقط'); return; }
+    try{
+      const { data: existing } = await db.from('shift_adjustments').select('id').eq('shift_id', shiftId).limit(1);
+      if(existing && existing.length){ toast('⚠️ في طلب تسوية موجود أصلًا لهاد الشيفت — شوف شاشة "الشيفتات" فوق'); return; }
+      const { error } = await db.from('shift_adjustments').insert({
+        shift_id: shiftId, staff_name: staffName,
+        amount: -Math.abs(diff), note: diff<0?'عجز':'زيادة (تُخصم أيضًا)', status: 'pending'
+      });
+      if(error){ toast('✗ '+error.message); console.error(error); return; }
+      toast('✓ اتنشأ طلب التسوية — شوف صندوق "بانتظار الموافقة" فوق'); renderShiftAdjustments();
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
+  }
 
   /* ---- صفحة إدارة الشيفتات ---- */
   let SH_LIST = [];
@@ -4673,7 +4691,9 @@
             <td>${totExpected!==null?fmt(totExpected):'—'}</td>
             <td>${totCounted!==null?fmt(totCounted):'—'}</td>
             <td>${match}</td>
-            <td style="white-space:nowrap">${sh.status==='closed'?`<button class="mini tog" onclick="reprintShift('${sh.id}')" title="إعادة طباعة تقرير الإغلاق">🖨️</button>`:''}</td>
+            <td style="white-space:nowrap">${sh.status==='closed'?`<button class="mini tog" onclick="reprintShift('${sh.id}')" title="إعادة طباعة تقرير الإغلاق">🖨️</button>`:''}
+              ${(hasC && Math.abs(diff)>0.01)?`<button class="mini del" onclick="createAdjustmentManually('${sh.id}','${esc(sh.staff?.full_name||'')}',${diff})" title="لو الفرق مش طالع كطلب موافقة بشاشة الموافقات، اضغط هون تنشئه يدويًا">➕ إنشاء طلب تسوية</button>`:''}
+            </td>
           </tr>`;}).join('')||'<tr><td colspan="14" class="empty-note">ما في شيفتات بهاي الفترة</td></tr>'}
       </table>`;
     }catch(e){
@@ -4976,7 +4996,7 @@
     if(r.error){toast('✗ '+r.error.message);return;}
     if(!id){
       const acc = document.getElementById('fe_acc')?.value||'cash';
-      try{ await addTreasuryTx(acc, -rec.amount, 'expense', null, rec.category+' — '+rec.title); }
+      try{ await addTreasuryTx(acc, -rec.amount, 'expense', null, rec.category+' — '+rec.title, rec.branch_id); }
       catch(e){ console.error('post expense to treasury failed:', e); }
     }
     await logActivity(id?'edit_expense':'add_expense', 'مصروف: '+rec.category+' - '+fmt(rec.amount));
@@ -5054,7 +5074,7 @@
     const acc = document.getElementById('settle_acc')?.value||'cash';
     try{
       await db.from('purchases').update({ payment_status: acc, paid_at: new Date().toISOString() }).eq('id', id);
-      await addTreasuryTx(acc, -p.total, 'purchase', id, 'تسديد فاتورة شراء — '+(p.supplier||''));
+      await addTreasuryTx(acc, -p.total, 'purchase', id, 'تسديد فاتورة شراء — '+(p.supplier||''), p.branch_id||null);
       closeModal(); toast('✓ اتسددت الفاتورة'); renderPurchases();
     }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
@@ -5222,7 +5242,7 @@
     }).select().single();
     if(error){toast('✗ '+error.message);return;}
     if(payStatus!=='unpaid'){
-      await addTreasuryTx(payStatus, -total, 'purchase', pur.id, 'فاتورة شراء — '+sup);
+      await addTreasuryTx(payStatus, -total, 'purchase', pur.id, 'فاتورة شراء — '+sup, window.__purchaseBranchId||null);
     }
     await db.from('purchase_items').insert(items.map(x=>({...x,purchase_id:pur.id})));
     for(const it of items){
@@ -5323,13 +5343,15 @@
         db.from('purchases').select('total,branch_id').gte('purchase_date',(range.from||'').split('T')[0]||range.from).lte('purchase_date',(range.to||'').split('T')[0]||range.to),
         db.from('cash_shifts').select('id,branch_id,opening_balance,start_time,staff(full_name)').eq('status','open'),
       ]);
-      const ok=(ord.data||[]).filter(o=>o.status!=='cancelled');
+      const allOk=(ord.data||[]).filter(o=>o.status!=='cancelled');
       const cancelled=(ord.data||[]).filter(o=>o.status==='cancelled');
+      const mealsOrders=allOk.filter(o=>o.employee_tab_name);
+      const mealsTotal=mealsOrders.reduce((a,o)=>a+parseFloat(o.total||0),0);
+      // 🍽️ وجبات الموظفين مستبعدة من "المبيعات" وصافي الربح — مو إيراد حقيقي، بتتحسب لحالها بس
+      const ok=allOk.filter(o=>!o.employee_tab_name);
       const sales=ok.reduce((a,o)=>a+parseFloat(o.total||0),0);
       const discounts=ok.reduce((a,o)=>a+parseFloat(o.discount||0),0);
       const delivery=ok.reduce((a,o)=>a+parseFloat(o.delivery_fee||0),0);
-      const mealsOrders=ok.filter(o=>o.employee_tab_name);
-      const mealsTotal=mealsOrders.reduce((a,o)=>a+parseFloat(o.total||0),0);
       const byPay={cash:0,card:0,cliq:0}; ok.forEach(o=>{ byPay[o.payment_method]=(byPay[o.payment_method]||0)+parseFloat(o.total||0); });
       const expAll=exp.data||[];
       const expBycat={}; expAll.forEach(x=>{expBycat[x.category||'أخرى']=(expBycat[x.category||'أخرى']||0)+parseFloat(x.amount||0);});
@@ -5386,7 +5408,8 @@
             <tr><td>كليك</td><td class="tl">${fmt(byPay.cliq)}</td></tr>
             <tr><td>توصيل</td><td class="tl">${ok.filter(o=>o.order_type==='delivery').length} طلب — أجور: ${fmt(delivery)}</td></tr>
             <tr><td>استلام</td><td class="tl">${ok.filter(o=>o.order_type==='takeaway').length} طلب</td></tr>
-            <tr><td>🍽️ وجبات الموظفين (ضمن المبيعات)</td><td class="tl">${mealsOrders.length} — ${fmt(mealsTotal)}</td></tr>
+            <tr><td colspan="2" style="border-top:2px dashed #ccc"></td></tr>
+            <tr><td>🍽️ وجبات الموظفين (مستبعدة من المبيعات فوق — لحالها)</td><td class="tl">${mealsOrders.length} — ${fmt(mealsTotal)}</td></tr>
             <tr><td style="color:var(--red)">خصومات (−)</td><td class="tl" style="color:var(--red)">− ${fmt(discounts)}</td></tr>
             <tr><td style="color:var(--red)">ملغي</td><td class="tl" style="color:var(--red)">${cancelled.length} طلب</td></tr>
             <tr style="background:#fff0f0"><td colspan="2" style="font-weight:900;color:var(--red);padding:10px">💸 التكاليف والمصاريف</td></tr>
@@ -6305,7 +6328,7 @@
     try{
       const fd = getFinancialDay();
       const { data: orders, error } = await db.from('orders')
-        .select('id, order_number, total, delivery_fee, order_type, payment_method, split_details, platform_id, status')
+        .select('id, order_number, total, delivery_fee, order_type, payment_method, split_details, platform_id, status, branch_id')
         .gte('created_at', fd.from).lte('created_at', fd.to)
         .neq('status','cancelled');
       if(error){ toast('✗ '+error.message); console.error(error); return; }
@@ -6346,6 +6369,15 @@
     const cashBalance = all.filter(t=>t.account==='cash').reduce((a,t)=>a+parseFloat(t.amount||0),0);
     const bankBalance = all.filter(t=>t.account==='bank').reduce((a,t)=>a+parseFloat(t.amount||0),0);
 
+    // 🏪 تفصيل كل فرع لحاله (تراكمي كل الوقت) — الحركات يلي مالها فرع محدد (سلف/إيداعات يدوية عامة) بتنحسب تحت "عام"
+    const brName = id => id ? (BRANCHES.find(b=>b.id===id)?.name_ar || 'فرع محذوف') : 'عام (بدون فرع محدد)';
+    const byBranch = {};
+    all.forEach(t=>{
+      const b = brName(t.branch_id);
+      if(!byBranch[b]) byBranch[b] = {cash:0, bank:0};
+      byBranch[b][t.account] = (byBranch[b][t.account]||0) + parseFloat(t.amount||0);
+    });
+
     // ديون الموردين (فواتير غير مدفوعة)
     const { data: unpaid } = await db.from('purchases').select('id,supplier,total,purchase_date').eq('payment_status','unpaid');
     const bySupplierDebt = {};
@@ -6364,6 +6396,19 @@
         <div class="stat" style="flex:1;min-width:180px">💵 رصيد الكاش<b style="color:${cashBalance<0?'var(--red)':'var(--ok)'}">${fmt(cashBalance)} ${CURRENCY}</b></div>
         <div class="stat" style="flex:1;min-width:180px">🏦 رصيد البنك/كليك<b style="color:${bankBalance<0?'var(--red)':'var(--ok)'}">${fmt(bankBalance)} ${CURRENCY}</b></div>
         <div class="stat" style="flex:1;min-width:180px">🔴 ديون على المطعم (فواتير غير مدفوعة)<b style="color:var(--red)">${fmt(totalDebt)} ${CURRENCY}</b></div>
+      </div>
+
+      <div class="panel" style="margin-bottom:14px">
+        <h4 style="color:var(--maroon);margin-bottom:8px">🏪 المصاري حسب الفرع (تراكمي)</h4>
+        <div class="tbl-wrap"><table class="tbl">
+          <tr><th>الفرع</th><th>كاش</th><th>بنك/كليك</th><th>الإجمالي</th></tr>
+          ${Object.entries(byBranch).map(([b,d])=>`<tr>
+            <td><b>${esc(b)}</b></td>
+            <td>${fmt(d.cash||0)}</td>
+            <td>${fmt(d.bank||0)}</td>
+            <td><b style="color:${(d.cash+d.bank)<0?'var(--red)':'var(--ok)'}">${fmt((d.cash||0)+(d.bank||0))} ${CURRENCY}</b></td>
+          </tr>`).join('')||'<tr><td colspan="4" class="empty-note">لا شي</td></tr>'}
+        </table></div>
       </div>
 
       <div class="panel" style="margin-bottom:14px">
@@ -8031,13 +8076,16 @@ try {
     const y0 = new Date(t0.getTime() - 86400000);
     // طلبات الفترة + أمس (حتى نفس الساعة)
     const [today, yest, cancels, shifts30] = await Promise.all([
-      db.from('orders').select('total, subtotal, discount, branch_id, status, order_type').gte('created_at', t0.toISOString()).lte('created_at', tEnd.toISOString()),
-      db.from('orders').select('total, created_at, status').gte('created_at', y0.toISOString()).lt('created_at', t0.toISOString()),
+      db.from('orders').select('total, subtotal, discount, branch_id, status, order_type, employee_tab_name').gte('created_at', t0.toISOString()).lte('created_at', tEnd.toISOString()),
+      db.from('orders').select('total, created_at, status, employee_tab_name').gte('created_at', y0.toISOString()).lt('created_at', t0.toISOString()),
       db.from('orders').select('cancel_reason').eq('status','cancelled').not('cancel_reason','is',null).gte('created_at', new Date(Date.now()-30*86400000).toISOString()),
       db.from('cash_shifts').select('opening_balance, closing_balance, expected_balance, status, staff(full_name)').eq('status','closed').gte('start_time', new Date(Date.now()-30*86400000).toISOString()),
     ]);
-    const T = (today.data||[]).filter(o=>o.status!=='cancelled');
-    const sameHour = (yest.data||[]).filter(o=>o.status!=='cancelled' && (new Date(o.created_at).getTime() - y0.getTime()) <= (now.getTime() - t0.getTime()));
+    // 🍽️ وجبات الموظفين مستبعدة من "مبيعات اليوم" — بتتحسب لحالها بس، مو إيراد حقيقي
+    const T = (today.data||[]).filter(o=>o.status!=='cancelled' && !o.employee_tab_name);
+    const mealsToday = (today.data||[]).filter(o=>o.status!=='cancelled' && o.employee_tab_name);
+    const mealsTodaySum = mealsToday.reduce((a,o)=>a+parseFloat(o.total||0),0);
+    const sameHour = (yest.data||[]).filter(o=>o.status!=='cancelled' && !o.employee_tab_name && (new Date(o.created_at).getTime() - y0.getTime()) <= (now.getTime() - t0.getTime()));
     const sum = a=>a.reduce((x,o)=>x+parseFloat(o.total||0),0);
     const tSum = sum(T), ySum = sum(sameHour);
     const tDiscSum = T.reduce((x,o)=>x+parseFloat(o.discount||0),0);
@@ -8062,7 +8110,8 @@ try {
       <div class="stat">عدد الطلبات<b>${T.length}</b></div>
       <div class="stat">الخصومات اليوم<b style="color:var(--warn)">${fmt(tDiscSum)} ${CURRENCY}</b></div>
       ${hasCosts?`<div class="stat">ربح اليوم التقريبي<b>${fmt(profit)} ${CURRENCY}</b></div>`:''}
-      <div class="stat">ملغي اليوم<b>${(today.data||[]).length - T.length}</b></div>`;
+      <div class="stat">ملغي اليوم<b>${(today.data||[]).length - T.length}</b></div>
+      <div class="stat" style="border:1.5px solid var(--muted)">🍽️ وجبات الموظفين (مستبعدة)<b>${mealsToday.length} <small>(${fmt(mealsTodaySum)})</small></b></div>`;
 
     // بالفروع
     const byBr = {};
