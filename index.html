@@ -822,6 +822,26 @@
       });
     }catch(e){ console.error('playUrgentPattern failed:', e); }
   }
+  function playChatTone(){
+    // 🔔 نغمة "دينج-دونج" مميزة للشات الداخلي بين الموظفين — مختلفة عمدًا عن نغمة طلبات السنتر
+    // (المزعجة عالقصد) وعن كل نغمات التنبيهات التانية بالنظام
+    try{
+      audioCtx = audioCtx || new (window.AudioContext||window.webkitAudioContext)();
+      if(audioCtx.state === 'suspended'){ audioCtx.resume().catch(()=>{}); }
+      const notes = [{freq:660, t:0}, {freq:880, t:0.15}];
+      notes.forEach(n=>{
+        const o = audioCtx.createOscillator();
+        const g = audioCtx.createGain();
+        o.connect(g); g.connect(audioCtx.destination);
+        o.type = 'sine';
+        o.frequency.value = n.freq;
+        const t0 = audioCtx.currentTime + n.t;
+        g.gain.setValueAtTime(0.35, t0);
+        g.gain.exponentialRampToValueAtTime(0.01, t0+0.35);
+        o.start(t0); o.stop(t0+0.35);
+      });
+    }catch(e){ console.error('playChatTone failed:', e); }
+  }
   function beepUrgentIncoming(){
     // 🔊 نغمة خاصة عالية ومزعجة جدًا لطلب وصل من السنتر — بصوت أقصى دايمًا (بتجاهل إعداد
     // مستوى الصوت العادي عمدًا) عشان محدّ يفوّت طلب السنتر حتى لو الجهاز بمكان صاخب
@@ -4795,6 +4815,20 @@
     }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
 
+  async function deleteShift(shiftId, staffName){
+    if(!isAdmin()){ toast('⛔ صلاحية المالك فقط'); return; }
+    if(!confirm('⚠️ حذف شيفت "'+staffName+'" نهائيًا؟\nهاد للشيفتات المسجلة غلط بس — الطلبات المرتبطة فيه بتضل موجودة بس بدون ربط بشيفت.\nهاد الإجراء ما ينرجع، متأكد؟')) return;
+    try{
+      // نحذف أي طلب تسوية مرتبط فيه أول (عجز/زيادة) عشان ما يضل سجل يتيم
+      await db.from('shift_adjustments').delete().eq('shift_id', shiftId);
+      // نفك ربط أي طلب بيه (بدون حذفهم) عشان الحذف ما ينمنع
+      await db.from('orders').update({ shift_id: null }).eq('shift_id', shiftId);
+      const { error } = await db.from('cash_shifts').delete().eq('id', shiftId);
+      if(error){ toast('✗ '+error.message); console.error(error); return; }
+      toast('✓ انحذف الشيفت'); loadShiftsPage();
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
+  }
+
   /* ---- صفحة إدارة الشيفتات ---- */
   let SH_LIST = [];
   async function loadShiftsPage(){
@@ -4866,6 +4900,7 @@
             <td>${match}</td>
             <td style="white-space:nowrap">${sh.status==='closed'?`<button class="mini tog" onclick="reprintShift('${sh.id}')" title="إعادة طباعة تقرير الإغلاق">🖨️</button>`:''}
               ${(hasC && Math.abs(diff)>0.01)?`<button class="mini del" onclick="createAdjustmentManually('${sh.id}','${esc(sh.staff?.full_name||'')}',${diff})" title="لو الفرق مش طالع كطلب موافقة بشاشة الموافقات، اضغط هون تنشئه يدويًا">➕ إنشاء طلب تسوية</button>`:''}
+              <button class="mini del" onclick="deleteShift('${sh.id}','${esc(sh.staff?.full_name||'—')}')" title="حذف نهائي — لو الشيفت مسجل غلط">🗑️ حذف</button>
             </td>
           </tr>`;}).join('')||'<tr><td colspan="14" class="empty-note">ما في شيفتات بهاي الفترة</td></tr>'}
       </table>`;
@@ -6463,8 +6498,9 @@
       const myShiftAdj = shiftAdjustments.filter(a=>a.staff_name===e.name);
       const shiftDeduction = myShiftAdj.reduce((a,x)=>a+Math.abs(x.amount||0),0);
       const gross = hours * (e.hourly_wage||0);
-      const net = gross - advTotal - mealsTotal - shiftDeduction;
-      return { emp:e, hours, days, advTotal, mealsCount, mealsTotal, shiftDeduction, gross, net };
+      const opening = parseFloat(e.opening_balance||0);
+      const net = gross - advTotal - mealsTotal - shiftDeduction + opening;
+      return { emp:e, hours, days, advTotal, mealsCount, mealsTotal, shiftDeduction, opening, gross, net };
     });
     const totalNet = rows.reduce((a,r)=>a+r.net,0);
     window.__HR_ROWS = rows;
@@ -6717,6 +6753,7 @@
         <tr><td>قيمة الوجبات (تُخصم من الراتب)</td><td><b style="color:var(--warn)">${fmt(r.mealsTotal)} ${CURRENCY}</b></td></tr>
         <tr><td>مجموع السلف المسحوبة بالفترة</td><td><b style="color:var(--warn)">${fmt(r.advTotal)} ${CURRENCY}</b></td></tr>
         <tr><td>خصم عجز/زيادة الشيفتات (معتمد)</td><td><b style="color:var(--red)">${fmt(r.shiftDeduction)} ${CURRENCY}</b></td></tr>
+        <tr><td>📒 رصيد سابق</td><td><b style="color:${r.opening<0?'var(--red)':'var(--ok)'}">${r.opening>0?'+':''}${fmt(r.opening)} ${CURRENCY}</b></td></tr>
         <tr><td><b>صافي المستحق له</b></td><td><b style="color:${r.net<0?'var(--red)':'var(--ok)'}">${fmt(r.net)} ${CURRENCY}</b></td></tr>
       </table></div>
       <div class="m-act">
@@ -7286,6 +7323,9 @@
       <div class="fld"><label>الاسم</label><input id="mn_name" value="${esc(n.name||'')}" placeholder="مثال: أبو محمد (نظافة)"></div>
       <div class="fld"><label>نسبة خصم الوجبة %</label><input id="mn_disc" type="number" step="1" min="0" max="100" value="${n.discount_percent??20}"></div>
       <div class="fld"><label>💰 سعر ساعة العمل (${CURRENCY})</label><input id="mn_wage" type="number" step="0.01" min="0" value="${n.hourly_wage||''}" placeholder="مثال: 1.5"></div>
+      <div class="fld"><label>📒 رصيد سابق (اختياري)</label><input id="mn_opening" type="number" step="0.01" value="${n.opening_balance||0}">
+        <div style="font-size:.78rem;color:var(--muted);font-weight:700;margin-top:2px">رقم موجب = له عندنا، رقم سالب (بإشارة −) = عليه لنا — بينضاف لصافي المستحق تلقائيًا</div></div>
+      <div class="fld"><label>🚦 أقصى نسبة سلفة مسموحة % (من صافي المستحق)</label><input id="mn_maxadv" type="number" step="1" min="1" max="100" value="${n.max_advance_percent??30}"></div>
       <hr style="margin:10px 0"><div style="font-weight:800;color:var(--maroon);margin-bottom:6px">👷 دخول بوابة الموظف (اختياري)</div>
       <div class="fld"><label>اسم المستخدم</label><input id="mn_user" value="${esc(n.username||'')}" placeholder="بدون فراغات، بالإنجليزي مثلًا"></div>
       <div class="fld"><label>الرقم السري</label><input id="mn_pin" inputmode="numeric" value="${esc(n.pin||'')}" placeholder="مثال: 1234"></div>
@@ -7308,11 +7348,13 @@
     const name = document.getElementById('mn_name').value.trim();
     const disc = parseFloat(document.getElementById('mn_disc').value);
     const wage = parseFloat(document.getElementById('mn_wage')?.value)||0;
+    const opening_balance = parseFloat(normalizeDigits(document.getElementById('mn_opening')?.value))||0;
+    const max_advance_percent = parseFloat(document.getElementById('mn_maxadv')?.value)||30;
     const username = document.getElementById('mn_user')?.value.trim()||null;
     const pin = document.getElementById('mn_pin')?.value.trim()||null;
     if(!name){ toast('⚠️ الاسم مطلوب'); return; }
     if(isNaN(disc)||disc<0||disc>100){ toast('⚠️ نسبة الخصم يجب أن تكون بين 0 و100'); return; }
-    const rec = { name, discount_percent: disc, hourly_wage: wage, username, pin };
+    const rec = { name, discount_percent: disc, hourly_wage: wage, opening_balance, max_advance_percent, username, pin };
     if(id) rec.is_active = document.getElementById('mn_active')?.checked ?? true;
     const r = id ? await db.from('meal_names').update(rec).eq('id',id) : await db.from('meal_names').insert(rec);
     if(r.error){ toast('✗ '+r.error.message+(r.error.message.includes('username')?' — اسم المستخدم هاد مستخدم لموظف تاني':'')); return; }
@@ -9016,12 +9058,16 @@ try {
   let CHAT_POLL_TIMER = null;
   let CHAT_ACTIVE_WITH = null; // {id, name} — المحادثة المفتوحة حاليًا
 
+  let __lastUnreadMsgCount = null;
   async function checkUnreadMessages(){
     try{
       const { count, error } = await db.from('staff_messages').select('*', {count:'exact', head:true}).eq('to_id', ME.id).is('read_at', null);
       if(error){ console.error('checkUnreadMessages failed:', error); return; }
       const badge = document.getElementById('chatUnreadBadge');
       if(badge) badge.textContent = count ? '('+count+')' : '';
+      // 🔔 نغمة الشات — بس لما يزيد العدد عن آخر فحص (رسالة جديدة فعليًا وصلت)
+      if(__lastUnreadMsgCount!==null && count>__lastUnreadMsgCount) playChatTone();
+      __lastUnreadMsgCount = count;
     }catch(e){ console.error('checkUnreadMessages failed:', e); }
   }
 
@@ -9483,17 +9529,48 @@ try {
       loadEmpPortal();
     }catch(e){ toast('⛔ '+e.message); }
   }
-  function empRequestAdvanceForm(){
-    modal(`<h3>🧾 طلب سلفة</h3>
+  async function computeEmployeeNetDue(empId, empName, hourlyWage, openingBalance, maxAdvPercent){
+    const [attRes, logsRes, advRes, mealsRes, shiftAdjRes] = await Promise.all([
+      db.from('hr_attendance').select('hours').eq('employee_id', empId),
+      db.from('hr_time_logs').select('clock_in,clock_out').eq('employee_id', empId).not('clock_out','is',null),
+      db.from('hr_advances').select('amount').eq('employee_id', empId).eq('status','open'),
+      db.from('orders').select('total').eq('employee_tab_name', empName).neq('status','cancelled'),
+      db.from('shift_adjustments').select('amount').eq('staff_name', empName).eq('status','approved'),
+    ]);
+    const manualHours = (attRes.data||[]).reduce((a,x)=>a+parseFloat(x.hours||0),0);
+    const portalHours = (logsRes.data||[]).reduce((a,l)=>a+((new Date(l.clock_out)-new Date(l.clock_in))/3600000),0);
+    const hours = manualHours+portalHours;
+    const gross = hours*(hourlyWage||0);
+    const advOutstanding = (advRes.data||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
+    const mealsTotal = (mealsRes.data||[]).reduce((a,o)=>a+parseFloat(o.total||0),0);
+    const shiftDed = (shiftAdjRes.data||[]).reduce((a,x)=>a+Math.abs(x.amount||0),0);
+    const net = gross - advOutstanding - mealsTotal - shiftDed + parseFloat(openingBalance||0);
+    const maxAllowed = Math.max(0, net * ((maxAdvPercent||30)/100));
+    return { net, maxAllowed };
+  }
+  async function empRequestAdvanceForm(){
+    modal(`<h3>🧾 طلب سلفة</h3><div id="epaLimitInfo" class="empty-note">... جاري الحساب</div>
       <div class="fld"><label>المبلغ</label><input id="epa_amt" type="number" step="0.01" min="0"></div>
       <div class="fld"><label>السبب (اختياري)</label><input id="epa_note" placeholder="اكتب سبب الطلب..."></div>
       <div class="m-act"><button class="save" onclick="empSubmitAdvanceRequest()">إرسال الطلب ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
+    try{
+      const { net, maxAllowed } = await computeEmployeeNetDue(EMP.id, EMP.name, EMP.hourly_wage, EMP.opening_balance, EMP.max_advance_percent);
+      window.__empAdvMax = maxAllowed;
+      const infoEl = document.getElementById('epaLimitInfo');
+      if(infoEl) infoEl.innerHTML = `<div style="background:#fff8e1;border-radius:10px;padding:8px 12px;font-size:.85rem;font-weight:700">صافي مستحقك حاليًا: ${fmt(net)} ${CURRENCY} — أقصى سلفة ممكن تطلبها: <b style="color:var(--ok)">${fmt(maxAllowed)} ${CURRENCY}</b></div>`;
+    }catch(e){ console.error(e); }
   }
   async function empSubmitAdvanceRequest(){
     const amt = parseFloat(normalizeDigits(document.getElementById('epa_amt')?.value));
     const note = document.getElementById('epa_note')?.value.trim();
     if(isNaN(amt)||amt<=0){ toast('⚠️ اكتب مبلغ صحيح'); return; }
     try{
+      // 🚦 فحص الحد الأقصى المسموح تلقائيًا قبل الإرسال (نعيد الحساب لحظيًا عشان ما حد يتلاعب بالرقم المعروض)
+      const { net, maxAllowed } = await computeEmployeeNetDue(EMP.id, EMP.name, EMP.hourly_wage, EMP.opening_balance, EMP.max_advance_percent);
+      if(amt > maxAllowed + 0.005){
+        toast('⛔ ما بقدر — أقصى سلفة مسموحة إلك هلأ هي '+fmt(maxAllowed)+' '+CURRENCY+' ('+(EMP.max_advance_percent||30)+'% من صافي مستحقك '+fmt(net)+')');
+        return;
+      }
       const { error } = await db.from('hr_advance_requests').insert({
         employee_id: EMP.id, employee_name: EMP.name, amount: amt, note: note||null, status:'pending'
       });
