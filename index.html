@@ -8078,7 +8078,18 @@ try {
   }
   async function toggleCode(id,v){ try { const r=await db.from('discount_codes').update({is_active:v}).eq('id',id); if(r.error){toast('✗ '+r.error.message);console.error(r.error);return;} toast(v?'✓ فعال':'✓ موقوف'); renderAdmin(); } catch(e) { toast('✗ '+e.message); console.error(e); } }
   function itemForm(id){ const it=ITEMS.find(x=>x.id===id)||{}; modal(`<h3>${id?'تعديل صنف':'صنف جديد'}</h3><div class="fld"><label>اسم الصنف</label><input id="f_nm" value="${esc(it.name_ar||'')}"></div><div class="fld"><label>السعر</label><input id="f_pr" inputmode="decimal" value="${it.price??''}"></div><div class="fld"><label>التكلفة (اختياري — لحساب الأرباح)</label><input id="f_cost" inputmode="decimal" value="${it.cost??''}"></div><div class="fld"><label>صورة الصنف (اختياري)</label><input type="file" id="f_img" accept="image/*" onchange="resizeItemImage(this)"><div id="f_imgPrev" style="margin-top:6px">${it.image_url?`<img src="${it.image_url}" style="width:76px;height:76px;object-fit:cover;border-radius:10px;border:1px solid var(--line)"> <button type="button" class="mini del" onclick="window.__itemImg='';document.getElementById('f_imgPrev').innerHTML='(انحذفت)'">حذف</button>`:''}</div></div><div class="fld"><label>التصنيف</label><select id="f_cat"><option value="">— بدون —</option>${CATS.map(c=>`<option ${c.name_ar===it.category?'selected':''}>${esc(c.name_ar)}</option>`).join('')}</select></div><div class="fld"><label>الترتيب</label><input id="f_so" inputmode="numeric" value="${it.sort_order??0}"></div><div class="fld"><label>🧩 نوع الصنف</label><select id="f_type"><option value="simple" ${(!it.item_type||it.item_type==='simple')?'selected':''}>عادي</option><option value="composite" ${it.item_type==='composite'?'selected':''}>مركّب (وجبة عائلية بمكونات قابلة للاختيار)</option></select>
-      ${id?`<div style="margin-top:6px"><button type="button" class="mini ok" onclick="closeModal();compositeManagerModal('${id}','${esc(it.name_ar||'')}')">🧩 إدارة تركيبة الوجبة</button></div>`:'<div style="font-size:.78rem;color:var(--muted);margin-top:4px">احفظ الصنف الأول، وبعدين افتحه من جديد لتضيف تركيبته</div>'}</div><div class="m-act"><button class="save" onclick="saveItem('${id||''}')">حفظ</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`); }
+      ${id?`<div style="margin-top:6px"><button type="button" class="mini ok" onclick="openCompositeManagerSafely('${id}','${esc(it.name_ar||'')}')">🧩 إدارة تركيبة الوجبة</button></div>`:'<div style="font-size:.78rem;color:var(--muted);margin-top:4px">احفظ الصنف الأول، وبعدين افتحه من جديد لتضيف تركيبته</div>'}</div><div class="m-act"><button class="save" onclick="saveItem('${id||''}')">حفظ</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`); }
+  // 🔒 يحفظ نوع الصنف "مركّب" فورًا قبل ما يفتح شاشة التركيبة — عشان ما يصير إنه يضيف مكونات
+  // بس ينسى يحفظ نموذج الصنف نفسه، فيضل الصنف "عادي" بقاعدة البيانات وما يشتغل صح بالكاشير
+  async function openCompositeManagerSafely(id, name){
+    try{
+      const { error } = await db.from('menu_items').update({ item_type:'composite' }).eq('id', id);
+      if(error){ toast('✗ '+error.message); return; }
+      await bootData();
+    }catch(e){ console.error(e); }
+    closeModal();
+    compositeManagerModal(id, name);
+  }
   window.__itemImg = undefined;
   window.resizeItemImage = function(input){
     const f = input.files && input.files[0]; if(!f) return;
