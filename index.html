@@ -612,6 +612,7 @@
         <button data-a="hr" onclick="admTab('hr')" style="background:#ffe0c2;border-color:#e8890c">🧑‍💼 HR</button>
         <button data-a="chats" onclick="admTab('chats')" style="background:#d0ecff;border-color:#0d6efd">💬 المحادثات</button>
         <button data-a="hrLocations" onclick="admTab('hrLocations')" style="background:#ffd9ec;border-color:#e0409a">📍 مواقع الدخول</button>
+        <button data-a="dutyHours" onclick="admTab('dutyHours')" style="background:#d9f0ff;border-color:#0d9cdb">⏰ ساعات الدوام</button>
         <button data-a="ingredients" onclick="admTab('ingredients')">🥩 المكونات</button>
         <button data-a="recipes" onclick="admTab('recipes')">📋 الوصفات</button>
         <button data-a="transfers" onclick="admTab('transfers')">🔄 نقل بضاعة</button>
@@ -4415,7 +4416,7 @@
   const ADMIN_TAB_PERM = {
     items:'items_manage', cats:'cats_manage', codes:'codes_manage', staff:'staff_manage', roles:'admin_only', branches:'branches_manage', sett:'settings_manage', devices:'devices_manage',
     ingredients:'inventory_view', recipes:'inventory_view',
-    inventory:'inventory_audit', transfers:'inventory_transfer', warehouse:'admin_only', treasury:'admin_only', hr:'admin_only', chats:'admin_only', dailyAudits:'admin_only', hrLocations:'admin_only',
+    inventory:'inventory_audit', transfers:'inventory_transfer', warehouse:'admin_only', treasury:'admin_only', hr:'admin_only', chats:'admin_only', dailyAudits:'admin_only', hrLocations:'admin_only', dutyHours:'admin_only',
     expenses:'expenses_view', purchases:'purchases_view',
     platforms:'platforms_view', empmeals:'empmeals_view', topcust:'topcust_view', waste:'waste_log', suppliers:'purchases_view',
   };
@@ -4490,6 +4491,7 @@
     if(admView==='hr'){ renderHR(); return; }
     if(admView==='chats'){ renderChatAdmin(); return; }
     if(admView==='hrLocations'){ renderHrLocations(); return; }
+    if(admView==='dutyHours'){ renderDutyHours(); return; }
     if(admView==='platforms'){ renderPlatforms(); return; }
     if(admView==='devices'){ renderDevices(); return; }
     if(admView==='empmeals'){ renderEmpMeals(); return; }
@@ -9170,6 +9172,151 @@ try {
 
   /* ---- شاشة مراقبة المحادثات — للمالك بس ---- */
   /* ================= 📍 مواقع الدخول المسموحة (Geofencing) ================= */
+  /* ================= ⏰ ساعات الدوام — كل الموظفين بمكان واحد ================= */
+  let DH_FILTER = { emp:'', from:'', to:'' };
+  async function renderDutyHours(){
+    const C = document.getElementById('admContent');
+    C.innerHTML = '<div class="empty-note">... جاري التحميل</div>';
+    if(!DH_FILTER.from){
+      const d = new Date(); d.setDate(1);
+      DH_FILTER.from = d.toISOString().split('T')[0];
+      DH_FILTER.to = new Date().toISOString().split('T')[0];
+    }
+    try{
+      const [empRes, openRes] = await Promise.all([
+        db.from('meal_names').select('id,name').eq('is_active', true).order('name'),
+        db.from('hr_time_logs').select('*').is('clock_out', null),
+      ]);
+      const empList = empRes.data||[];
+      const openLogs = openRes.error ? [] : (openRes.data||[]);
+      C.innerHTML = `
+        <div class="panel" style="margin-bottom:14px">
+          <h3>⏰ ساعات الدوام — كل الموظفين</h3>
+          <div style="color:var(--muted);font-weight:700;font-size:.82rem;margin-bottom:10px">🟢 ${openLogs.length} موظف مسجل دخول هلأ (شايفهم على الخريطة تحت لو الجهاز مسموحله بمشاركة الموقع)</div>
+          <div id="dhMap" style="height:300px;border-radius:12px;overflow:hidden;border:1.5px solid var(--line);margin-bottom:14px"></div>
+          <div class="two" style="flex-wrap:wrap;gap:10px">
+            <div><label style="font-weight:700;font-size:.82rem">الموظف</label><br>
+              <select id="dh_emp" class="dfield"><option value="">كل الموظفين</option>
+                ${empList.map(e=>`<option value="${e.id}" ${DH_FILTER.emp===e.id?'selected':''}>${esc(e.name)}</option>`).join('')}</select></div>
+            <div><label style="font-weight:700;font-size:.82rem">من تاريخ</label><br><input type="date" id="dh_from" value="${DH_FILTER.from}" class="dfield"></div>
+            <div><label style="font-weight:700;font-size:.82rem">إلى تاريخ</label><br><input type="date" id="dh_to" value="${DH_FILTER.to}" class="dfield"></div>
+            <button class="mini ok" style="align-self:end" onclick="applyDhFilter()">🔍 فلترة</button>
+          </div>
+        </div>
+        <div id="dhTableWrap"></div>`;
+      setTimeout(()=>initDhMap(openLogs), 50);
+      loadDutyHoursTable();
+    }catch(e){ C.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
+  }
+  function initDhMap(openLogs){
+    const mapEl = document.getElementById('dhMap'); if(!mapEl || typeof L==='undefined') return;
+    const withGeo = openLogs.filter(l=>l.lat_in);
+    const center = withGeo[0] ? [withGeo[0].lat_in, withGeo[0].lng_in] : [32.5556, 35.8500];
+    const map = L.map('dhMap').setView(center, 13);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap' }).addTo(map);
+    (window.__HR_LOCS||[]).forEach(loc=>{ L.circle([loc.lat,loc.lng], {radius:loc.radius_m, color:'#0d6efd', fillOpacity:.06}).addTo(map); });
+    const pts = [];
+    withGeo.forEach(l=>{
+      pts.push([l.lat_in, l.lng_in]);
+      L.marker([l.lat_in,l.lng_in], {icon:L.divIcon({html:'🟢', iconSize:[26,26]})}).addTo(map)
+        .bindPopup('<b>'+esc(l.employee_name||'—')+'</b><br>دخل '+new Date(l.clock_in).toLocaleTimeString('ar-JO',{hour:'2-digit',minute:'2-digit'}));
+    });
+    if(pts.length>1) map.fitBounds(pts, {padding:[40,40]});
+    if(!withGeo.length){ mapEl.insertAdjacentHTML('afterend', '<div class="empty-note" style="margin-top:-8px;margin-bottom:14px">ما في موظفين مسجلين دخول هلأ بموقع محدد</div>'); }
+  }
+  function applyDhFilter(){
+    DH_FILTER.emp = document.getElementById('dh_emp')?.value||'';
+    DH_FILTER.from = document.getElementById('dh_from')?.value||DH_FILTER.from;
+    DH_FILTER.to = document.getElementById('dh_to')?.value||DH_FILTER.to;
+    loadDutyHoursTable();
+  }
+  async function loadDutyHoursTable(){
+    const wrap = document.getElementById('dhTableWrap'); if(!wrap) return;
+    wrap.innerHTML = '<div class="empty-note">... جاري التحميل</div>';
+    try{
+      let q = db.from('hr_time_logs').select('*')
+        .gte('clock_in', DH_FILTER.from+'T00:00:00').lte('clock_in', DH_FILTER.to+'T23:59:59')
+        .order('clock_in',{ascending:false});
+      if(DH_FILTER.emp) q = q.eq('employee_id', DH_FILTER.emp);
+      const { data, error } = await q;
+      if(error){ wrap.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message||'الجدول hr_time_logs غير موجود — نفّذ SQL بوابة الموظف أولاً')}</div>`; return; }
+      const logs = data||[];
+      window.__DH_LOGS = logs;
+      const totalHours = logs.filter(l=>l.clock_out).reduce((a,l)=>a+((new Date(l.clock_out)-new Date(l.clock_in))/3600000),0);
+      wrap.innerHTML = `
+        <div class="panel">
+          <div style="margin-bottom:10px;font-weight:800">إجمالي الساعات بالفترة: <span style="color:var(--red)">${totalHours.toFixed(1)} ساعة</span> — ${logs.length} سجل</div>
+          <div class="tbl-wrap"><table class="tbl">
+            <tr><th>الموظف</th><th>التاريخ</th><th>دخول</th><th>خروج</th><th>الساعات</th><th>موقع</th><th></th></tr>
+            ${logs.map((l,idx)=>{
+              const hrs = l.clock_out ? ((new Date(l.clock_out)-new Date(l.clock_in))/3600000).toFixed(2) : '...';
+              return `<tr class="${!l.clock_out?'late':''}">
+                <td><b>${esc(l.employee_name||'—')}</b></td>
+                <td>${new Date(l.clock_in).toLocaleDateString('ar-JO')}</td>
+                <td>${new Date(l.clock_in).toLocaleTimeString('ar-JO',{hour:'2-digit',minute:'2-digit'})}</td>
+                <td>${l.clock_out?new Date(l.clock_out).toLocaleTimeString('ar-JO',{hour:'2-digit',minute:'2-digit'}):'<b style="color:var(--ok)">🟢 لسا مفتوح</b>'}</td>
+                <td>${hrs}</td>
+                <td>${(l.lat_in||l.lat_out)?`<button class="mini ok" onclick="showDhMap(${idx})">🗺️</button>`:'—'}</td>
+                <td style="white-space:nowrap">
+                  <button class="mini edit" onclick="editDhLog(${idx})">✏️ تعديل</button>
+                  <button class="mini del" onclick="deleteDhLog(${idx})">🗑️ حذف</button>
+                </td>
+              </tr>`;
+            }).join('')||'<tr><td colspan="7" class="empty-note">ما في سجلات بهاي الفترة</td></tr>'}
+          </table></div>
+        </div>`;
+    }catch(e){ wrap.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
+  }
+  function editDhLog(idx){
+    const l = (window.__DH_LOGS||[])[idx]; if(!l) return;
+    const toLocalInput = iso => iso ? new Date(new Date(iso).getTime()-new Date().getTimezoneOffset()*60000).toISOString().slice(0,16) : '';
+    modal(`<h3>✏️ تعديل سجل حضور — ${esc(l.employee_name||'—')}</h3>
+      <div class="fld"><label>وقت الدخول</label><input type="datetime-local" id="dh_edit_in" value="${toLocalInput(l.clock_in)}"></div>
+      <div class="fld"><label>وقت الخروج (اتركه فاضي لو لسا مفتوح)</label><input type="datetime-local" id="dh_edit_out" value="${toLocalInput(l.clock_out)}"></div>
+      <div class="m-act"><button class="save" onclick="saveDhLogEdit('${l.id}')">حفظ ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
+  }
+  async function saveDhLogEdit(logId){
+    const inVal = document.getElementById('dh_edit_in')?.value;
+    const outVal = document.getElementById('dh_edit_out')?.value;
+    if(!inVal){ toast('⚠️ وقت الدخول مطلوب'); return; }
+    try{
+      const { error } = await db.from('hr_time_logs').update({
+        clock_in: new Date(inVal).toISOString(),
+        clock_out: outVal ? new Date(outVal).toISOString() : null,
+        edited: true, edited_by: ME.full_name
+      }).eq('id', logId);
+      if(error){ toast('✗ '+error.message); return; }
+      closeModal(); toast('✓ اتعدّل السجل'); loadDutyHoursTable();
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
+  }
+  async function deleteDhLog(idx){
+    const l = (window.__DH_LOGS||[])[idx]; if(!l) return;
+    if(!confirm('⚠️ حذف سجل حضور "'+(l.employee_name||'—')+'" بتاريخ '+new Date(l.clock_in).toLocaleDateString('ar-JO')+' نهائيًا؟')) return;
+    try{
+      const { error } = await db.from('hr_time_logs').delete().eq('id', l.id);
+      if(error){ toast('✗ '+error.message); return; }
+      toast('✓ انحذف السجل'); loadDutyHoursTable();
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
+  }
+  function showDhMap(idx){
+    const l = (window.__DH_LOGS||[])[idx]; if(!l) return;
+    modal(`<h3>🗺️ موقع الدخول والخروج — ${esc(l.employee_name||'—')}</h3>
+      <div id="dhLogMap" style="height:340px;border-radius:12px;overflow:hidden;border:1.5px solid var(--line);margin-bottom:10px"></div>
+      <div class="m-act"><button class="cancel" onclick="closeModal()">إغلاق</button></div>`);
+    setTimeout(()=>{
+      if(typeof L==='undefined') return;
+      const pts = [];
+      if(l.lat_in) pts.push([l.lat_in, l.lng_in]);
+      if(l.lat_out) pts.push([l.lat_out, l.lng_out]);
+      const map = L.map('dhLogMap').setView(pts[0]||[32.5556,35.8500], 16);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap' }).addTo(map);
+      (window.__HR_LOCS||[]).forEach(loc=>{ L.circle([loc.lat,loc.lng], {radius:loc.radius_m, color:'#0d6efd', fillOpacity:.06}).addTo(map); });
+      if(l.lat_in) L.marker([l.lat_in,l.lng_in], {icon:L.divIcon({html:'🟢',iconSize:[24,24]})}).addTo(map).bindPopup('دخول');
+      if(l.lat_out) L.marker([l.lat_out,l.lng_out], {icon:L.divIcon({html:'🔴',iconSize:[24,24]})}).addTo(map).bindPopup('خروج');
+      if(pts.length>1) map.fitBounds(pts, {padding:[30,30]});
+    }, 80);
+  }
+
   async function renderHrLocations(){
     const C = document.getElementById('admContent');
     C.innerHTML = '<div class="empty-note">... جاري التحميل</div>';
