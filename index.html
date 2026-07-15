@@ -325,7 +325,33 @@
       <button onclick="window.pinKey('0')">0</button>
       <button class="pk-alt" onclick="window.pinBack()">⌫</button>
     </div>
+    <div style="text-align:center;margin-top:14px">
+      <button type="button" onclick="showEmpPortalLogin()" style="background:none;border:none;color:var(--muted);font-weight:800;font-size:.82rem;text-decoration:underline;cursor:pointer">👷 دخول الموظفين (تسجيل حضور)</button>
+    </div>
   </div>
+</div>
+
+<!-- ============ بوابة الموظف الذاتية (حضور + سلف) ============ -->
+<div id="empPortalLogin" class="hidden">
+  <div class="login-card">
+    <div class="login-logo">👷</div>
+    <div class="login-sub">بوابة الموظف — تسجيل حضور</div>
+    <div class="fld"><label>اسم المستخدم</label><input id="ep_user" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;font-size:1rem"></div>
+    <div class="fld" style="margin-top:10px"><label>الرقم السري</label><input id="ep_pin" type="password" inputmode="numeric" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;font-size:1rem"></div>
+    <div id="empLoginErr" style="color:var(--red);font-weight:700;text-align:center;margin-top:8px"></div>
+    <button onclick="empPortalLogin()" style="width:100%;margin-top:14px;background:var(--maroon);color:#fff;border:none;border-radius:12px;padding:14px;font-weight:900;font-size:1rem;cursor:pointer">دخول</button>
+    <div style="text-align:center;margin-top:12px">
+      <button type="button" onclick="document.getElementById('empPortalLogin').classList.add('hidden');document.getElementById('loginScreen').classList.remove('hidden')" style="background:none;border:none;color:var(--muted);font-weight:800;font-size:.82rem;text-decoration:underline;cursor:pointer">رجوع لدخول الكاشير</button>
+    </div>
+  </div>
+</div>
+
+<div id="empPortalApp" class="hidden" style="min-height:100vh;background:var(--cream);padding:16px;max-width:520px;margin:0 auto">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+    <div style="font-weight:900;font-size:1.1rem;color:var(--maroon)">👷 <span id="ep_name"></span></div>
+    <button onclick="empPortalLogout()" style="background:rgba(0,0,0,.1);border:none;border-radius:10px;padding:8px 14px;font-weight:800">خروج</button>
+  </div>
+  <div id="empPortalBody"></div>
 </div>
 
 <!-- ============ التطبيق ============ -->
@@ -582,6 +608,7 @@
         <button data-a="treasury" onclick="admTab('treasury')" style="background:#c8f7d4;border-color:#1a9c4b">💰 المصاري</button>
         <button data-a="hr" onclick="admTab('hr')" style="background:#ffe0c2;border-color:#e8890c">🧑‍💼 HR</button>
         <button data-a="chats" onclick="admTab('chats')" style="background:#d0ecff;border-color:#0d6efd">💬 المحادثات</button>
+        <button data-a="hrLocations" onclick="admTab('hrLocations')" style="background:#ffd9ec;border-color:#e0409a">📍 مواقع الدخول</button>
         <button data-a="ingredients" onclick="admTab('ingredients')">🥩 المكونات</button>
         <button data-a="recipes" onclick="admTab('recipes')">📋 الوصفات</button>
         <button data-a="transfers" onclick="admTab('transfers')">🔄 نقل بضاعة</button>
@@ -4365,7 +4392,7 @@
   const ADMIN_TAB_PERM = {
     items:'items_manage', cats:'cats_manage', codes:'codes_manage', staff:'staff_manage', roles:'admin_only', branches:'branches_manage', sett:'settings_manage', devices:'devices_manage',
     ingredients:'inventory_view', recipes:'inventory_view',
-    inventory:'inventory_audit', transfers:'inventory_transfer', warehouse:'admin_only', treasury:'admin_only', hr:'admin_only', chats:'admin_only', dailyAudits:'admin_only',
+    inventory:'inventory_audit', transfers:'inventory_transfer', warehouse:'admin_only', treasury:'admin_only', hr:'admin_only', chats:'admin_only', dailyAudits:'admin_only', hrLocations:'admin_only',
     expenses:'expenses_view', purchases:'purchases_view',
     platforms:'platforms_view', empmeals:'empmeals_view', topcust:'topcust_view', waste:'waste_log', suppliers:'purchases_view',
   };
@@ -4439,6 +4466,7 @@
     if(admView==='treasury'){ renderTreasury(); return; }
     if(admView==='hr'){ renderHR(); return; }
     if(admView==='chats'){ renderChatAdmin(); return; }
+    if(admView==='hrLocations'){ renderHrLocations(); return; }
     if(admView==='platforms'){ renderPlatforms(); return; }
     if(admView==='devices'){ renderDevices(); return; }
     if(admView==='empmeals'){ renderEmpMeals(); return; }
@@ -6381,7 +6409,7 @@
       HR_FILTER.from = d.toISOString().split('T')[0];
       HR_FILTER.to = new Date().toISOString().split('T')[0];
     }
-    const [empRes, attRes, advRes, ordRes, shiftAdjRes] = await Promise.all([
+    const [empRes, attRes, advRes, ordRes, shiftAdjRes, tlRes] = await Promise.all([
       db.from('meal_names').select('*').eq('is_active', true).order('name'),
       db.from('hr_attendance').select('employee_id, work_date, hours')
         .gte('work_date', HR_FILTER.from).lte('work_date', HR_FILTER.to),
@@ -6393,6 +6421,9 @@
       db.from('shift_adjustments').select('staff_name, amount, status, created_at')
         .eq('status','approved')
         .gte('created_at', HR_FILTER.from+'T00:00:00').lte('created_at', HR_FILTER.to+'T23:59:59'),
+      db.from('hr_time_logs').select('employee_id, clock_in, clock_out')
+        .not('clock_out','is',null)
+        .gte('clock_in', HR_FILTER.from+'T00:00:00').lte('clock_in', HR_FILTER.to+'T23:59:59'),
     ]);
     if(empRes.error){
       C.innerHTML = `<div class="alert-red">⚠️ ${esc(empRes.error.message||'خطأ بجلب موظفي HR')}</div>`;
@@ -6409,11 +6440,15 @@
     // 🔗 خصومات الشيفتات (عجز/زيادة) بتتربط بموظف HR إذا كان اسمه مطابق تمامًا لاسم موظف تسجيل الدخول
     // (يعني نفس الشخص كاشير ومسجّل بـHR كمان بنفس الاسم بالضبط)
     const shiftAdjustments = shiftAdjRes.data||[];
+    const timeLogs = tlRes.data||[];
 
     const rows = empList.map(e=>{
       const myAtt = attendance.filter(a=>a.employee_id===e.id);
-      const hours = myAtt.reduce((a,x)=>a+parseFloat(x.hours||0), 0);
-      const days = myAtt.length;
+      const manualHours = myAtt.reduce((a,x)=>a+parseFloat(x.hours||0), 0);
+      const myLogs = timeLogs.filter(l=>l.employee_id===e.id);
+      const portalHours = myLogs.reduce((a,l)=>a+((new Date(l.clock_out)-new Date(l.clock_in))/3600000), 0);
+      const hours = manualHours + portalHours;
+      const days = myAtt.length + myLogs.length;
       const advTotal = advances.filter(a=>a.employee_id===e.id).reduce((a,x)=>a+parseFloat(x.amount||0),0);
       const myMeals = mealOrders.filter(o=>o.employee_tab_name===e.name);
       const mealsCount = myMeals.length;
@@ -6428,6 +6463,7 @@
     window.__HR_ROWS = rows;
 
     C.innerHTML = `
+      <div id="hrAdvReqBox"></div>
       <div class="panel" style="margin-bottom:14px">
         <h3>🧑‍💼 HR — الرواتب والدوام والوجبات والسلف</h3>
         <div class="two" style="flex-wrap:wrap;gap:10px;margin-bottom:8px">
@@ -6438,14 +6474,16 @@
           <button class="mini edit" style="align-self:end" onclick="printHRPDF()">📄 PDF منسّق</button>
         </div>
         <input id="hr_search" placeholder="🔍 ابحث باسم الموظف..." value="${esc(HR_SEARCH)}" oninput="HR_SEARCH=this.value;renderHrTable()" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px">
-        <div style="color:var(--muted);font-size:.78rem;font-weight:600">💡 موظفو HR منفصلين تمامًا عن موظفي تسجيل الدخول للنظام — هدول قائمة أسماء (زي "🍽️ وجبات الموظفين") مالها علاقة بصلاحيات أو PIN. سجّل ساعات العمل يدويًا لكل واحد من زر "🕐 تسجيل ساعات".</div>
+        <div style="color:var(--muted);font-size:.78rem;font-weight:600">💡 موظفو HR منفصلين تمامًا عن موظفي تسجيل الدخول للنظام — هدول قائمة أسماء (زي "🍽️ وجبات الموظفين") مالها علاقة بصلاحيات أو PIN. سجّل ساعات العمل يدويًا لكل واحد من زر "🕐 تسجيل ساعات" (أو خليهم يسجلوا حضورهم بنفسهم من بوابة الموظف).</div>
       </div>
+      <div id="hrTimeLogsBox"></div>
 
       <div class="panel">
         <div style="margin-bottom:10px;font-weight:800">إجمالي صافي المستحق بالفترة: <span style="color:var(--red)">${fmt(totalNet)} ${CURRENCY}</span></div>
         <div id="hrTableWrap"></div>
       </div>`;
     renderHrTable();
+    renderHrAdvanceRequests();
   }
   function renderHrTable(){
     const wrap = document.getElementById('hrTableWrap'); if(!wrap) return;
@@ -6466,13 +6504,105 @@
           <td><b style="color:${r.net<0?'var(--red)':'var(--ok)'}">${fmt(r.net)} ${CURRENCY}</b></td>
           <td style="white-space:nowrap">
             <button class="mini edit" onclick="mealNameForm('${r.emp.id}')">✏️ تعديل</button>
-            <button class="mini edit" onclick="attendanceForm('${r.emp.id}','${esc(r.emp.name)}')">🕐 ساعات</button>
+            <button class="mini edit" onclick="attendanceForm('${r.emp.id}','${esc(r.emp.name)}')">🕐 ساعات يدوي</button>
+            <button class="mini tog" onclick="hrTimeLogsView('${r.emp.id}','${esc(r.emp.name)}')">📍 سجل الحضور (بوابة)</button>
             <button class="mini ok" onclick="hrAdvancesView('${r.emp.id}','${esc(r.emp.name)}')">💰 سلف</button>
             <button class="mini tog" onclick="hrStatement('${r.emp.id}')">📋 كشف</button>
             <button class="mini ok" style="background:var(--maroon)" onclick="printHrEmployeePDF('${r.emp.id}')">📄 طباعة كشف</button>
           </td>
         </tr>`).join('')||'<tr><td colspan="10" class="empty-note">ما في نتائج</td></tr>'}
       </table></div>`;
+  }
+  /* ---- طلبات السلف الذاتية من بوابة الموظف ---- */
+  async function renderHrAdvanceRequests(){
+    const box = document.getElementById('hrAdvReqBox'); if(!box) return;
+    try{
+      const { data, error } = await db.from('hr_advance_requests').select('*').eq('status','pending').order('created_at',{ascending:false});
+      if(error){ box.innerHTML=''; return; } // الجدول لسا مش موجود — تجاهل بصمت لحد ما ينفذ SQL
+      const list = data||[];
+      if(!list.length){ box.innerHTML=''; return; }
+      box.innerHTML = `<div class="panel" style="margin-bottom:14px;border:2px solid var(--warn)">
+        <h4 style="color:var(--warn);margin-bottom:8px">🧾 طلبات سلف من الموظفين (${list.length})</h4>
+        <div class="tbl-wrap"><table class="tbl">
+          <tr><th>الموظف</th><th>التاريخ</th><th>المبلغ</th><th>السبب</th><th></th></tr>
+          ${list.map(r=>`<tr>
+            <td><b>${esc(r.employee_name)}</b></td>
+            <td>${new Date(r.created_at).toLocaleString('ar-JO')}</td>
+            <td><b>${fmt(r.amount)} ${CURRENCY}</b></td>
+            <td style="font-size:.85rem;color:var(--muted)">${esc(r.note||'—')}</td>
+            <td style="white-space:nowrap">
+              <button class="mini ok" onclick="approveHrAdvanceRequest('${r.id}','${r.employee_id}','${esc(r.employee_name)}',${r.amount})">✅ موافقة</button>
+              <button class="mini del" onclick="rejectHrAdvanceRequest('${r.id}')">❌ رفض</button>
+            </td>
+          </tr>`).join('')}
+        </table></div>
+      </div>`;
+    }catch(e){ console.error(e); }
+  }
+  async function approveHrAdvanceRequest(reqId, empId, empName, amount){
+    if(!confirm('تأكيد الموافقة على سلفة '+fmt(amount)+' '+CURRENCY+' لـ'+empName+'؟')) return;
+    try{
+      const { data: adv, error } = await db.from('hr_advances').insert({
+        employee_id: empId, employee_name: empName, amount, account:'cash', note:'طلب ذاتي من بوابة الموظف', status:'open', created_by: ME.full_name
+      }).select().single();
+      if(error){ toast('✗ '+error.message); return; }
+      await addCapitalTx(-amount, 'advance', adv.id, 'سلفة موظف (طلب ذاتي) — '+empName);
+      await db.from('hr_advance_requests').update({ status:'approved', approved_by: ME.full_name, approved_at: new Date().toISOString() }).eq('id', reqId);
+      toast('✓ اتوافق على السلفة'); renderHR();
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
+  }
+  async function rejectHrAdvanceRequest(reqId){
+    if(!confirm('تأكيد رفض هالطلب؟')) return;
+    await db.from('hr_advance_requests').update({ status:'rejected', approved_by: ME.full_name, approved_at: new Date().toISOString() }).eq('id', reqId);
+    toast('✓ اترفض الطلب'); renderHR();
+  }
+
+  /* ---- سجل الحضور (بوابة الموظف) — عرض وتعديل من الأدمن بس ---- */
+  async function hrTimeLogsView(empId, empName){
+    modal(`<h3>📍 سجل الحضور — ${esc(empName)}</h3><div id="hrTlBody" class="empty-note">... جاري التحميل</div>`);
+    try{
+      const { data, error } = await db.from('hr_time_logs').select('*').eq('employee_id', empId).order('clock_in',{ascending:false}).limit(60);
+      const body = document.getElementById('hrTlBody'); if(!body) return;
+      if(error){ body.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message||'الجدول hr_time_logs غير موجود — نفّذ SQL بوابة الموظف أولاً')}</div>`; return; }
+      const logs = data||[];
+      window.__HR_TL = logs;
+      body.innerHTML = `<div class="tbl-wrap" style="max-height:400px;overflow-y:auto"><table class="tbl">
+        <tr><th>التاريخ</th><th>دخول</th><th>خروج</th><th>الساعات</th><th></th></tr>
+        ${logs.map((l,idx)=>{
+          const hrs = l.clock_out ? ((new Date(l.clock_out)-new Date(l.clock_in))/3600000).toFixed(2) : '...';
+          return `<tr>
+            <td>${new Date(l.clock_in).toLocaleDateString('ar-JO')}</td>
+            <td>${new Date(l.clock_in).toLocaleTimeString('ar-JO',{hour:'2-digit',minute:'2-digit'})}</td>
+            <td>${l.clock_out?new Date(l.clock_out).toLocaleTimeString('ar-JO',{hour:'2-digit',minute:'2-digit'}):'—'}</td>
+            <td>${hrs}</td>
+            <td><button class="mini edit" onclick="editHrTimeLog(${idx},'${empId}','${esc(empName)}')">تعديل</button></td>
+          </tr>`;
+        }).join('')||'<tr><td colspan="5" class="empty-note">ما في سجلات — الموظف لسا ما سجّل حضور من بوابته</td></tr>'}
+      </table></div>
+      <div class="m-act"><button class="cancel" onclick="closeModal()">إغلاق</button></div>`;
+    }catch(e){ const body=document.getElementById('hrTlBody'); if(body) body.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; }
+  }
+  function editHrTimeLog(idx, empId, empName){
+    const l = (window.__HR_TL||[])[idx]; if(!l) return;
+    const toLocalInput = iso => iso ? new Date(new Date(iso).getTime()-new Date().getTimezoneOffset()*60000).toISOString().slice(0,16) : '';
+    modal(`<h3>✏️ تعديل سجل حضور — ${esc(empName)}</h3>
+      <div class="fld"><label>وقت الدخول</label><input type="datetime-local" id="etl_in" value="${toLocalInput(l.clock_in)}"></div>
+      <div class="fld"><label>وقت الخروج (اتركه فاضي لو لسا مفتوح)</label><input type="datetime-local" id="etl_out" value="${toLocalInput(l.clock_out)}"></div>
+      <div class="m-act"><button class="save" onclick="saveHrTimeLogEdit('${l.id}','${empId}','${esc(empName)}')">حفظ ✓</button><button class="cancel" onclick="hrTimeLogsView('${empId}','${esc(empName)}')">رجوع</button></div>`);
+  }
+  async function saveHrTimeLogEdit(logId, empId, empName){
+    const inVal = document.getElementById('etl_in')?.value;
+    const outVal = document.getElementById('etl_out')?.value;
+    if(!inVal){ toast('⚠️ وقت الدخول مطلوب'); return; }
+    try{
+      const { error } = await db.from('hr_time_logs').update({
+        clock_in: new Date(inVal).toISOString(),
+        clock_out: outVal ? new Date(outVal).toISOString() : null,
+        edited: true, edited_by: ME.full_name
+      }).eq('id', logId);
+      if(error){ toast('✗ '+error.message); return; }
+      toast('✓ اتعدّل السجل'); hrTimeLogsView(empId, empName);
+    }catch(e){ toast('✗ '+e.message); }
   }
   function applyHrFilter(){
     HR_FILTER.from = document.getElementById('hr_from')?.value || HR_FILTER.from;
@@ -7083,6 +7213,9 @@
       <div class="fld"><label>الاسم</label><input id="mn_name" value="${esc(n.name||'')}" placeholder="مثال: أبو محمد (نظافة)"></div>
       <div class="fld"><label>نسبة خصم الوجبة %</label><input id="mn_disc" type="number" step="1" min="0" max="100" value="${n.discount_percent??20}"></div>
       <div class="fld"><label>💰 سعر ساعة العمل (${CURRENCY})</label><input id="mn_wage" type="number" step="0.01" min="0" value="${n.hourly_wage||''}" placeholder="مثال: 1.5"></div>
+      <hr style="margin:10px 0"><div style="font-weight:800;color:var(--maroon);margin-bottom:6px">👷 دخول بوابة الموظف (اختياري)</div>
+      <div class="fld"><label>اسم المستخدم</label><input id="mn_user" value="${esc(n.username||'')}" placeholder="بدون فراغات، بالإنجليزي مثلًا"></div>
+      <div class="fld"><label>الرقم السري</label><input id="mn_pin" inputmode="numeric" value="${esc(n.pin||'')}" placeholder="مثال: 1234"></div>
       ${id?`<div class="fld"><label class="chk"><input type="checkbox" id="mn_active" ${n.is_active!==false?'checked':''}> فعال</label></div>`:''}
       <div class="m-act"><button class="save" onclick="saveMealName('${id||''}')">حفظ ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
   }
@@ -7090,12 +7223,14 @@
     const name = document.getElementById('mn_name').value.trim();
     const disc = parseFloat(document.getElementById('mn_disc').value);
     const wage = parseFloat(document.getElementById('mn_wage')?.value)||0;
+    const username = document.getElementById('mn_user')?.value.trim()||null;
+    const pin = document.getElementById('mn_pin')?.value.trim()||null;
     if(!name){ toast('⚠️ الاسم مطلوب'); return; }
     if(isNaN(disc)||disc<0||disc>100){ toast('⚠️ نسبة الخصم يجب أن تكون بين 0 و100'); return; }
-    const rec = { name, discount_percent: disc, hourly_wage: wage };
+    const rec = { name, discount_percent: disc, hourly_wage: wage, username, pin };
     if(id) rec.is_active = document.getElementById('mn_active')?.checked ?? true;
     const r = id ? await db.from('meal_names').update(rec).eq('id',id) : await db.from('meal_names').insert(rec);
-    if(r.error){ toast('✗ '+r.error.message); return; }
+    if(r.error){ toast('✗ '+r.error.message+(r.error.message.includes('username')?' — اسم المستخدم هاد مستخدم لموظف تاني':'')); return; }
     closeModal(); toast('✓ انحفظ'); renderEmpMeals();
   }
 window.__lastEmpMealsData = null;
@@ -8879,6 +9014,68 @@ try {
   }
 
   /* ---- شاشة مراقبة المحادثات — للمالك بس ---- */
+  /* ================= 📍 مواقع الدخول المسموحة (Geofencing) ================= */
+  async function renderHrLocations(){
+    const C = document.getElementById('admContent');
+    C.innerHTML = '<div class="empty-note">... جاري التحميل</div>';
+    try{
+      const { data, error } = await db.from('hr_locations').select('*').order('name');
+      if(error){ C.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message||'الجدول hr_locations غير موجود — نفّذ SQL أولاً')}</div>`; return; }
+      const locs = data||[];
+      window.__HR_LOCS = locs;
+      C.innerHTML = `
+        <div class="panel" style="margin-bottom:14px">
+          <h3>📍 مواقع الدخول المسموحة</h3>
+          <div style="color:var(--muted);font-weight:700;font-size:.82rem;margin-bottom:10px">أي موظف بيسجل دخول من بوابته الخاصة، لازم يكون بنطاق أحد هالمواقع وإلا بيترفض تلقائيًا. لو ما ضفت أي موقع، ما في قيود (مسموح من أي مكان).</div>
+          <div class="tbl-wrap" style="margin-bottom:10px"><table class="tbl">
+            <tr><th>الاسم</th><th>الإحداثيات</th><th>نطاق السماح (متر)</th><th></th></tr>
+            ${locs.map(l=>`<tr>
+              <td><b>${esc(l.name)}</b></td>
+              <td style="font-size:.78rem;color:var(--muted)">${l.lat.toFixed(5)}, ${l.lng.toFixed(5)}</td>
+              <td>${l.radius_m}</td>
+              <td><button class="mini del" onclick="deleteHrLocation('${l.id}')">حذف</button></td>
+            </tr>`).join('')||'<tr><td colspan="4" class="empty-note">ما في مواقع محددة بعد</td></tr>'}
+          </table></div>
+          <div style="border-top:1.5px dashed var(--line);padding-top:10px">
+            <div style="font-weight:800;margin-bottom:6px">➕ إضافة موقع جديد</div>
+            <div class="fld"><label>اسم الموقع</label><input id="hl_name" placeholder="مثال: فرع الجامعة"></div>
+            <div class="two" style="gap:8px">
+              <div class="fld" style="flex:1"><label>Lat</label><input id="hl_lat" inputmode="decimal" readonly style="background:#f5f0e8"></div>
+              <div class="fld" style="flex:1"><label>Lng</label><input id="hl_lng" inputmode="decimal" readonly style="background:#f5f0e8"></div>
+            </div>
+            <button type="button" class="mini ok" onclick="useMyLocationForHl()" style="margin-bottom:8px">📍 استخدم موقعي الحالي (وقف بمكان العمل ودوسها)</button>
+            <div class="fld"><label>نطاق السماح (متر) — افتراضي 150</label><input id="hl_radius" type="number" min="10" value="150"></div>
+            <button class="add-btn" onclick="addHrLocation()">＋ إضافة الموقع</button>
+          </div>
+        </div>`;
+    }catch(e){ C.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
+  }
+  async function useMyLocationForHl(){
+    try{
+      toast('📍 جاري تحديد موقعك...');
+      const geo = await getGeo();
+      document.getElementById('hl_lat').value = geo.lat;
+      document.getElementById('hl_lng').value = geo.lng;
+      toast('✓ اتحدد موقعك — كمّل باقي البيانات واضغط إضافة');
+    }catch(e){ toast('⛔ '+e.message); }
+  }
+  async function addHrLocation(){
+    const name = document.getElementById('hl_name')?.value.trim();
+    const lat = parseFloat(document.getElementById('hl_lat')?.value);
+    const lng = parseFloat(document.getElementById('hl_lng')?.value);
+    const radius_m = parseFloat(document.getElementById('hl_radius')?.value)||150;
+    if(!name){ toast('⚠️ اكتب اسم الموقع'); return; }
+    if(isNaN(lat)||isNaN(lng)){ toast('⚠️ دوس "استخدم موقعي الحالي" وانت واقف بمكان العمل'); return; }
+    const { error } = await db.from('hr_locations').insert({ name, lat, lng, radius_m });
+    if(error){ toast('✗ '+error.message); return; }
+    toast('✓ اتضاف الموقع'); renderHrLocations();
+  }
+  async function deleteHrLocation(id){
+    if(!confirm('حذف هالموقع من قائمة المواقع المسموحة؟')) return;
+    await db.from('hr_locations').delete().eq('id', id);
+    renderHrLocations();
+  }
+
   async function renderChatAdmin(){
     const C = document.getElementById('admContent');
     C.innerHTML = '<div class="empty-note">... جاري التحميل</div>';
@@ -8943,6 +9140,177 @@ try {
         <button class="mini del" onclick="deleteConversation('${key}')">🗑️ حذف المحادثة</button>
         <button class="cancel" onclick="closeModal()">إغلاق</button>
       </div>`);
+  }
+
+  /* ================= 👷 بوابة الموظف الذاتية (حضور بموقع + طلبات سلف) ================= */
+  let EMP = null; // الموظف المسجّل دخوله بالبوابة حاليًا
+  let EMP_OPEN_LOG = null; // سجل الدخول المفتوح حاليًا (لو موجود)
+
+  function showEmpPortalLogin(){
+    document.getElementById('loginScreen').classList.add('hidden');
+    document.getElementById('empPortalLogin').classList.remove('hidden');
+    setTimeout(()=>document.getElementById('ep_user')?.focus(), 100);
+  }
+
+  async function empPortalLogin(){
+    const user = document.getElementById('ep_user')?.value.trim();
+    const pin = document.getElementById('ep_pin')?.value.trim();
+    const errEl = document.getElementById('empLoginErr');
+    errEl.textContent = '';
+    if(!user || !pin){ errEl.textContent = '⚠️ اكتب اسم المستخدم والرقم السري'; return; }
+    try{
+      const { data, error } = await db.from('meal_names').select('*').eq('username', user).eq('pin', pin).eq('is_active', true).maybeSingle();
+      if(error || !data){ errEl.textContent = '⛔ اسم المستخدم أو الرقم السري غلط'; return; }
+      EMP = data;
+      document.getElementById('empPortalLogin').classList.add('hidden');
+      document.getElementById('empPortalApp').classList.remove('hidden');
+      document.getElementById('ep_name').textContent = data.name;
+      await loadEmpPortal();
+    }catch(e){ console.error(e); errEl.textContent = '⚠️ صار خطأ، جرب تاني'; }
+  }
+  function empPortalLogout(){
+    EMP = null; EMP_OPEN_LOG = null;
+    document.getElementById('empPortalApp').classList.add('hidden');
+    document.getElementById('loginScreen').classList.remove('hidden');
+    document.getElementById('ep_user').value=''; document.getElementById('ep_pin').value='';
+  }
+
+  async function loadEmpPortal(){
+    const body = document.getElementById('empPortalBody');
+    body.innerHTML = '<div class="empty-note">... جاري التحميل</div>';
+    try{
+      const { data: openLog } = await db.from('hr_time_logs').select('*').eq('employee_id', EMP.id).is('clock_out', null).order('clock_in',{ascending:false}).limit(1).maybeSingle();
+      EMP_OPEN_LOG = openLog||null;
+
+      const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0,0,0,0);
+      const [logsRes, advRes, mealsRes] = await Promise.all([
+        db.from('hr_time_logs').select('*').eq('employee_id', EMP.id).gte('clock_in', monthStart.toISOString()).order('clock_in',{ascending:false}),
+        db.from('hr_advances').select('*').eq('employee_id', EMP.id).order('created_at',{ascending:false}),
+        db.from('orders').select('total, created_at').eq('employee_tab_name', EMP.name).neq('status','cancelled').gte('created_at', monthStart.toISOString()),
+      ]);
+      const logs = logsRes.data||[];
+      const closedLogs = logs.filter(l=>l.clock_out);
+      const hoursThisMonth = closedLogs.reduce((a,l)=>a+((new Date(l.clock_out)-new Date(l.clock_in))/3600000),0);
+      const adv = advRes.data||[];
+      const advOutstanding = adv.filter(a=>a.status==='open').reduce((a,x)=>a+parseFloat(x.amount||0),0);
+      const meals = mealsRes.data||[];
+      const mealsTotal = meals.reduce((a,o)=>a+parseFloat(o.total||0),0);
+      const gross = hoursThisMonth * (EMP.hourly_wage||0);
+      const net = gross - advOutstanding - mealsTotal;
+
+      const { data: reqs } = await db.from('hr_advance_requests').select('*').eq('employee_id', EMP.id).order('created_at',{ascending:false}).limit(10);
+
+      body.innerHTML = `
+        <div style="background:#fff;border-radius:16px;padding:18px;text-align:center;margin-bottom:14px;box-shadow:var(--shadow)">
+          ${EMP_OPEN_LOG ? `
+            <div style="font-weight:800;color:var(--ok);margin-bottom:10px">🟢 مسجل دخول من الساعة ${new Date(EMP_OPEN_LOG.clock_in).toLocaleTimeString('ar-JO',{hour:'2-digit',minute:'2-digit'})}</div>
+            <button onclick="empClockOut()" style="width:100%;background:var(--red);color:#fff;border:none;border-radius:14px;padding:18px;font-weight:900;font-size:1.1rem;cursor:pointer">⏹️ تسجيل خروج</button>
+          ` : `
+            <div style="font-weight:800;color:var(--muted);margin-bottom:10px">⚪ مش مسجل دخول هلأ</div>
+            <button onclick="empClockIn()" style="width:100%;background:var(--ok);color:#fff;border:none;border-radius:14px;padding:18px;font-weight:900;font-size:1.1rem;cursor:pointer">▶️ تسجيل دخول</button>
+          `}
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
+          <div class="stat">ساعات هالشهر<b>${hoursThisMonth.toFixed(1)}</b></div>
+          <div class="stat">صافي المستحق<b style="color:${net<0?'var(--red)':'var(--ok)'}">${fmt(net)} ${CURRENCY}</b></div>
+          <div class="stat">السلف القائمة<b style="color:var(--warn)">${fmt(advOutstanding)} ${CURRENCY}</b></div>
+          <div class="stat">وجبات هالشهر<b>${meals.length} <small>(${fmt(mealsTotal)})</small></b></div>
+        </div>
+
+        <button onclick="empRequestAdvanceForm()" style="width:100%;background:var(--warn);color:#fff;border:none;border-radius:12px;padding:12px;font-weight:900;margin-bottom:14px;cursor:pointer">🧾 طلب سلفة</button>
+
+        ${reqs&&reqs.length?`<div style="background:#fff;border-radius:12px;padding:12px;margin-bottom:14px">
+          <div style="font-weight:900;color:var(--maroon);margin-bottom:6px">طلبات السلف الأخيرة</div>
+          ${reqs.map(r=>`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line);font-size:.85rem">
+            <span>${fmt(r.amount)} ${CURRENCY} — ${new Date(r.created_at).toLocaleDateString('ar-JO')}</span>
+            <b style="color:${r.status==='pending'?'var(--warn)':r.status==='approved'?'var(--ok)':'var(--red)'}">${r.status==='pending'?'⏳ بانتظار':r.status==='approved'?'✅ موافق':'❌ مرفوض'}</b>
+          </div>`).join('')}
+        </div>`:''}
+
+        <div style="background:#fff;border-radius:12px;padding:12px">
+          <div style="font-weight:900;color:var(--maroon);margin-bottom:6px">سجل الحضور هالشهر</div>
+          <div style="max-height:220px;overflow-y:auto">
+            ${logs.map(l=>`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line);font-size:.82rem">
+              <span>${new Date(l.clock_in).toLocaleDateString('ar-JO')}</span>
+              <span>${new Date(l.clock_in).toLocaleTimeString('ar-JO',{hour:'2-digit',minute:'2-digit'})} → ${l.clock_out?new Date(l.clock_out).toLocaleTimeString('ar-JO',{hour:'2-digit',minute:'2-digit'}):'...'}</span>
+            </div>`).join('')||'<div class="empty-note">ما في سجلات هالشهر</div>'}
+          </div>
+        </div>`;
+    }catch(e){ console.error(e); body.innerHTML = '<div class="alert-red">⚠️ صار خطأ بالتحميل</div>'; }
+  }
+
+  function getGeo(){
+    return new Promise((resolve,reject)=>{
+      if(!navigator.geolocation){ reject(new Error('الجهاز ما بيدعم تحديد الموقع')); return; }
+      navigator.geolocation.getCurrentPosition(
+        pos=>resolve({lat:pos.coords.latitude, lng:pos.coords.longitude}),
+        err=>reject(new Error('ما قدرنا نحدد موقعك — تأكد فعّلت صلاحية الموقع للمتصفح')),
+        {enableHighAccuracy:true, timeout:15000}
+      );
+    });
+  }
+  function distMeters(lat1,lng1,lat2,lng2){
+    const R=6371000, toRad=d=>d*Math.PI/180;
+    const dLat=toRad(lat2-lat1), dLng=toRad(lng2-lng1);
+    const a=Math.sin(dLat/2)**2+Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLng/2)**2;
+    return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+  }
+  async function checkGeofence(lat,lng){
+    const { data: locs } = await db.from('hr_locations').select('*');
+    if(!locs || !locs.length) return { ok:true, name:null }; // ما في قيود محددة بعد — نسمح
+    for(const loc of locs){
+      if(distMeters(lat,lng,loc.lat,loc.lng) <= (loc.radius_m||150)) return { ok:true, name:loc.name };
+    }
+    return { ok:false, name:null };
+  }
+
+  async function empClockIn(){
+    try{
+      toast('📍 جاري تحديد موقعك...');
+      const geo = await getGeo();
+      const fence = await checkGeofence(geo.lat, geo.lng);
+      if(!fence.ok){ toast('⛔ مش مسموح تسجل دخول من هاد الموقع — لازم تكون بمكان العمل'); return; }
+      const { error } = await db.from('hr_time_logs').insert({
+        employee_id: EMP.id, employee_name: EMP.name, clock_in: new Date().toISOString(),
+        lat_in: geo.lat, lng_in: geo.lng
+      });
+      if(error){ toast('✗ '+error.message); return; }
+      toast('✅ تم تسجيل الدخول'+(fence.name?' — '+fence.name:''));
+      loadEmpPortal();
+    }catch(e){ toast('⛔ '+e.message); }
+  }
+  async function empClockOut(){
+    if(!EMP_OPEN_LOG) return;
+    try{
+      toast('📍 جاري تحديد موقعك...');
+      const geo = await getGeo();
+      const { error } = await db.from('hr_time_logs').update({
+        clock_out: new Date().toISOString(), lat_out: geo.lat, lng_out: geo.lng
+      }).eq('id', EMP_OPEN_LOG.id);
+      if(error){ toast('✗ '+error.message); return; }
+      toast('✅ تم تسجيل الخروج');
+      loadEmpPortal();
+    }catch(e){ toast('⛔ '+e.message); }
+  }
+  function empRequestAdvanceForm(){
+    modal(`<h3>🧾 طلب سلفة</h3>
+      <div class="fld"><label>المبلغ</label><input id="epa_amt" type="number" step="0.01" min="0"></div>
+      <div class="fld"><label>السبب (اختياري)</label><input id="epa_note" placeholder="اكتب سبب الطلب..."></div>
+      <div class="m-act"><button class="save" onclick="empSubmitAdvanceRequest()">إرسال الطلب ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
+  }
+  async function empSubmitAdvanceRequest(){
+    const amt = parseFloat(normalizeDigits(document.getElementById('epa_amt')?.value));
+    const note = document.getElementById('epa_note')?.value.trim();
+    if(isNaN(amt)||amt<=0){ toast('⚠️ اكتب مبلغ صحيح'); return; }
+    try{
+      const { error } = await db.from('hr_advance_requests').insert({
+        employee_id: EMP.id, employee_name: EMP.name, amount: amt, note: note||null, status:'pending'
+      });
+      if(error){ toast('✗ '+error.message); return; }
+      closeModal(); toast('✅ اترسل طلبك، بانتظار موافقة المدير');
+      loadEmpPortal();
+    }catch(e){ toast('✗ '+e.message); }
   }
 
   /* ================= PWA ================= */
