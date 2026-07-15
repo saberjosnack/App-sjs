@@ -2055,7 +2055,8 @@
     const grid = document.getElementById('itemsGrid');
     if (!grid) return;
     grid.innerHTML = list.length ? list.map(i=>
-      `<div class="item-card" onclick="addToCart('${i.id}')">
+      `<div class="item-card" onclick="addToCart('${i.id}')" style="position:relative">
+        ${i.item_type==='composite'?'<span style="position:absolute;top:4px;right:4px;background:#7b2cbf;color:#fff;border-radius:999px;padding:1px 7px;font-size:.7rem;font-weight:900;z-index:2">🧩 مركّب</span>':''}
         ${i.image_url?`<img src="${i.image_url}" class="item-img">`:''}
         <div class="nm">${esc(i.name_ar)}</div><div class="pr">${fmt(i.price)} ${CURRENCY}</div>
       </div>`).join('')
@@ -2077,23 +2078,29 @@
     modal(`<h3>🧩 ${esc(item.name_ar)}</h3><div id="compOrderBody" class="empty-note">... جاري التحميل</div>`);
     try{
       const [fixedRes, groupsRes] = await Promise.all([
-        db.from('composite_fixed').select('*, menu_items!composite_fixed_component_item_id_fkey(name_ar,unit)').eq('menu_item_id', item.id),
-        db.from('composite_groups').select('*, composite_options(*, menu_items!composite_options_component_item_id_fkey(name_ar))').eq('menu_item_id', item.id).order('sort_order'),
+        db.from('composite_fixed').select('*').eq('menu_item_id', item.id),
+        db.from('composite_groups').select('*, composite_options(*)').eq('menu_item_id', item.id).order('sort_order'),
       ]);
       const body = document.getElementById('compOrderBody'); if(!body) return;
-      if(fixedRes.error||groupsRes.error){ body.innerHTML = `<div class="alert-red">⚠️ ما قدرنا نجيب تركيبة هاد الصنف — تأكد المدير ضبطها من شاشة الأصناف</div>`; return; }
-      const fixed = fixedRes.data||[];
-      const groups = groupsRes.data||[];
+      if(fixedRes.error||groupsRes.error){ body.innerHTML = `<div class="alert-red">⚠️ ${esc((fixedRes.error||groupsRes.error).message||'ما قدرنا نجيب تركيبة هاد الصنف')}</div>`; return; }
+      const nameOf = iid => ITEMS.find(x=>x.id===iid)?.name_ar || '—';
+      const fixed = (fixedRes.data||[]).map(f=>({...f, _name: nameOf(f.component_item_id)}));
+      const groups = (groupsRes.data||[]).map(g=>({...g, composite_options:(g.composite_options||[]).map(o=>({...o, _name: nameOf(o.component_item_id)}))}));
+      if(!fixed.length && !groups.length){
+        body.innerHTML = `<div class="alert-red">⚠️ هاد الصنف معلّم "مركّب" بس ما ضبطنا له تركيبة بعد.<br>روح ⚙️ الإدارة ← الأصناف ← تعديل هاد الصنف ← "🧩 إدارة تركيبة الوجبة" وضيف المكونات.</div>
+          <div class="m-act"><button class="cancel" onclick="closeModal()">إغلاق</button></div>`;
+        return;
+      }
       window.__compOrder = { item, groups, picks: {} }; // picks[groupId][optionId] = qty
       groups.forEach(g=>{ window.__compOrder.picks[g.id] = {}; (g.composite_options||[]).forEach(o=>{ window.__compOrder.picks[g.id][o.id]=0; }); });
       body.innerHTML = `
-        ${fixed.length?`<div style="background:#fff8e1;border-radius:10px;padding:8px 12px;margin-bottom:12px;font-weight:700;font-size:.85rem">📦 ثابت مع الوجبة: ${fixed.map(f=>f.qty+'× '+esc(f.menu_items?.name_ar||'—')).join('، ')}</div>`:''}
+        ${fixed.length?`<div style="background:#fff8e1;border-radius:10px;padding:8px 12px;margin-bottom:12px;font-weight:700;font-size:.85rem">📦 ثابت مع الوجبة: ${fixed.map(f=>f.qty+'× '+esc(f._name)).join('، ')}</div>`:''}
         ${groups.map(g=>`
           <div style="margin-bottom:14px">
             <div style="font-weight:900;color:var(--maroon);margin-bottom:6px">${esc(g.name)} — اختر <span id="compRemain_${g.id}">${g.slot_count}</span> من ${g.slot_count}</div>
             ${(g.composite_options||[]).map(o=>`
               <div style="display:flex;align-items:center;justify-content:space-between;background:#fff;border:1.5px solid var(--line);border-radius:10px;padding:8px 12px;margin-bottom:6px">
-                <span style="font-weight:700">${esc(o.menu_items?.name_ar||'—')}${o.max_qty?` <small style="color:var(--muted)">(حد أقصى ${o.max_qty})</small>`:''}</span>
+                <span style="font-weight:700">${esc(o._name)}${o.max_qty?` <small style="color:var(--muted)">(حد أقصى ${o.max_qty})</small>`:''}</span>
                 <div style="display:flex;align-items:center;gap:10px">
                   <button class="mini del" onclick="compQtyChange('${g.id}','${o.id}',-1)">−</button>
                   <b id="compQty_${g.id}_${o.id}" style="min-width:20px;text-align:center">0</b>
@@ -2116,7 +2123,7 @@
     const totalPicked = Object.values(picks).reduce((a,v)=>a+v,0);
     if(delta>0){
       if(totalPicked>=group.slot_count){ toast('⚠️ خلصت العدد المسموح لـ'+group.name); return; }
-      if(opt.max_qty!=null && current>=opt.max_qty){ toast('⚠️ الحد الأقصى لـ'+(opt.menu_items?.name_ar||'')+' هو '+opt.max_qty); return; }
+      if(opt.max_qty!=null && current>=opt.max_qty){ toast('⚠️ الحد الأقصى لـ'+(opt._name||'')+' هو '+opt.max_qty); return; }
     }
     const next = current+delta;
     if(next<0) return;
@@ -2139,8 +2146,8 @@
       (g.composite_options||[]).forEach(o=>{
         const qty = st.picks[g.id][o.id]||0;
         if(qty>0){
-          composition.push({ group_id:g.id, group_name:g.name, option_id:o.id, component_item_id:o.component_item_id, name:o.menu_items?.name_ar||'—', qty });
-          descParts.push(qty+'× '+(o.menu_items?.name_ar||'—'));
+          composition.push({ group_id:g.id, group_name:g.name, option_id:o.id, component_item_id:o.component_item_id, name:o._name||'—', qty });
+          descParts.push(qty+'× '+(o._name||'—'));
         }
       });
     });
@@ -3095,6 +3102,15 @@
 
   /* ================= 💰 المصاري (كاش + بنك) ================= */
   // account: 'cash' | 'bank' — amount: موجب = دخول، سالب = خروج
+  // 🏦 رأس المال — محفظة المالك المنفصلة والتراكمية، مالها علاقة بمصاري أي فرع
+  async function addCapitalTx(amount, type, refId, note, sourceBranchId){
+    try{
+      await db.from('capital_transactions').insert({
+        amount, type, ref_id: refId||null, note: note||null, created_by: ME?.full_name||null, source_branch_id: sourceBranchId||null
+      });
+    }catch(e){ console.error('addCapitalTx failed (تأكد من تنفيذ SQL جدول capital_transactions):', e); }
+  }
+
   async function addTreasuryTx(account, amount, type, refId, note, branchId){
     try{
       await db.from('treasury_transactions').insert({
@@ -4371,7 +4387,7 @@
       try {
         const {data}=await db.from('menu_items').select('*').order('sort_order');
         ITEMS=data||[];
-        C.innerHTML=`<button class="add-btn" onclick="itemForm()">＋ إضافة صنف</button><div class="tbl-wrap"><table class="tbl"><tr><th>الصنف</th><th>التصنيف</th><th>السعر</th><th>الحالة</th><th></th></tr>${ITEMS.map(i=>`<tr class="${i.is_available?'':'off'}"><td>${esc(i.name_ar)}</td><td>${esc(i.category||'—')}</td><td>${fmt(i.price)}</td><td>${i.is_available?'✅ ظاهر':'🚫 مخفي'}</td><td style="white-space:nowrap"><button class="mini edit" onclick="itemForm('${i.id}')">تعديل</button><button class="mini tog" onclick="toggleItem('${i.id}',${!i.is_available})">${i.is_available?'إخفاء':'إظهار'}</button></td></tr>`).join('')||'<tr><td colspan="5" class="empty-note">ما في أصناف</td></tr>'}</table></div>`;
+        C.innerHTML=`<button class="add-btn" onclick="itemForm()">＋ إضافة صنف</button><div class="tbl-wrap"><table class="tbl"><tr><th>الصنف</th><th>التصنيف</th><th>السعر</th><th>الحالة</th><th></th></tr>${ITEMS.map(i=>`<tr class="${i.is_available?'':'off'}"><td>${esc(i.name_ar)}${i.item_type==='composite'?' 🧩':''}</td><td>${esc(i.category||'—')}</td><td>${fmt(i.price)}</td><td>${i.is_available?'✅ ظاهر':'🚫 مخفي'}</td><td style="white-space:nowrap"><button class="mini edit" onclick="itemForm('${i.id}')">تعديل</button><button class="mini tog" onclick="toggleItem('${i.id}',${!i.is_available})">${i.is_available?'إخفاء (أرشفة)':'إظهار'}</button><button class="mini del" onclick="deleteMenuItem('${i.id}','${esc(i.name_ar)}')">حذف نهائي</button></td></tr>`).join('')||'<tr><td colspan="5" class="empty-note">ما في أصناف</td></tr>'}</table></div>`;
       } catch(e) { console.error(e); }
     }
     if(admView==='cats'){
@@ -6197,7 +6213,8 @@
         employee_id: empId, employee_name: empName, amount: amt, account: acc, note: note||null, status:'open', created_by: ME.full_name
       }).select().single();
       if(error){ toast('✗ '+error.message); console.error(error); return; }
-      await addTreasuryTx(acc, -amt, 'advance', adv.id, 'سلفة موظف — '+empName);
+      // 🏦 السلف بتخصم من رأس المال (محفظة المالك)، مش من مصاري فرع معيّن
+      await addCapitalTx(-amt, 'advance', adv.id, 'سلفة موظف — '+empName);
       toast('✓ اتسجلت السلفة'); hrAdvancesView(empId, empName);
     }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
@@ -6207,7 +6224,7 @@
       const { data: adv } = await db.from('hr_advances').select('*').eq('id', advId).single();
       if(!adv) return;
       await db.from('hr_advances').update({ status:'repaid', repaid_at: new Date().toISOString() }).eq('id', advId);
-      await addTreasuryTx(adv.account, +adv.amount, 'advance_repay', advId, 'تسديد سلفة — '+empName);
+      await addCapitalTx(+adv.amount, 'advance', advId, 'تسديد سلفة — '+empName);
       toast('✓ اتسددت السلفة'); hrAdvancesView(empId, empName);
     }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
@@ -6471,10 +6488,70 @@
     }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
 
+  async function backfillTreasuryBranches(){
+    if(!confirm('⚠️ هاد بيدور على كل حركات المصاري (مبيعات ومشتريات) اللي ما إلها فرع محدد، ويربطها بفرع الفاتورة الأصلية.\nمتأكد؟')) return;
+    try{
+      const { data: noBranch, error } = await db.from('treasury_transactions').select('id, type, ref_id').is('branch_id', null).not('ref_id','is',null).in('type',['sale','purchase']);
+      if(error){ toast('✗ '+error.message); console.error(error); return; }
+      const list = noBranch||[];
+      if(!list.length){ toast('✓ ما في حركات ناقصها فرع'); return; }
+      const saleIds = list.filter(t=>t.type==='sale').map(t=>t.ref_id);
+      const purIds = list.filter(t=>t.type==='purchase').map(t=>t.ref_id);
+      const [ordRes, purRes] = await Promise.all([
+        saleIds.length ? db.from('orders').select('id, branch_id').in('id', saleIds) : {data:[]},
+        purIds.length ? db.from('purchases').select('id, branch_id').in('id', purIds) : {data:[]},
+      ]);
+      const ordMap = {}; (ordRes.data||[]).forEach(o=>ordMap[o.id]=o.branch_id);
+      const purMap = {}; (purRes.data||[]).forEach(p=>purMap[p.id]=p.branch_id);
+      let fixed = 0;
+      for(const t of list){
+        const branchId = t.type==='sale' ? ordMap[t.ref_id] : purMap[t.ref_id];
+        if(branchId){
+          await db.from('treasury_transactions').update({ branch_id: branchId }).eq('id', t.id);
+          fixed++;
+        }
+      }
+      toast(`✓ اتصلح فرع ${fixed} حركة من أصل ${list.length}`);
+      renderTreasury();
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
+  }
+
+  async function sweepBranchesToCapital(){
+    if(!isAdmin()){ toast('⛔ صلاحية المالك فقط'); return; }
+    if(!confirm('🔁 هاد بيصفّر رصيد كل فرع (كاش وبنك) وينقل المبلغ كامل لـ"رأس المال" — مناسب تعمله آخر اليوم بعد إغلاق كل الشيفتات.\nمتأكد؟')) return;
+    try{
+      const { data: allTx, error } = await db.from('treasury_transactions').select('*');
+      if(error){ toast('✗ '+error.message); console.error(error); return; }
+      const brName = id => id ? (BRANCHES.find(b=>b.id===id)?.name_ar || 'فرع محذوف') : 'عام (بدون فرع محدد)';
+      const byBranch = {};
+      (allTx||[]).forEach(t=>{
+        const key = t.branch_id||'__none__';
+        if(!byBranch[key]) byBranch[key] = {cash:0, bank:0};
+        byBranch[key][t.account] = (byBranch[key][t.account]||0) + parseFloat(t.amount||0);
+      });
+      let swept = 0, totalSwept = 0;
+      for(const [branchId, d] of Object.entries(byBranch)){
+        const total = (d.cash||0) + (d.bank||0);
+        if(Math.abs(total) < 0.005) continue;
+        const realBranchId = branchId==='__none__' ? null : branchId;
+        if(d.cash && Math.abs(d.cash)>=0.005) await addTreasuryTx('cash', -d.cash, 'sweep_out', null, 'ترحيل لرأس المال', realBranchId);
+        if(d.bank && Math.abs(d.bank)>=0.005) await addTreasuryTx('bank', -d.bank, 'sweep_out', null, 'ترحيل لرأس المال', realBranchId);
+        await addCapitalTx(total, 'sweep_in', null, 'ترحيل من '+brName(realBranchId), realBranchId);
+        swept++; totalSwept += total;
+      }
+      if(!swept){ toast('✓ ما في مصاري بالفروع تحتاج ترحيل — كله صفر أصلًا'); return; }
+      toast(`✓ اترحّل ${fmt(totalSwept)} ${CURRENCY} من ${swept} فرع لرأس المال`);
+      renderTreasury();
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
+  }
+
   /* ================= شاشة المصاري ================= */
   let TR_FILTER = { from:'', to:'', account:'', type:'' };
   const TR_TYPE_AR = {
-    purchase:'🛒 فاتورة شراء', manual_in:'➕ إيداع يدوي', manual_out:'➖ سحب يدوي', expense:'💸 مصروف', sale:'🧾 مبيعات', advance:'🧑‍🍳 سلفة موظف', advance_repay:'✅ تسديد سلفة',
+    purchase:'🛒 فاتورة شراء', manual_in:'➕ إيداع يدوي', manual_out:'➖ سحب يدوي', expense:'💸 مصروف', sale:'🧾 مبيعات', advance:'🧑‍🍳 سلفة موظف', advance_repay:'✅ تسديد سلفة', sweep_out:'🔁 ترحيل لرأس المال',
+  };
+  const CAP_TYPE_AR = {
+    sweep_in:'🔁 ترحيل من فرع', manual_in:'➕ إيداع يدوي', manual_out:'➖ سحب يدوي', advance:'🧑‍🍳 سلفة موظف',
   };
   async function renderTreasury(){
     const C = document.getElementById('admContent');
@@ -6489,14 +6566,20 @@
       C.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message||'الجدول treasury_transactions غير موجود — نفّذ SQL أولاً')}</div>`;
       console.error(error); return;
     }
+    const { data: capTx, error: capErr } = await db.from('capital_transactions').select('*').order('created_at',{ascending:false});
+    const capitalList = capErr ? [] : (capTx||[]);
+    const capitalBalance = capitalList.reduce((a,t)=>a+parseFloat(t.amount||0),0);
+    const capitalToday = capitalList.filter(t=>t.created_at.split('T')[0]===new Date().toISOString().split('T')[0]).reduce((a,t)=>a+parseFloat(t.amount||0),0);
+
     const all = allTx||[];
     const cashBalance = all.filter(t=>t.account==='cash').reduce((a,t)=>a+parseFloat(t.amount||0),0);
     const bankBalance = all.filter(t=>t.account==='bank').reduce((a,t)=>a+parseFloat(t.amount||0),0);
 
-    // 🏪 تفصيل كل فرع لحاله (تراكمي كل الوقت) — الحركات يلي مالها فرع محدد (سلف/إيداعات يدوية عامة) بتنحسب تحت "عام"
+    // 🏪 تفصيل كل فرع لحاله (بالفترة المحددة بالفلتر) — الحركات يلي مالها فرع محدد بتنحسب تحت "عام"
     const brName = id => id ? (BRANCHES.find(b=>b.id===id)?.name_ar || 'فرع محذوف') : 'عام (بدون فرع محدد)';
+    const brDateFiltered = all.filter(t=>{ const d=t.created_at.split('T')[0]; return d>=TR_FILTER.from && d<=TR_FILTER.to; });
     const byBranch = {};
-    all.forEach(t=>{
+    brDateFiltered.forEach(t=>{
       const b = brName(t.branch_id);
       if(!byBranch[b]) byBranch[b] = {cash:0, bank:0};
       byBranch[b][t.account] = (byBranch[b][t.account]||0) + parseFloat(t.amount||0);
@@ -6516,14 +6599,38 @@
     if(TR_FILTER.type) filtered = filtered.filter(t=>t.type===TR_FILTER.type);
 
     C.innerHTML = `
+      <div class="panel" style="margin-bottom:14px;border:3px solid var(--maroon);background:linear-gradient(135deg,#fff8e1,#fff)">
+        <h3 style="color:var(--maroon);margin-bottom:8px">🏦 رأس المال (محفظة المالك — تراكمي، مستقل عن الفروع)</h3>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+          <div class="stat" style="flex:1;min-width:180px">💰 رصيد رأس المال الحالي<b style="color:${capitalBalance<0?'var(--red)':'var(--ok)'};font-size:1.3rem">${fmt(capitalBalance)} ${CURRENCY}</b></div>
+          <div class="stat" style="flex:1;min-width:180px">📅 حركة اليوم<b style="color:${capitalToday<0?'var(--red)':'var(--ok)'}">${capitalToday>0?'+':''}${fmt(capitalToday)} ${CURRENCY}</b></div>
+        </div>
+        <button class="mini ok" style="background:var(--maroon)" onclick="sweepBranchesToCapital()">🔁 ترحيل مصاري كل الفروع لرأس المال (نهاية اليوم)</button>
+        <details style="margin-top:10px"><summary style="cursor:pointer;font-weight:800;color:var(--muted)">📜 عرض حركات رأس المال بالتفصيل</summary>
+          <div class="tbl-wrap" style="margin-top:8px"><table class="tbl">
+            <tr><th>التاريخ</th><th>النوع</th><th>المبلغ</th><th>ملاحظة</th><th>من فرع</th></tr>
+            ${capitalList.slice(0,100).map(t=>`<tr>
+              <td>${new Date(t.created_at).toLocaleString('ar-JO')}</td>
+              <td>${CAP_TYPE_AR[t.type]||t.type}</td>
+              <td><b style="color:${t.amount<0?'var(--red)':'var(--ok)'}">${t.amount>0?'+':''}${fmt(t.amount)}</b></td>
+              <td style="font-size:.85rem;color:var(--muted)">${esc(t.note||'—')}</td>
+              <td>${t.source_branch_id?esc(brName(t.source_branch_id)):'—'}</td>
+            </tr>`).join('')||'<tr><td colspan="5" class="empty-note">ما في حركات بعد</td></tr>'}
+          </table></div>
+        </details>
+      </div>
+
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">
-        <div class="stat" style="flex:1;min-width:180px">💵 رصيد الكاش<b style="color:${cashBalance<0?'var(--red)':'var(--ok)'}">${fmt(cashBalance)} ${CURRENCY}</b></div>
-        <div class="stat" style="flex:1;min-width:180px">🏦 رصيد البنك/كليك<b style="color:${bankBalance<0?'var(--red)':'var(--ok)'}">${fmt(bankBalance)} ${CURRENCY}</b></div>
+        <div class="stat" style="flex:1;min-width:180px">💵 رصيد كاش الفروع (تشغيلي)<b style="color:${cashBalance<0?'var(--red)':'var(--ok)'}">${fmt(cashBalance)} ${CURRENCY}</b></div>
+        <div class="stat" style="flex:1;min-width:180px">🏦 رصيد بنك/كليك الفروع<b style="color:${bankBalance<0?'var(--red)':'var(--ok)'}">${fmt(bankBalance)} ${CURRENCY}</b></div>
         <div class="stat" style="flex:1;min-width:180px">🔴 ديون على المطعم (فواتير غير مدفوعة)<b style="color:var(--red)">${fmt(totalDebt)} ${CURRENCY}</b></div>
       </div>
 
       <div class="panel" style="margin-bottom:14px">
-        <h4 style="color:var(--maroon);margin-bottom:8px">🏪 المصاري حسب الفرع (تراكمي)</h4>
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+          <h4 style="color:var(--maroon);margin:0">🏪 المصاري حسب الفرع (تشغيلي — بالفترة المحددة بالفلتر تحت)</h4>
+          <span style="font-size:.8rem;color:var(--muted);font-weight:700">${TR_FILTER.from} → ${TR_FILTER.to}</span>
+        </div>
         <div class="tbl-wrap"><table class="tbl">
           <tr><th>الفرع</th><th>كاش</th><th>بنك/كليك</th><th>الإجمالي</th></tr>
           ${Object.entries(byBranch).map(([b,d])=>`<tr>
@@ -6531,15 +6638,16 @@
             <td>${fmt(d.cash||0)}</td>
             <td>${fmt(d.bank||0)}</td>
             <td><b style="color:${(d.cash+d.bank)<0?'var(--red)':'var(--ok)'}">${fmt((d.cash||0)+(d.bank||0))} ${CURRENCY}</b></td>
-          </tr>`).join('')||'<tr><td colspan="4" class="empty-note">لا شي</td></tr>'}
+          </tr>`).join('')||'<tr><td colspan="4" class="empty-note">لا شي بهاي الفترة</td></tr>'}
         </table></div>
       </div>
 
       <div class="panel" style="margin-bottom:14px">
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
-          <button class="add-btn" style="margin:0" onclick="treasuryManualForm('in')">➕ إيداع يدوي (المالك حط مصاري)</button>
-          <button class="add-btn" style="margin:0;background:var(--warn)" onclick="treasuryManualForm('out')">➖ سحب يدوي (المالك سحب مصاري)</button>
+          <button class="add-btn" style="margin:0" onclick="treasuryManualForm('in')">➕ إيداع يدوي (لرأس المال)</button>
+          <button class="add-btn" style="margin:0;background:var(--warn)" onclick="treasuryManualForm('out')">➖ سحب يدوي (من رأس المال)</button>
           <button class="mini ok" style="background:var(--maroon)" onclick="backfillTodaySales()">🔄 ترحيل كل مبيعات اليوم (مرة وحدة)</button>
+          <button class="mini ok" style="background:#7b2cbf" onclick="backfillTreasuryBranches()">🏪 إصلاح فروع الحركات القديمة (مرة وحدة)</button>
         </div>
         <div class="two" style="flex-wrap:wrap;gap:10px">
           <div><label style="font-weight:700;font-size:.82rem">من تاريخ</label><br><input type="date" id="tr_from" value="${TR_FILTER.from}" class="dfield"></div>
@@ -6587,20 +6695,18 @@
     renderTreasury();
   }
   function treasuryManualForm(dir){
-    modal(`<h3>${dir==='in'?'➕ إيداع يدوي':'➖ سحب يدوي'}</h3>
-      <div class="fld"><label>الحساب</label>
-        <select id="tm_acc"><option value="cash">💵 كاش</option><option value="bank">🏦 بنك/كليك</option></select></div>
+    modal(`<h3>${dir==='in'?'➕ إيداع يدوي (لرأس المال)':'➖ سحب يدوي (من رأس المال)'}</h3>
+      <div style="color:var(--muted);font-weight:700;font-size:.82rem;margin-bottom:8px">هاي الحركة بتروح مباشرة لـ🏦 رأس المال (محفظة المالك) — مش مرتبطة بفرع معيّن.</div>
       <div class="fld"><label>المبلغ</label><input id="tm_amt" type="number" step="0.01" min="0"></div>
       <div class="fld"><label>السبب</label><input id="tm_note" placeholder="مثال: المالك حط رأس مال، سحب أرباح..."></div>
       <div class="m-act"><button class="save" onclick="saveTreasuryManual('${dir}')">حفظ ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
   }
   async function saveTreasuryManual(dir){
-    const acc = document.getElementById('tm_acc')?.value||'cash';
     const amt = parseFloat(document.getElementById('tm_amt')?.value);
     const note = document.getElementById('tm_note')?.value.trim();
     if(isNaN(amt)||amt<=0){ toast('⚠️ اكتب مبلغ صحيح'); return; }
-    await addTreasuryTx(acc, dir==='in'?amt:-amt, dir==='in'?'manual_in':'manual_out', null, note||null);
-    closeModal(); toast('✓ اتسجلت الحركة'); renderTreasury();
+    await addCapitalTx(dir==='in'?amt:-amt, dir==='in'?'manual_in':'manual_out', null, note||null);
+    closeModal(); toast('✓ اتسجلت الحركة برأس المال'); renderTreasury();
   }
   function printTreasuryPDF(){
     const filtered = window.__TR_FILTERED||[];
@@ -8015,21 +8121,22 @@ try {
     const body = document.getElementById('compBody'); if(!body) return;
     try{
       const [fixedRes, groupsRes] = await Promise.all([
-        db.from('composite_fixed').select('*, menu_items!composite_fixed_component_item_id_fkey(name_ar)').eq('menu_item_id', itemId),
-        db.from('composite_groups').select('*, composite_options(*, menu_items!composite_options_component_item_id_fkey(name_ar))').eq('menu_item_id', itemId).order('sort_order'),
+        db.from('composite_fixed').select('*').eq('menu_item_id', itemId),
+        db.from('composite_groups').select('*, composite_options(*)').eq('menu_item_id', itemId).order('sort_order'),
       ]);
       if(fixedRes.error || groupsRes.error){
         body.innerHTML = `<div class="alert-red">⚠️ ${esc((fixedRes.error||groupsRes.error).message||'الجداول غير موجودة — نفّذ SQL أولاً')}</div>`;
         return;
       }
-      const fixed = fixedRes.data||[];
-      const groups = groupsRes.data||[];
+      const nameOf = iid => ITEMS.find(x=>x.id===iid)?.name_ar || '—';
+      const fixed = (fixedRes.data||[]).map(f=>({...f, _name: nameOf(f.component_item_id)}));
+      const groups = (groupsRes.data||[]).map(g=>({...g, composite_options:(g.composite_options||[]).map(o=>({...o, _name: nameOf(o.component_item_id)}))}));
       window.__COMP_ITEM = { id: itemId, name: itemName };
       body.innerHTML = `
         <div style="font-weight:900;color:var(--maroon);margin-bottom:6px">📦 مكونات ثابتة (ما بتتغيّر — زي بطاطا 4 وببسي 2)</div>
         <div class="tbl-wrap" style="margin-bottom:8px"><table class="tbl">
           <tr><th>الصنف</th><th>الكمية</th><th></th></tr>
-          ${fixed.map(f=>`<tr><td>${esc(f.menu_items?.name_ar||'—')}</td><td>${f.qty}</td><td><button class="mini del" onclick="deleteCompFixed('${f.id}')">حذف</button></td></tr>`).join('')||'<tr><td colspan="3" class="empty-note">ما في مكونات ثابتة بعد</td></tr>'}
+          ${fixed.map(f=>`<tr><td>${esc(f._name)}</td><td>${f.qty}</td><td><button class="mini edit" onclick="editCompFixed('${f.id}',${f.qty})">تعديل</button> <button class="mini del" onclick="deleteCompFixed('${f.id}')">حذف</button></td></tr>`).join('')||'<tr><td colspan="3" class="empty-note">ما في مكونات ثابتة بعد</td></tr>'}
         </table></div>
         <div style="display:flex;gap:6px;margin-bottom:16px">
           <select id="cf_item" style="flex:1;border:1.5px solid var(--line);border-radius:8px;padding:6px">
@@ -8054,10 +8161,13 @@ try {
     return `<div style="border:1.5px solid var(--line);border-radius:12px;padding:10px 12px;margin-bottom:10px;background:#fff">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
         <b>${esc(g.name)} — ${g.slot_count} حبة إجمالي</b>
-        <button class="mini del" onclick="deleteCompGroup('${g.id}')">حذف المجموعة</button>
+        <span>
+          <button class="mini edit" onclick="editCompGroupSlots('${g.id}',${g.slot_count})">تعديل العدد</button>
+          <button class="mini del" onclick="deleteCompGroup('${g.id}')">حذف المجموعة</button>
+        </span>
       </div>
       <table class="tbl"><tr><th>الخيار</th><th>حد أقصى</th><th></th></tr>
-        ${opts.map(o=>`<tr><td>${esc(o.menu_items?.name_ar||'—')}</td><td>${o.max_qty??'بدون حد'}</td><td><button class="mini del" onclick="deleteCompOption('${o.id}')">حذف</button></td></tr>`).join('')||'<tr><td colspan="3" class="empty-note">ما في خيارات بعد</td></tr>'}
+        ${opts.map(o=>`<tr><td>${esc(o._name)}</td><td>${o.max_qty??'بدون حد'}</td><td><button class="mini edit" onclick="editCompOption('${o.id}',${o.max_qty??'null'})">تعديل</button> <button class="mini del" onclick="deleteCompOption('${o.id}')">حذف</button></td></tr>`).join('')||'<tr><td colspan="3" class="empty-note">ما في خيارات بعد</td></tr>'}
       </table>
       <div style="display:flex;gap:6px;margin-top:6px">
         <select id="co_item_${g.id}" style="flex:1;border:1.5px solid var(--line);border-radius:8px;padding:6px">
@@ -8080,6 +8190,37 @@ try {
   async function deleteCompFixed(id){
     const it = window.__COMP_ITEM; if(!it) return;
     await db.from('composite_fixed').delete().eq('id', id);
+    loadCompositeData(it.id, it.name);
+  }
+  async function editCompFixed(id, current){
+    const it = window.__COMP_ITEM; if(!it) return;
+    const val = prompt('الكمية الجديدة:', current);
+    if(val===null) return;
+    const qty = parseFloat(normalizeDigits(val));
+    if(isNaN(qty)||qty<=0){ toast('⚠️ رقم غير صحيح'); return; }
+    const { error } = await db.from('composite_fixed').update({ qty }).eq('id', id);
+    if(error){ toast('✗ '+error.message); return; }
+    loadCompositeData(it.id, it.name);
+  }
+  async function editCompGroupSlots(id, current){
+    const it = window.__COMP_ITEM; if(!it) return;
+    const val = prompt('العدد الإجمالي الجديد للمجموعة:', current);
+    if(val===null) return;
+    const slots = parseInt(normalizeDigits(val));
+    if(isNaN(slots)||slots<=0){ toast('⚠️ رقم غير صحيح'); return; }
+    const { error } = await db.from('composite_groups').update({ slot_count: slots }).eq('id', id);
+    if(error){ toast('✗ '+error.message); return; }
+    loadCompositeData(it.id, it.name);
+  }
+  async function editCompOption(id, current){
+    const it = window.__COMP_ITEM; if(!it) return;
+    const val = prompt('الحد الأقصى الجديد (اتركه فاضي = بدون حد):', current===null||current===undefined?'':current);
+    if(val===null) return;
+    const trimmed = normalizeDigits(val).trim();
+    const max_qty = trimmed==='' ? null : parseInt(trimmed);
+    if(trimmed!=='' && (isNaN(max_qty)||max_qty<=0)){ toast('⚠️ رقم غير صحيح'); return; }
+    const { error } = await db.from('composite_options').update({ max_qty }).eq('id', id);
+    if(error){ toast('✗ '+error.message); return; }
     loadCompositeData(it.id, it.name);
   }
   async function addCompGroup(){
@@ -8113,6 +8254,16 @@ try {
   }
 
   async function toggleItem(id,v){ try { const r=await db.from('menu_items').update({is_available:v}).eq('id',id); if(r.error){toast('✗ '+r.error.message);console.error(r.error);return;} toast(v?'✓ ظاهر':'✓ مخفي'); renderAdmin(); bootData(); } catch(e) { toast('✗ '+e.message); console.error(e); } }
+  async function deleteMenuItem(id, name){
+    if(!isAdmin()){ toast('⛔ صلاحية المالك فقط'); return; }
+    if(!confirm('⚠️ حذف "'+name+'" نهائيًا؟\nإذا الصنف له طلبات سابقة، الأفضل تستخدم "إخفاء (أرشفة)" بدل الحذف عشان التقارير القديمة تضل سليمة.\nمتابعة الحذف النهائي؟')) return;
+    try{
+      const { error } = await db.from('menu_items').delete().eq('id', id);
+      if(error){ toast('✗ '+error.message+' — جرب "إخفاء (أرشفة)" بدلًا من الحذف'); console.error(error); return; }
+      await logActivity('delete_item', 'حذف صنف: '+name);
+      toast('✓ انحذف الصنف'); renderAdmin(); bootData();
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
+  }
   function catForm(id){ const list=window.__ALLCATS||CATS; const c=list.find(x=>x.id===id)||{}; modal(`<h3>${id?'تعديل تصنيف':'تصنيف جديد'}</h3><div class="fld"><label>اسم التصنيف</label><input id="f_cn" value="${esc(c.name_ar||'')}"></div><div class="fld"><label>الترتيب</label><input id="f_cs" inputmode="numeric" value="${c.sort_order??0}"></div><div class="m-act"><button class="save" onclick="saveCat('${id||''}')">حفظ</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`); }
   async function saveCat(id){
     const f_cn = document.getElementById('f_cn');
