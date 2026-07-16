@@ -20,7 +20,7 @@
     }
     *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
     html{overflow-y:auto;height:auto}
-    html, body{ overscroll-behavior-y: none; }
+    html, body{ overscroll-behavior-y: contain; }
     body{font-family:'Cairo',sans-serif;background:var(--cream);color:var(--ink);min-height:100vh;overflow-y:auto;height:auto}
     button{font-family:inherit;cursor:pointer;border:none;background:none}
     input,select{font-family:inherit;font-size:1rem}
@@ -814,9 +814,15 @@
   document.addEventListener('click', unlockAudioOnce);
   document.addEventListener('touchstart', unlockAudioOnce);
 
-  // 🔒 منع إيماءة "اسحب للتحديث" (Pull-to-refresh) — صار بالـCSS فقط (overscroll-behavior-y:none)
-  // ⚠️ الكود القديم كان يعمل preventDefault على touchmove وهاد هو يلي كان يمنع الشاشة تطلع وتنزل نهائيًا
-  // على بعض الأجهزة/الويب فيو — انحذف بالكامل والمنع صار بالـCSS الآمن يلي ما بيأثر على السكرول
+  // 🔒 منع إيماءة "اسحب للتحديث" (Pull-to-refresh) — هاي كانت تسبب تعليق/هنج للسستم
+  // على الموبايل لأنها بتعمل reload خام للصفحة بينقطع فيه اتصال قاعدة البيانات بمنتصف عملية
+  let __ptrStartY = 0;
+  document.addEventListener('touchstart', e=>{ __ptrStartY = e.touches[0].clientY; }, {passive:true});
+  document.addEventListener('touchmove', e=>{
+    const atTop = (window.scrollY||document.documentElement.scrollTop||0) <= 0;
+    const pullingDown = e.touches[0].clientY - __ptrStartY > 0;
+    if(atTop && pullingDown && e.cancelable) e.preventDefault();
+  }, {passive:false});
   const TONE_PRESETS = {
     classic: { wave:'sawtooth', freq:1200 },
     soft:    { wave:'sine',     freq:800  },
