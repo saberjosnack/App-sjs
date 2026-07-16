@@ -20,6 +20,7 @@
     }
     *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
     html{overflow-y:auto;height:auto}
+    html, body{ overscroll-behavior-y: contain; }
     body{font-family:'Cairo',sans-serif;background:var(--cream);color:var(--ink);min-height:100vh;overflow-y:auto;height:auto}
     button{font-family:inherit;cursor:pointer;border:none;background:none}
     input,select{font-family:inherit;font-size:1rem}
@@ -812,6 +813,16 @@
   }
   document.addEventListener('click', unlockAudioOnce);
   document.addEventListener('touchstart', unlockAudioOnce);
+
+  // 🔒 منع إيماءة "اسحب للتحديث" (Pull-to-refresh) — هاي كانت تسبب تعليق/هنج للسستم
+  // على الموبايل لأنها بتعمل reload خام للصفحة بينقطع فيه اتصال قاعدة البيانات بمنتصف عملية
+  let __ptrStartY = 0;
+  document.addEventListener('touchstart', e=>{ __ptrStartY = e.touches[0].clientY; }, {passive:true});
+  document.addEventListener('touchmove', e=>{
+    const atTop = (window.scrollY||document.documentElement.scrollTop||0) <= 0;
+    const pullingDown = e.touches[0].clientY - __ptrStartY > 0;
+    if(atTop && pullingDown && e.cancelable) e.preventDefault();
+  }, {passive:false});
   const TONE_PRESETS = {
     classic: { wave:'sawtooth', freq:1200 },
     soft:    { wave:'sine',     freq:800  },
@@ -1435,7 +1446,7 @@
         <option value="58" ${localStorage.getItem('sjs_paper_width')==='58'?'selected':''}>58 مم (صغير)</option>
       </select></div>
       <label class="chk" style="display:flex;align-items:center;gap:8px;margin:10px 0">
-        <input type="checkbox" id="dps_autoPrint" ${SETTINGS.auto_print_branch?'checked':''}> 🔔 طباعة تلقائية لطلبات فرع هاد الجهاز
+        <input type="checkbox" id="dps_autoPrint" ${SETTINGS.auto_print_branch!==false?'checked':''}> 🔔 طباعة تلقائية لطلبات فرع هاد الجهاز
       </label>
       <div class="m-act">
         <button class="save" onclick="saveDevicePrinterSettings()">حفظ ✓</button>
@@ -1586,7 +1597,8 @@
   };
   async function doStartShift(openingValue, openingCard, openingCliq){
     const _bsel = document.getElementById('branchSel')?.value;
-    const branch_id = ME.branch_id || _bsel || null;
+    const isBranchFree = ME.role==='admin' || ME.role==='callcenter';
+    const branch_id = isBranchFree ? (_bsel || null) : (ME.branch_id || _bsel || null);
 
     try {
       const { error: checkError } = await db.from('cash_shifts').select('id').limit(1);
@@ -1649,9 +1661,15 @@
         .select('total, subtotal, discount, delivery_fee, payment_method, order_type, status, split_details, cancel_reason, order_items(item_name, quantity, unit_price)')
         .eq('shift_id', currentShift.id);
       const all = orders || [];
-      const ok = all.filter(o=>o.status!=='cancelled');
       const cancelled = all.filter(o=>o.status==='cancelled');
-      const sum = k => ok.reduce((a,o)=>a+parseFloat(o[k]||0),0);
+      // 🧾 الذمم (حساب موظف آجل) — منفصلة تمامًا عن حساب المبيعات، بتتعرض لحالها بس للمرجعية
+      const dhemam = all.filter(o=>o.status!=='cancelled' && o.payment_method==='employee_tab');
+      const ok = all.filter(o=>o.status!=='cancelled' && o.payment_method!=='employee_tab');
+      // 💰 المبيعات الحقيقية = بدون الذمم وبدون أجور التوصيل (يلي بتروح للسائق مش إلنا) — كاش/كرت/كليك بس
+      const sum = k => ok.reduce((a,o)=>{
+        const delFee = o.order_type==='delivery' ? parseFloat(o.delivery_fee||0) : 0;
+        return a + (k==='total' ? Math.max(0, parseFloat(o.total||0)-delFee) : parseFloat(o[k]||0));
+      }, 0);
       // أكثر الأصناف مبيعًا بهاد الشيفت
       const itemTally = {};
       ok.forEach(o=>(o.order_items||[]).forEach(l=>{
@@ -1702,6 +1720,7 @@
         topItems,
         delCount: ok.filter(o=>o.order_type==='delivery').length,
         takeCount: ok.filter(o=>o.order_type==='takeaway').length,
+        dhemamCount: dhemam.length, dhemamTotal: dhemam.reduce((a,o)=>a+parseFloat(o.total||0),0),
         opening, cashSales, expected, counted: countedValue, diff,
         openingCard, cardSales, expectedCard, countedCard, diffCard,
         openingCliq, cliqSales, expectedCliq, countedCliq, diffCliq,
@@ -1751,6 +1770,9 @@
       hr{border:none;border-top:1px dashed #000;margin:5px 0}
       table{width:100%;border-collapse:collapse} td{padding:2px 0} .tl{text-align:left}
       .big td{font-size:14px;font-weight:900}
+      .diffbox{border:3px solid #000;padding:6px;margin:4px 0;text-align:center}
+      .diffbox.bad{background:#000;color:#fff}
+      .diffbox b{font-size:18px}
       </style></head><body>
       <h2>تقرير إغلاق شيفت</h2>
       <div class="c">Saber Jo Snack — ${br?esc(br.name_ar):''}</div>
@@ -1765,14 +1787,13 @@
         <tr><td>عدد الطلبات</td><td class="tl">${r.count}</td></tr>
         <tr><td>استلام / توصيل</td><td class="tl">${r.takeCount} / ${r.delCount}</td></tr>
         <tr><td>الخصومات</td><td class="tl">${fmt(r.discount)}</td></tr>
-        <tr><td>أجور التوصيل</td><td class="tl">${fmt(r.delivery)}</td></tr>
         <tr><td>طلبات ملغية</td><td class="tl">${r.cancelled}</td></tr>
       </table>
       <hr>
       <table>
-        ${Object.entries(r.byPay).map(([k,v])=>`<tr><td>${PAY_AR[k]||k}</td><td class="tl">${fmt(v)}</td></tr>`).join('')}
+        ${Object.entries(r.byPay).filter(([k])=>k!=='employee_tab').map(([k,v])=>`<tr><td>${PAY_AR[k]||k}</td><td class="tl">${fmt(v)}</td></tr>`).join('')}
         ${r.withdrawalsTotal>0?`<tr style="color:#c00"><td colspan="2"><b>سحوبات من الدرج:</b></td></tr>${r.drawerWithdrawals.map(w=>`<tr><td>${esc(w.title||w.description||'—')}</td><td class="tl">−${fmt(w.amount)} (${w.approval_status==='approved'?'موافق عليه':w.approval_status==='rejected'?'مرفوض':'بانتظار الموافقة'})</td></tr>`).join('')}`:''}
-        <tr class="big"><td>إجمالي المبيعات</td><td class="tl">${fmt(r.total)} ${CURRENCY}</td></tr>
+        <tr class="big"><td>= إجمالي المبيعات (بدون ذمم ولا توصيل)</td><td class="tl">${fmt(r.total)} ${CURRENCY}</td></tr>
       </table>
       <hr>
       <table>
@@ -1780,28 +1801,33 @@
         <tr><td>مبيعات كاش</td><td class="tl">${fmt(r.cashSales)}</td></tr>
         <tr><td>المتوقع بالدرج</td><td class="tl">${fmt(r.expected)}</td></tr>
         <tr><td>المعدود فعليًا</td><td class="tl">${fmt(r.counted)}</td></tr>
-        <tr class="big"><td>${r.diff<-0.005?'⚠️ عجز كاش':r.diff>0.005?'⚠️ زيادة كاش':'✓ كاش مطابق'}</td><td class="tl">${fmt(Math.abs(r.diff))} ${CURRENCY}</td></tr>
       </table>
+      <div class="diffbox ${r.diff<-0.005?'bad':''}">${r.diff<-0.005?'⚠️ عجز كاش ⚠️':r.diff>0.005?'🔺 زيادة كاش':'✓ كاش مطابق'}<br><b>${fmt(Math.abs(r.diff))} ${CURRENCY}</b></div>
       <hr>
       <table>
         <tr><td>مبيعات فيزا/كرت</td><td class="tl">${fmt(r.cardSales)}</td></tr>
         <tr><td>المتوقع فيزا</td><td class="tl">${fmt(r.expectedCard)}</td></tr>
         <tr><td>المعدود فيزا</td><td class="tl">${fmt(r.countedCard)}</td></tr>
-        <tr class="big"><td>${r.diffCard<-0.005?'⚠️ عجز فيزا':r.diffCard>0.005?'⚠️ زيادة فيزا':'✓ فيزا مطابق'}</td><td class="tl">${fmt(Math.abs(r.diffCard))} ${CURRENCY}</td></tr>
       </table>
+      <div class="diffbox ${r.diffCard<-0.005?'bad':''}">${r.diffCard<-0.005?'⚠️ عجز فيزا ⚠️':r.diffCard>0.005?'🔺 زيادة فيزا':'✓ فيزا مطابق'}<br><b>${fmt(Math.abs(r.diffCard))} ${CURRENCY}</b></div>
       <hr>
       <table>
         <tr><td>مبيعات كليك</td><td class="tl">${fmt(r.cliqSales)}</td></tr>
         <tr><td>المتوقع كليك</td><td class="tl">${fmt(r.expectedCliq)}</td></tr>
         <tr><td>المعدود كليك</td><td class="tl">${fmt(r.countedCliq)}</td></tr>
-        <tr class="big"><td>${r.diffCliq<-0.005?'⚠️ عجز كليك':r.diffCliq>0.005?'⚠️ زيادة كليك':'✓ كليك مطابق'}</td><td class="tl">${fmt(Math.abs(r.diffCliq))} ${CURRENCY}</td></tr>
       </table>
+      <div class="diffbox ${r.diffCliq<-0.005?'bad':''}">${r.diffCliq<-0.005?'⚠️ عجز كليك ⚠️':r.diffCliq>0.005?'🔺 زيادة كليك':'✓ كليك مطابق'}<br><b>${fmt(Math.abs(r.diffCliq))} ${CURRENCY}</b></div>
       ${r.totalDiff!==undefined?`<hr>
       <table>
         <tr><td>المجموع الكلي المتوقع</td><td class="tl">${fmt(r.totalExpected)}</td></tr>
         <tr><td>المجموع الكلي المعدود</td><td class="tl">${fmt(r.totalCounted)}</td></tr>
-        <tr class="big" style="border:2px solid #000"><td>${Math.abs(r.totalDiff)<0.005?'✅ المطابقة الإجمالية: تمام':r.totalDiff<0?'🔴 عجز إجمالي':'🟡 زيادة إجمالية'}</td><td class="tl">${fmt(Math.abs(r.totalDiff))} ${CURRENCY}</td></tr>
-      </table>`:''}
+      </table>
+      <div class="diffbox ${r.totalDiff<-0.005?'bad':''}">${Math.abs(r.totalDiff)<0.005?'✅ المطابقة الإجمالية: تمام':r.totalDiff<0?'🔴🔴 عجز إجمالي 🔴🔴':'🟡 زيادة إجمالية'}<br><b>${fmt(Math.abs(r.totalDiff))} ${CURRENCY}</b></div>`:''}
+      ${(r.dhemamCount>0)?`<hr>
+      <div class="c"><b>🧾 ذمم موظفين (حساب آجل — غير محسوبة أعلاه)</b></div>
+      <table><tr><td>العدد</td><td class="tl">${r.dhemamCount}</td></tr><tr><td>القيمة</td><td class="tl">${fmt(r.dhemamTotal)} ${CURRENCY}</td></tr></table>`:''}
+      ${(r.delivery>0)?`<hr>
+      <div class="c" style="color:#666"><small>ℹ️ أجور توصيل هالشيفت (لا تخص المطعم): ${fmt(r.delivery)} ${CURRENCY}</small></div>`:''}
       ${(r.topItems&&r.topItems.length)?`<hr>
       <div class="c"><b>🔝 الأكثر مبيعًا</b></div>
       <table>${r.topItems.map(([nm,d])=>`<tr><td>${esc(nm)}</td><td class="tl">${d.qty}× — ${fmt(d.total)}</td></tr>`).join('')}</table>`:''}
@@ -1820,30 +1846,31 @@
       'عدد الطلبات: '+r.count+'\n'+
       'استلام/توصيل: '+r.takeCount+' / '+r.delCount+'\n'+
       'الخصومات: '+fmt(r.discount)+'\n'+
-      'أجور التوصيل: '+fmt(r.delivery)+'\n'+
       'طلبات ملغية: '+r.cancelled+'\n'+
       '────────────────\n'+
-      Object.entries(r.byPay).map(([k,v])=>(PAY_AR[k]||k)+': '+fmt(v)).join('\n')+'\n'+
+      Object.entries(r.byPay).filter(([k])=>k!=='employee_tab').map(([k,v])=>(PAY_AR[k]||k)+': '+fmt(v)).join('\n')+'\n'+
       (r.withdrawalsTotal>0?('────────────────\n'+
         'سحوبات من الدرج (إجمالي '+fmt(r.withdrawalsTotal)+'):\n'+
         r.drawerWithdrawals.map(w=>'  • '+(w.title||w.description||'—')+': −'+fmt(w.amount)+' '+CURRENCY+' — '+(w.approval_status==='approved'?'موافق عليه':w.approval_status==='rejected'?'مرفوض':'بانتظار الموافقة')).join('\n')+'\n'):'')+
-      'إجمالي المبيعات: '+fmt(r.total)+' '+CURRENCY+'\n'+
+      '= إجمالي المبيعات (بدون ذمم ولا توصيل): '+fmt(r.total)+' '+CURRENCY+'\n'+
       '────────────────\n'+
       'افتتاحي الدرج (كاش): '+fmt(r.opening)+'\n'+
       'مبيعات كاش: '+fmt(r.cashSales)+'\n'+
       'المتوقع بالدرج: '+fmt(r.expected)+'\n'+
       'المعدود فعليًا: '+fmt(r.counted)+'\n'+
-      (r.diff<-0.005?'⚠️ عجز كاش: ':r.diff>0.005?'⚠️ زيادة كاش: ':'✓ كاش مطابق: ')+fmt(Math.abs(r.diff))+' '+CURRENCY+'\n'+
+      (r.diff<-0.005?'⚠️⚠️ عجز كاش ⚠️⚠️: ':r.diff>0.005?'🔺 زيادة كاش: ':'✓ كاش مطابق: ')+fmt(Math.abs(r.diff))+' '+CURRENCY+'\n'+
       '────────────────\n'+
       'مبيعات فيزا: '+fmt(r.cardSales)+' | المتوقع: '+fmt(r.expectedCard)+' | المعدود: '+fmt(r.countedCard)+'\n'+
-      (r.diffCard<-0.005?'⚠️ عجز فيزا: ':r.diffCard>0.005?'⚠️ زيادة فيزا: ':'✓ فيزا مطابق: ')+fmt(Math.abs(r.diffCard))+' '+CURRENCY+'\n'+
+      (r.diffCard<-0.005?'⚠️⚠️ عجز فيزا ⚠️⚠️: ':r.diffCard>0.005?'🔺 زيادة فيزا: ':'✓ فيزا مطابق: ')+fmt(Math.abs(r.diffCard))+' '+CURRENCY+'\n'+
       '────────────────\n'+
       'مبيعات كليك: '+fmt(r.cliqSales)+' | المتوقع: '+fmt(r.expectedCliq)+' | المعدود: '+fmt(r.countedCliq)+'\n'+
-      (r.diffCliq<-0.005?'⚠️ عجز كليك: ':r.diffCliq>0.005?'⚠️ زيادة كليك: ':'✓ كليك مطابق: ')+fmt(Math.abs(r.diffCliq))+' '+CURRENCY+'\n'+
+      (r.diffCliq<-0.005?'⚠️⚠️ عجز كليك ⚠️⚠️: ':r.diffCliq>0.005?'🔺 زيادة كليك: ':'✓ كليك مطابق: ')+fmt(Math.abs(r.diffCliq))+' '+CURRENCY+'\n'+
       (r.totalDiff!==undefined?('────────────────\n'+
         'المجموع الكلي المتوقع: '+fmt(r.totalExpected)+'\n'+
         'المجموع الكلي المعدود: '+fmt(r.totalCounted)+'\n'+
-        (Math.abs(r.totalDiff)<0.005?'✅ المطابقة الإجمالية: تمام\n':(r.totalDiff<0?'🔴 عجز إجمالي: ':'🟡 زيادة إجمالية: ')+fmt(Math.abs(r.totalDiff))+' '+CURRENCY+'\n')):'')+
+        (Math.abs(r.totalDiff)<0.005?'✅ المطابقة الإجمالية: تمام\n':(r.totalDiff<0?'🔴🔴 عجز إجمالي 🔴🔴: ':'🟡 زيادة إجمالية: ')+fmt(Math.abs(r.totalDiff))+' '+CURRENCY+'\n')):'')+
+      (r.dhemamCount>0?('────────────────\n🧾 ذمم موظفين (آجل — غير محسوبة أعلاه): '+r.dhemamCount+' — '+fmt(r.dhemamTotal)+' '+CURRENCY+'\n'):'')+
+      (r.delivery>0?('ℹ️ أجور توصيل هالشيفت (مش إلنا): '+fmt(r.delivery)+' '+CURRENCY+'\n'):'')+
       ((r.topItems&&r.topItems.length)?('────────────────\n🔝 الأكثر مبيعًا:\n'+r.topItems.map(([nm,d])=>'  • '+nm+': '+d.qty+'× — '+fmt(d.total)).join('\n')+'\n'):'')+
       ((r.cancelledOrders&&r.cancelledOrders.length)?('────────────────\n❌ الطلبات الملغية ('+r.cancelledOrders.length+'):\n'+r.cancelledOrders.map(o=>'  • '+fmt(o.total)+' '+CURRENCY+' — '+(o.cancel_reason||'بدون سبب')).join('\n')+'\n'):'')+
       '════════════════\n'+
@@ -2027,7 +2054,7 @@
       if(!ME) return;
       const scopeBranchId = ME.branch_id || getDeviceBranchId(); // فرع حساب الموظف (لو ثابت) أهم دايمًا، وفرع الجهاز احتياطي بس لحسابات بدون فرع (مدير/كول سنتر)
       if(!scopeBranchId) return;                      // بس أجهزة مرتبطة بفرع معيّن
-      if(!SETTINGS.auto_print_branch) return;         // لازم تكون مفعّلة من الإعدادات بهاد الجهاز
+      if(SETTINGS.auto_print_branch===false) return;  // 🔧 مفعّلة افتراضيًا الآن — بتوقف بس لو المستخدم عطّلها صراحة (مش لو الإعداد ضاع بمسح الكاش)
       const { data, error } = await db.from('orders')
         .select('*, order_items(*), customers(name, phone, address)')
         .eq('branch_id', scopeBranchId)
@@ -2261,7 +2288,10 @@
     const custAddr = document.getElementById('custAddr')?.value.trim()||'';
     const delFee = document.getElementById('delFee')?.value||'';
     const orderNote = document.getElementById('orderNote')?.value.trim()||'';
-    const branchId = ME.branch_id || document.getElementById('branchSel')?.value || BRANCHES[0]?.id;
+    // 🔒 مهم: الإدارة والسنتر ما بيتقيّدوا بفرعهم المسجّل بحسابهم إطلاقًا (حتى لو محدد بالغلط) —
+    // دايمًا بيعتمدوا على القائمة يلي يختاروها يدويًا، عشان يقدروا يطلبوا لأي فرع بيدهم
+    const isBranchFree = ME.role==='admin' || ME.role==='callcenter';
+    const branchId = isBranchFree ? (document.getElementById('branchSel')?.value || BRANCHES[0]?.id) : (ME.branch_id || document.getElementById('branchSel')?.value || BRANCHES[0]?.id);
     const ticketData = {
       cart: cart.map(l=>({ itemId:l.item.id, name:l.item.name_ar, price:l.item.price, qty:l.qty, note:l.note||'', noteBy:l.noteBy||null })),
       orderType, payMethod, custPhone, custName, custAddr, delFee, orderNote,
@@ -3779,7 +3809,7 @@
       if(!ME) return;
       const scopeBranchId = ME.branch_id || getDeviceBranchId();
       if(!scopeBranchId) return;
-      if(!SETTINGS.auto_print_branch) return;
+      if(SETTINGS.auto_print_branch===false) return;
       const { data, error } = await db.from('print_requests')
         .select('id, order_id, orders(*, order_items(*), customers(name,phone,address))')
         .eq('target_branch_id', scopeBranchId)
@@ -4140,7 +4170,7 @@
     const grandTotal = ok.reduce((a,o)=>a+parseFloat(o.total||0),0);
     const delivery = ok.filter(o=>o.order_type==='delivery');
     const takeaway = ok.filter(o=>o.order_type==='takeaway');
-    const avgOrder = ok.length?grandTotal/ok.length:0;
+    const avgOrder = ok.length?netItemsSales/ok.length:0;
     const label = document.getElementById('repDateLabel')?.textContent || '';
 
     const text = 'تقرير المبيعات\n'+
@@ -4149,15 +4179,13 @@
       '════════════════\n'+
       'مبيعات الأصناف (قبل الخصم): '+fmt(gross)+' '+CURRENCY+'\n'+
       'الخصومات: '+fmt(discounts)+' '+CURRENCY+'\n'+
-      'صافي مبيعات الأصناف: '+fmt(netItemsSales)+' '+CURRENCY+'\n'+
-      'أجور التوصيل: '+fmt(deliveryTotal)+' '+CURRENCY+'\n'+
-      'إجمالي الفواتير المحصّلة: '+fmt(grandTotal)+' '+CURRENCY+'\n'+
+      'صافي المبيعات: '+fmt(netItemsSales)+' '+CURRENCY+'\n'+
       'وجبات الموظفين (مستبعدة من فوق): '+mealsOrders.length+' ('+fmt(mealsTotal)+')\n'+
       'عدد الطلبات: '+ok.length+'\n'+
       'متوسط الفاتورة: '+fmt(avgOrder)+' '+CURRENCY+'\n'+
       'طلبات ملغاة: '+cancelled.length+'\n'+
-      'توصيل: '+delivery.length+' ('+fmt(delivery.reduce((a,o)=>a+parseFloat(o.total||0),0))+')\n'+
-      'استلام: '+takeaway.length+' ('+fmt(takeaway.reduce((a,o)=>a+parseFloat(o.total||0),0))+')\n'+
+      'توصيل: '+delivery.length+'\n'+
+      'استلام: '+takeaway.length+'\n'+
       '════════════════\n';
 
     const htmlFallback = document.getElementById('salesKPI')?.outerHTML
@@ -4185,25 +4213,22 @@
     const discounts=ok.reduce((a,o)=>a+parseFloat(o.discount||0),0);
     const netItemsSales=itemsSales-discounts; // 💡 هاد هو "الصافي" الحقيقي — مبيعات الأصناف بعد خصم الخصومات، قبل ما نضيف التوصيل
     const deliveryTotal=ok.reduce((a,o)=>a+parseFloat(o.delivery_fee||0),0);
-    const grandTotal=ok.reduce((a,o)=>a+parseFloat(o.total||0),0); // = netItemsSales + deliveryTotal — إجمالي الفاتورة الكلي (مش "صافي"، لأنه بيكبر بإضافة التوصيل)
     const delivery=ok.filter(o=>o.order_type==='delivery');
     const takeaway=ok.filter(o=>o.order_type==='takeaway');
-    const avgOrder=ok.length?grandTotal/ok.length:0;
+    const avgOrder=ok.length?netItemsSales/ok.length:0;
     const byBranch={};
-    ok.forEach(o=>{ const b=BRANCHES.find(x=>x.id===o.branch_id)?.name_ar||'—'; byBranch[b]=(byBranch[b]||0)+parseFloat(o.total||0); });
+    ok.forEach(o=>{ const b=BRANCHES.find(x=>x.id===o.branch_id)?.name_ar||'—'; byBranch[b]=(byBranch[b]||0)+(parseFloat(o.total||0)-(o.order_type==='delivery'?parseFloat(o.delivery_fee||0):0)); });
     K.innerHTML = `
-      <div style="color:var(--muted);font-weight:700;font-size:.78rem;margin-bottom:6px">💡 سلسلة الحساب: مبيعات الأصناف − الخصومات = صافي المبيعات، وبعدين + أجور التوصيل = إجمالي الفواتير المحصّلة (وجبات الموظفين مستبعدة ومحسوبة لحالها تحت)</div>
+      <div style="color:var(--muted);font-weight:700;font-size:.78rem;margin-bottom:6px">💡 سلسلة الحساب: مبيعات الأصناف − الخصومات = صافي المبيعات (أجور التوصيل ووجبات الموظفين مستبعدة تمامًا من كل الأرقام)</div>
       <div class="day-head" style="margin-bottom:10px">
         <div class="stat">مبيعات الأصناف (قبل الخصم)<b>${fmt(itemsSales)} ${CURRENCY}</b></div>
         <div class="stat">الخصومات (−)<b style="color:var(--warn)">${fmt(discounts)} ${CURRENCY}</b></div>
-        <div class="stat">= صافي مبيعات الأصناف<b style="color:var(--maroon)">${fmt(netItemsSales)} ${CURRENCY}</b></div>
-        <div class="stat">أجور التوصيل (+)<b style="color:var(--ok)">${fmt(deliveryTotal)} ${CURRENCY}</b></div>
-        <div class="stat">= إجمالي الفواتير المحصّلة<b style="color:var(--red)">${fmt(grandTotal)} ${CURRENCY}</b></div>
+        <div class="stat">= صافي المبيعات<b style="color:var(--red)">${fmt(netItemsSales)} ${CURRENCY}</b></div>
         <div class="stat">عدد الطلبات<b>${ok.length}</b></div>
         <div class="stat">متوسط الفاتورة<b>${fmt(avgOrder)} ${CURRENCY}</b></div>
         <div class="stat">طلبات ملغاة<b style="color:var(--red)">${cancelled.length}</b></div>
-        <div class="stat">توصيل<b>${delivery.length} <small>(${fmt(delivery.reduce((a,o)=>a+parseFloat(o.total||0),0))})</small></b></div>
-        <div class="stat">استلام<b>${takeaway.length} <small>(${fmt(takeaway.reduce((a,o)=>a+parseFloat(o.total||0),0))})</small></b></div>
+        <div class="stat">توصيل<b>${delivery.length}</b></div>
+        <div class="stat">استلام<b>${takeaway.length}</b></div>
       </div>
       <div class="day-head" style="margin-bottom:10px">
         <div class="stat" style="border:1.5px solid var(--muted)">🍽️ وجبات الموظفين (مستبعدة من كل الأرقام فوق)<b>${mealsOrders.length} <small>(${fmt(mealsTotal)})</small></b></div>
@@ -4551,9 +4576,29 @@
         <div class="fld"><label>🔌 المنفذ</label><input id="f_printerPort" inputmode="numeric" value="${esc(SETTINGS.printer_port||'9100')}"></div>
         <div class="fld" style="background:#fff8e1;border-radius:10px;padding:10px 12px">
           <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
-            <input type="checkbox" id="f_autoPrintBranch" ${SETTINGS.auto_print_branch?'checked':''} style="width:18px;height:18px">
+            <input type="checkbox" id="f_autoPrintBranch" ${SETTINGS.auto_print_branch!==false?'checked':''} style="width:18px;height:18px">
             🔔 طباعة تلقائية لطلبات الكول سنتر بهاد الفرع (فعّلها بس بجهاز الكاشير المتصل بالطابعة)
           </label>
+        </div>
+
+        <hr style="margin:16px 0"><h4 style="color:var(--maroon)">🤖 قراءة فواتير الموردين بالذكاء الاصطناعي</h4>
+        <div style="color:var(--muted);font-size:.78rem;font-weight:600;margin-bottom:8px">مفتاح API تبعك من <a href="https://platform.claude.com/dashboard" target="_blank">platform.claude.com/dashboard</a> — بينحفظ بقاعدة البيانات، وزر المسح نفسه رح يضاف بفاتورة الشراء بجلسة جاية.</div>
+        <div class="fld"><label class="chk"><input type="checkbox" id="f_aiEnabled" ${SETTINGS.ai_invoice_enabled?'checked':''}> فعّل قراءة الفواتير بالذكاء الاصطناعي</label></div>
+        <div class="fld"><label>مفتاح API (Anthropic)</label><input id="f_aiKey" type="password" value="${esc(SETTINGS.ai_api_key||'')}" placeholder="sk-ant-..." autocomplete="off"></div>
+        <div class="fld"><label>الموديل</label><select id="f_aiModel">
+          <option value="claude-sonnet-5" ${(!SETTINGS.ai_model||SETTINGS.ai_model==='claude-sonnet-5')?'selected':''}>Claude Sonnet 5 (متوازن — موصى فيه)</option>
+          <option value="claude-opus-4-8" ${SETTINGS.ai_model==='claude-opus-4-8'?'selected':''}>Claude Opus 4.8 (الأدق — أغلى)</option>
+          <option value="claude-haiku-4-5-20251001" ${SETTINGS.ai_model==='claude-haiku-4-5-20251001'?'selected':''}>Claude Haiku 4.5 (الأسرع والأرخص)</option>
+        </select></div>
+
+        <hr style="margin:16px 0"><h4 style="color:var(--maroon)">👷 بوابة الموظف — شو يشوف الموظف من بياناته</h4>
+        <div style="color:var(--muted);font-size:.78rem;font-weight:600;margin-bottom:8px">بتطبّق على كل موظفي HR مع بعض</div>
+        <div class="fld" style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+          <label class="chk"><input type="checkbox" id="f_hrShowHours" ${SETTINGS.hr_portal_show_hours!==false?'checked':''}> ساعات العمل</label>
+          <label class="chk"><input type="checkbox" id="f_hrShowNet" ${SETTINGS.hr_portal_show_net!==false?'checked':''}> صافي المستحق</label>
+          <label class="chk"><input type="checkbox" id="f_hrShowAdvances" ${SETTINGS.hr_portal_show_advances!==false?'checked':''}> السلف القائمة</label>
+          <label class="chk"><input type="checkbox" id="f_hrShowMeals" ${SETTINGS.hr_portal_show_meals!==false?'checked':''}> الوجبات</label>
+          <label class="chk"><input type="checkbox" id="f_hrShowBalance" ${SETTINGS.hr_portal_show_balance!==false?'checked':''}> الرصيد السابق</label>
         </div>
         ${window.SJSPrinter?`
         <div class="fld"><label>🔵 طابعة البلوتوث (لوضع تطبيق أندرويد — بلوتوث)</label>
@@ -4933,9 +4978,13 @@
       .select('total, subtotal, discount, delivery_fee, payment_method, order_type, status, split_details, cancel_reason, order_items(item_name, quantity, unit_price)')
       .eq('shift_id', sh.id);
     const all = orders||[];
-    const ok = all.filter(o=>o.status!=='cancelled');
     const cancelledOrders = all.filter(o=>o.status==='cancelled');
-    const sum = k => ok.reduce((a,o)=>a+parseFloat(o[k]||0),0);
+    const dhemam = all.filter(o=>o.status!=='cancelled' && o.payment_method==='employee_tab');
+    const ok = all.filter(o=>o.status!=='cancelled' && o.payment_method!=='employee_tab');
+    const sum = k => ok.reduce((a,o)=>{
+      const delFee = o.order_type==='delivery' ? parseFloat(o.delivery_fee||0) : 0;
+      return a + (k==='total' ? Math.max(0, parseFloat(o.total||0)-delFee) : parseFloat(o[k]||0));
+    }, 0);
     const byPay = {}; ok.forEach(o=>{
       const delFee = o.order_type==='delivery' ? parseFloat(o.delivery_fee||0) : 0;
       if(o.payment_method==='split' && o.split_details){
@@ -4970,6 +5019,7 @@
       cancelled: cancelledOrders.length, cancelledOrders, topItems,
       delCount: ok.filter(o=>o.order_type==='delivery').length,
       takeCount: ok.filter(o=>o.order_type==='takeaway').length,
+      dhemamCount: dhemam.length, dhemamTotal: dhemam.reduce((a,o)=>a+parseFloat(o.total||0),0),
       opening, cashSales, expected, counted, diff: counted-expected,
       openingCard, cardSales, expectedCard, countedCard, diffCard: countedCard-expectedCard,
       openingCliq, cliqSales, expectedCliq, countedCliq, diffCliq: countedCliq-expectedCliq,
@@ -5474,6 +5524,12 @@
         <option value="__new__">+ مورد جديد (اكتب اسمه تحت)</option>
       </select>
       <input id="fp_sup_new" class="hidden" placeholder="اسم المورد الجديد" style="margin-top:6px"></div>
+      ${(SETTINGS.ai_invoice_enabled && SETTINGS.ai_api_key)?`
+      <div class="fld" style="background:#f0e6ff;border-radius:10px;padding:10px 12px">
+        <button type="button" class="mini ok" style="background:#7b2cbf;width:100%" onclick="document.getElementById('fp_ai_file').click()">📷 مسح الفاتورة بالذكاء الاصطناعي</button>
+        <input type="file" id="fp_ai_file" accept="image/*" capture="environment" class="hidden" onchange="scanInvoiceWithAI(this)">
+        <div id="fp_ai_status" style="font-size:.8rem;color:var(--muted);font-weight:700;margin-top:6px"></div>
+      </div>`:''}
       <div class="fld"><label>المواد المشتراة</label>
         <div id="pi_list">${piRow(0)}</div>
         <button type="button" class="mini ok" style="margin-top:6px" onclick="addPiRow()">＋ إضافة مادة</button></div>
@@ -5496,16 +5552,83 @@
       <div class="fld"><label>ملاحظات</label><input id="fp_note" placeholder="اختياري"></div>
       <div class="m-act"><button class="save" onclick="savePurchase()">حفظ ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
   }
-  function piRow(idx){
+  function piRow(idx, prefill){
+    prefill = prefill || {};
+    const matchedIngId = prefill.name ? (INGR.find(i=>i.name.trim()===prefill.name.trim())||INGR.find(i=>i.name.includes(prefill.name)||prefill.name.includes(i.name)))?.id : '';
     return `<div class="two" style="margin-bottom:6px" id="pi_row_${idx}">
-      <select class="pi_ing" style="flex:2;border:1.5px solid var(--line);border-radius:10px;padding:7px 10px">
-        <option value="">المادة...</option>${INGR.map(i=>`<option value="${i.id}">${esc(i.name)} (${esc(i.unit)})</option>`).join('')}
-      </select>
-      <input class="pi_qty" type="number" step="0.01" placeholder="الكمية" style="flex:1;border:1.5px solid var(--line);border-radius:10px;padding:7px 10px">
-      <input class="pi_uc" type="number" step="0.01" placeholder="السعر/وحدة" style="flex:1;border:1.5px solid var(--line);border-radius:10px;padding:7px 10px">
+      <div style="flex:2">
+        ${(prefill.name && !matchedIngId)?`<div style="font-size:.72rem;color:var(--red);font-weight:800;margin-bottom:2px">🤖 "${esc(prefill.name)}" — ما لقيتلها مادة مطابقة، اختر يدويًا:</div>`:''}
+        ${(prefill.name && matchedIngId)?`<div style="font-size:.72rem;color:var(--ok);font-weight:800;margin-bottom:2px">🤖 من الفاتورة: "${esc(prefill.name)}"</div>`:''}
+        <select class="pi_ing" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:7px 10px">
+          <option value="">المادة...</option>${INGR.map(i=>`<option value="${i.id}" ${i.id===matchedIngId?'selected':''}>${esc(i.name)} (${esc(i.unit)})</option>`).join('')}
+        </select>
+      </div>
+      <input class="pi_qty" type="number" step="0.01" placeholder="الكمية" value="${prefill.quantity??''}" style="flex:1;border:1.5px solid var(--line);border-radius:10px;padding:7px 10px">
+      <input class="pi_uc" type="number" step="0.01" placeholder="السعر/وحدة" value="${prefill.unit_cost??''}" style="flex:1;border:1.5px solid var(--line);border-radius:10px;padding:7px 10px">
       <button type="button" class="mini del" onclick="document.getElementById('pi_row_${idx}').remove()">✗</button></div>`;
   }
   function addPiRow(){document.getElementById('pi_list').insertAdjacentHTML('beforeend',piRow(++piIdx));}
+  async function scanInvoiceWithAI(input){
+    const file = input.files?.[0]; if(!file) return;
+    const statusEl = document.getElementById('fp_ai_status');
+    statusEl.textContent = '⏳ جاري قراءة الفاتورة بالذكاء الاصطناعي...';
+    try{
+      const base64 = await new Promise((resolve,reject)=>{
+        const r = new FileReader();
+        r.onload = ()=>resolve(r.result.split(',')[1]);
+        r.onerror = reject;
+        r.readAsDataURL(file);
+      });
+      const mediaType = file.type || 'image/jpeg';
+      const prompt = `هاي صورة فاتورة شراء من مورد لمطعم. اقرأها واستخرج المعلومات التالية بصيغة JSON فقط (بدون أي نص إضافي قبلها أو بعدها، بدون markdown fences):
+{"supplier": "اسم المورد المكتوب بالفاتورة أو null إذا مش واضح", "date": "التاريخ بصيغة YYYY-MM-DD أو null إذا مش واضح", "items": [{"name": "اسم المادة بالعربي كما فهمته", "quantity": رقم, "unit_cost": رقم (سعر الوحدة الواحدة، لو مكتوب بس الإجمالي احسبه بالقسمة على الكمية)}]}
+لو في أي معلومة مش واضحة أو ناقصة خليها null أو صفر — لا تخترع أرقام.`;
+      const resp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': SETTINGS.ai_api_key,
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-direct-browser-access': 'true'
+        },
+        body: JSON.stringify({
+          model: SETTINGS.ai_model || 'claude-sonnet-5',
+          max_tokens: 2000,
+          messages: [{ role:'user', content: [
+            { type:'image', source: { type:'base64', media_type: mediaType, data: base64 } },
+            { type:'text', text: prompt }
+          ]}]
+        })
+      });
+      const data = await resp.json();
+      if(data.error){ statusEl.innerHTML = '⚠️ خطأ: '+esc(data.error.message||'فشل الاتصال بالذكاء الاصطناعي'); return; }
+      let text = (data.content||[]).map(c=>c.text||'').join('').trim();
+      text = text.replace(/^```json\s*/i,'').replace(/^```\s*/,'').replace(/```\s*$/,'').trim();
+      const parsed = JSON.parse(text);
+      // تعبئة المورد
+      if(parsed.supplier){
+        const sel = document.getElementById('fp_sup');
+        const exists = [...sel.options].find(o=>o.value===parsed.supplier);
+        if(exists){ sel.value = parsed.supplier; }
+        else{ sel.value = '__new__'; document.getElementById('fp_sup_new').classList.remove('hidden'); document.getElementById('fp_sup_new').value = parsed.supplier; }
+      }
+      // تعبئة التاريخ
+      if(parsed.date && /^\d{4}-\d{2}-\d{2}$/.test(parsed.date)) document.getElementById('fp_dt').value = parsed.date;
+      // تعبئة المواد
+      if(Array.isArray(parsed.items) && parsed.items.length){
+        document.getElementById('pi_list').innerHTML = '';
+        piIdx = 0;
+        parsed.items.forEach((it,i)=>{
+          document.getElementById('pi_list').insertAdjacentHTML('beforeend', piRow(i, it));
+          piIdx = i;
+        });
+      }
+      statusEl.innerHTML = '✅ تمت القراءة — راجع المورد والتاريخ وكل مادة قبل ما تحفظ (خصوصًا المواد المكتوبة بالأحمر لأنها ما انطابقت تلقائيًا)';
+    }catch(e){
+      console.error('scanInvoiceWithAI failed:', e);
+      statusEl.innerHTML = '⚠️ فشلت القراءة: '+esc(e.message||'خطأ غير معروف')+' — عبّي الفاتورة يدويًا';
+    }
+  }
   async function savePurchase(){
     const dt=document.getElementById('fp_dt').value;
     let sup=document.getElementById('fp_sup').value.trim();
@@ -5709,7 +5832,7 @@
             <tr><td>كاش</td><td class="tl">${fmt(byPay.cash)}</td></tr>
             <tr><td>كرت</td><td class="tl">${fmt(byPay.card)}</td></tr>
             <tr><td>كليك</td><td class="tl">${fmt(byPay.cliq)}</td></tr>
-            <tr><td>توصيل</td><td class="tl">${ok.filter(o=>o.order_type==='delivery').length} طلب — أجور: ${fmt(delivery)}</td></tr>
+            <tr><td>توصيل</td><td class="tl">${ok.filter(o=>o.order_type==='delivery').length} طلب</td></tr>
             <tr><td>استلام</td><td class="tl">${ok.filter(o=>o.order_type==='takeaway').length} طلب</td></tr>
             <tr><td colspan="2" style="border-top:2px dashed #ccc"></td></tr>
             <tr><td>🍽️ وجبات الموظفين (مستبعدة من المبيعات فوق — لحالها)</td><td class="tl">${mealsOrders.length} — ${fmt(mealsTotal)}</td></tr>
@@ -5730,15 +5853,14 @@
 
           <h3 style="color:var(--maroon);margin-bottom:8px;font-size:1.05rem">🏪 تفصيل كل فرع لحاله</h3>
           <div class="tbl-wrap" style="margin-bottom:14px"><table class="tbl">
-            <tr><th>الفرع</th><th>مبيعات</th><th>خصومات</th><th>توصيل</th><th>مصاريف</th><th>سحوبات درج</th></tr>
+            <tr><th>الفرع</th><th>مبيعات</th><th>خصومات</th><th>مصاريف</th><th>سحوبات درج</th></tr>
             ${Object.entries(byBr).map(([b,d])=>`<tr>
               <td><b>${esc(b)}</b></td>
               <td><b>${fmt(d.sales)}</b></td>
               <td style="color:var(--warn)">${fmt(d.discounts)}</td>
-              <td>${fmt(d.delivery)}</td>
               <td style="color:var(--red)">${fmt(d.expenses)}</td>
               <td style="color:var(--red)">${fmt(d.withdrawals)}</td>
-            </tr>`).join('')||'<tr><td colspan="6" class="empty-note">لا شي</td></tr>'}
+            </tr>`).join('')||'<tr><td colspan="5" class="empty-note">لا شي</td></tr>'}
           </table></div>
 
           <h3 style="color:var(--maroon);margin-bottom:8px;font-size:1.05rem">💵 كاش الدرج الآن (شيفتات مفتوحة حاليًا)</h3>
@@ -7205,6 +7327,13 @@
       byBranch[b][t.account] = (byBranch[b][t.account]||0) + parseFloat(t.amount||0);
     });
 
+    // 🧮 تدقيق الفترة: تفصيل كل حركة بنفس فترة الفلتر تحت، حسب النوع — عشان توضح بالظبط ليش الرصيد هيك
+    const periodByType = {};
+    brDateFiltered.forEach(t=>{
+      periodByType[t.type] = (periodByType[t.type]||0) + parseFloat(t.amount||0);
+    });
+    const periodNet = brDateFiltered.reduce((a,t)=>a+parseFloat(t.amount||0),0);
+
     // ديون الموردين (فواتير غير مدفوعة)
     const { data: unpaid } = await db.from('purchases').select('id,supplier,total,purchase_date').eq('payment_status','unpaid');
     const bySupplierDebt = {};
@@ -7245,6 +7374,21 @@
         <div class="stat" style="flex:1;min-width:180px">💵 رصيد كاش الفروع (تشغيلي)<b style="color:${cashBalance<0?'var(--red)':'var(--ok)'}">${fmt(cashBalance)} ${CURRENCY}</b></div>
         <div class="stat" style="flex:1;min-width:180px">🏦 رصيد بنك/كليك الفروع<b style="color:${bankBalance<0?'var(--red)':'var(--ok)'}">${fmt(bankBalance)} ${CURRENCY}</b></div>
         <div class="stat" style="flex:1;min-width:180px">🔴 ديون على المطعم (فواتير غير مدفوعة)<b style="color:var(--red)">${fmt(totalDebt)} ${CURRENCY}</b></div>
+      </div>
+
+      <div class="panel" style="margin-bottom:14px">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+          <h4 style="color:var(--maroon);margin:0">🧮 تدقيق الفترة — ليش الرصيد هيك بالظبط؟ (نفس فترة الفلتر تحت: ${TR_FILTER.from} → ${TR_FILTER.to})</h4>
+        </div>
+        <div style="color:var(--muted);font-size:.78rem;font-weight:600;margin-bottom:8px">💡 هاد تفصيل كل حركة صارت بهالفترة بالضبط — لو في مصروف أو دفعة صارت بالواقع وما تسجّلت بالنظام، رصيد النظام رح يطلع أعلى من الكاش الحقيقي.</div>
+        <div class="tbl-wrap"><table class="tbl">
+          <tr><th>النوع</th><th>المبلغ</th></tr>
+          ${Object.entries(periodByType).sort((a,b)=>b[1]-a[1]).map(([type,amt])=>`<tr>
+            <td>${esc(TR_TYPE_AR[type]||type)}</td>
+            <td><b style="color:${amt<0?'var(--red)':'var(--ok)'}">${amt>0?'+':''}${fmt(amt)} ${CURRENCY}</b></td>
+          </tr>`).join('')||'<tr><td colspan="2" class="empty-note">ما في حركات بهاي الفترة</td></tr>'}
+          <tr style="font-weight:900;background:#fff8e1"><td>= صافي حركة الفترة</td><td>${periodNet>0?'+':''}${fmt(periodNet)} ${CURRENCY}</td></tr>
+        </table></div>
       </div>
 
       <div class="panel" style="margin-bottom:14px">
@@ -8702,6 +8846,14 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
       auto_print_branch: f_autoPrintBranch ? f_autoPrintBranch.checked : false,
     });
     const settings = {
+      ai_invoice_enabled: document.getElementById('f_aiEnabled')?.checked ?? false,
+      ai_api_key: document.getElementById('f_aiKey')?.value.trim() || '',
+      ai_model: document.getElementById('f_aiModel')?.value || 'claude-sonnet-5',
+      hr_portal_show_hours: document.getElementById('f_hrShowHours')?.checked ?? true,
+      hr_portal_show_net: document.getElementById('f_hrShowNet')?.checked ?? true,
+      hr_portal_show_advances: document.getElementById('f_hrShowAdvances')?.checked ?? true,
+      hr_portal_show_meals: document.getElementById('f_hrShowMeals')?.checked ?? true,
+      hr_portal_show_balance: document.getElementById('f_hrShowBalance')?.checked ?? true,
       delivery_whatsapp: f_wanum ? f_wanum.value.trim() : '',
       receipt_template: f_receiptTemplate ? f_receiptTemplate.value : 'modern',
       invoice_extra_info: f_extraInfo ? f_extraInfo.value.trim() : '',
@@ -9364,23 +9516,31 @@ try {
   }
 
   async function openChatDirectory(){
-    const { data: staffList } = await db.from('staff').select('id, full_name, branch_id').eq('is_active', true).order('full_name');
-    const others = (staffList||[]).filter(s=>s.id!==ME.id);
-    const { data: unreadRows } = await db.from('staff_messages').select('from_id').eq('to_id', ME.id).is('read_at', null);
-    const unreadCount = {};
-    (unreadRows||[]).forEach(m=>{ unreadCount[m.from_id] = (unreadCount[m.from_id]||0)+1; });
-    const branchName = id => BRANCHES.find(b=>b.id===id)?.name_ar || 'بدون فرع';
-    modal(`<h3>💬 شات الموظفين</h3>
-      <div style="color:var(--muted);font-weight:700;font-size:.82rem;margin-bottom:10px">اختر موظف لتبدأ محادثة نصية معه (بتوصله حتى لو مش داخل حاليًا).</div>
-      <div class="tbl-wrap"><table class="tbl">
-        <tr><th>الموظف</th><th>الفرع</th><th></th></tr>
-        ${others.map(s=>`<tr>
-          <td><b>${esc(s.full_name)}</b>${unreadCount[s.id]?` <span style="background:var(--red);color:#fff;border-radius:999px;padding:2px 8px;font-size:.75rem;font-weight:900">${unreadCount[s.id]} جديدة</span>`:''}</td>
-          <td>${esc(branchName(s.branch_id))}</td>
-          <td><button class="mini ok" onclick="openChatConversation('${s.id}','${esc(s.full_name)}')">💬 فتح المحادثة</button></td>
-        </tr>`).join('')||'<tr><td colspan="3" class="empty-note">ما في موظفين تانيين</td></tr>'}
-      </table></div>
-      <div class="m-act"><button class="cancel" onclick="closeModal()">إغلاق</button></div>`);
+    try{
+      const { data: staffList, error: e1 } = await db.from('staff').select('id, full_name, branch_id').eq('is_active', true).order('full_name');
+      if(e1){ toast('✗ فشل جلب الموظفين: '+e1.message); console.error(e1); return; }
+      const others = (staffList||[]).filter(s=>s.id!==ME.id);
+      const { data: unreadRows } = await db.from('staff_messages').select('from_id').eq('to_id', ME.id).is('read_at', null);
+      const unreadCount = {};
+      (unreadRows||[]).forEach(m=>{ unreadCount[m.from_id] = (unreadCount[m.from_id]||0)+1; });
+      // 🟢 من متصل الآن — نفس آلية heartbeat جدول devices
+      const cutoff = new Date(Date.now()-90000).toISOString();
+      const { data: onlineRows } = await db.from('devices').select('staff_id').gte('last_seen', cutoff).not('staff_id','is',null);
+      const onlineIds = new Set((onlineRows||[]).map(d=>d.staff_id));
+      const branchName = id => BRANCHES.find(b=>b.id===id)?.name_ar || 'بدون فرع';
+      modal(`<h3>💬 شات الموظفين</h3>
+        <div style="color:var(--muted);font-weight:700;font-size:.82rem;margin-bottom:10px">اختر موظف لتبدأ محادثة نصية معه (بتوصله حتى لو مش داخل حاليًا).</div>
+        <div class="tbl-wrap"><table class="tbl">
+          <tr><th>الحالة</th><th>الموظف</th><th>الفرع</th><th></th></tr>
+          ${others.map(s=>`<tr>
+            <td>${onlineIds.has(s.id)?'🟢 متصل':'⚫ غير متصل'}</td>
+            <td><b>${esc(s.full_name)}</b>${unreadCount[s.id]?` <span style="background:var(--red);color:#fff;border-radius:999px;padding:2px 8px;font-size:.75rem;font-weight:900">${unreadCount[s.id]} جديدة</span>`:''}</td>
+            <td>${esc(branchName(s.branch_id))}</td>
+            <td><button class="mini ok" onclick="openChatConversation('${s.id}','${esc(s.full_name)}')">💬 فتح المحادثة</button></td>
+          </tr>`).join('')||'<tr><td colspan="4" class="empty-note">ما في موظفين تانيين</td></tr>'}
+        </table></div>
+        <div class="m-act"><button class="cancel" onclick="closeModal()">إغلاق</button></div>`);
+    }catch(e){ toast('✗ خطأ بفتح الشات: '+e.message); console.error('openChatDirectory failed:', e); }
   }
 
   async function openChatConversation(staffId, staffName){
@@ -9866,11 +10026,11 @@ try {
         </div>
 
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
-          <div class="stat">ساعات هالشهر<b>${hoursThisMonth.toFixed(1)}</b></div>
-          <div class="stat">صافي المستحق<b style="color:${net<0?'var(--red)':'var(--ok)'}">${fmt(net)} ${CURRENCY}</b></div>
-          <div class="stat">السلف القائمة<b style="color:var(--warn)">${fmt(advOutstanding)} ${CURRENCY}</b></div>
-          <div class="stat">وجبات هالشهر<b>${meals.length} <small>(${fmt(mealsTotal)})</small></b></div>
-          ${prevBalance!==0?`<div class="stat" style="grid-column:1/-1">📒 رصيد سابق (مرحّل)<b style="color:${prevBalance<0?'var(--red)':'var(--ok)'}">${prevBalance>0?'+':''}${fmt(prevBalance)} ${CURRENCY}</b></div>`:''}
+          ${SETTINGS.hr_portal_show_hours!==false?`<div class="stat">ساعات هالشهر<b>${hoursThisMonth.toFixed(1)}</b></div>`:''}
+          ${SETTINGS.hr_portal_show_net!==false?`<div class="stat">صافي المستحق<b style="color:${net<0?'var(--red)':'var(--ok)'}">${fmt(net)} ${CURRENCY}</b></div>`:''}
+          ${SETTINGS.hr_portal_show_advances!==false?`<div class="stat">السلف القائمة<b style="color:var(--warn)">${fmt(advOutstanding)} ${CURRENCY}</b></div>`:''}
+          ${SETTINGS.hr_portal_show_meals!==false?`<div class="stat">وجبات هالشهر<b>${meals.length} <small>(${fmt(mealsTotal)})</small></b></div>`:''}
+          ${SETTINGS.hr_portal_show_balance!==false && prevBalance!==0?`<div class="stat" style="grid-column:1/-1">📒 رصيد سابق (مرحّل)<b style="color:${prevBalance<0?'var(--red)':'var(--ok)'}">${prevBalance>0?'+':''}${fmt(prevBalance)} ${CURRENCY}</b></div>`:''}
         </div>
 
         <button onclick="empRequestAdvanceForm()" style="width:100%;background:var(--warn);color:#fff;border:none;border-radius:12px;padding:12px;font-weight:900;margin-bottom:14px;cursor:pointer">🧾 طلب سلفة</button>
