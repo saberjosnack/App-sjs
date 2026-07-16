@@ -613,6 +613,7 @@
         <button data-a="chats" onclick="admTab('chats')" style="background:#d0ecff;border-color:#0d6efd">💬 المحادثات</button>
         <button data-a="hrLocations" onclick="admTab('hrLocations')" style="background:#ffd9ec;border-color:#e0409a">📍 مواقع الدخول</button>
         <button data-a="dutyHours" onclick="admTab('dutyHours')" style="background:#d9f0ff;border-color:#0d9cdb">⏰ ساعات الدوام</button>
+        <button data-a="hrClosures" onclick="admTab('hrClosures')" style="background:#e8d9ff;border-color:#7b2cbf">📜 كشوفات الأشهر</button>
         <button data-a="ingredients" onclick="admTab('ingredients')">🥩 المكونات</button>
         <button data-a="recipes" onclick="admTab('recipes')">📋 الوصفات</button>
         <button data-a="transfers" onclick="admTab('transfers')">🔄 نقل بضاعة</button>
@@ -799,6 +800,18 @@
 
   /* ================= صوت التنبيه ================= */
   let audioCtx = null;
+  // 🔓 المتصفحات بتمنع تشغيل صوت من الخلفية (زي فحص دوري للرسائل) لحد ما المستخدم يتفاعل مع الصفحة مرة —
+  // هيك بنفتح/نفعّل الصوت من أول نقرة أو لمسة، فبعدها أي تنبيه صوتي بالخلفية يشتغل عادي
+  function unlockAudioOnce(){
+    try{
+      audioCtx = audioCtx || new (window.AudioContext||window.webkitAudioContext)();
+      if(audioCtx.state==='suspended') audioCtx.resume().catch(()=>{});
+    }catch(e){}
+    document.removeEventListener('click', unlockAudioOnce);
+    document.removeEventListener('touchstart', unlockAudioOnce);
+  }
+  document.addEventListener('click', unlockAudioOnce);
+  document.addEventListener('touchstart', unlockAudioOnce);
   const TONE_PRESETS = {
     classic: { wave:'sawtooth', freq:1200 },
     soft:    { wave:'sine',     freq:800  },
@@ -4416,7 +4429,7 @@
   const ADMIN_TAB_PERM = {
     items:'items_manage', cats:'cats_manage', codes:'codes_manage', staff:'staff_manage', roles:'admin_only', branches:'branches_manage', sett:'settings_manage', devices:'devices_manage',
     ingredients:'inventory_view', recipes:'inventory_view',
-    inventory:'inventory_audit', transfers:'inventory_transfer', warehouse:'admin_only', treasury:'admin_only', hr:'admin_only', chats:'admin_only', dailyAudits:'admin_only', hrLocations:'admin_only', dutyHours:'admin_only',
+    inventory:'inventory_audit', transfers:'inventory_transfer', warehouse:'admin_only', treasury:'admin_only', hr:'admin_only', chats:'admin_only', dailyAudits:'admin_only', hrLocations:'admin_only', dutyHours:'admin_only', hrClosures:'admin_only',
     expenses:'expenses_view', purchases:'purchases_view',
     platforms:'platforms_view', empmeals:'empmeals_view', topcust:'topcust_view', waste:'waste_log', suppliers:'purchases_view',
   };
@@ -4492,6 +4505,7 @@
     if(admView==='chats'){ renderChatAdmin(); return; }
     if(admView==='hrLocations'){ renderHrLocations(); return; }
     if(admView==='dutyHours'){ renderDutyHours(); return; }
+    if(admView==='hrClosures'){ renderHrMonthClosures(); return; }
     if(admView==='platforms'){ renderPlatforms(); return; }
     if(admView==='devices'){ renderDevices(); return; }
     if(admView==='empmeals'){ renderEmpMeals(); return; }
@@ -6000,6 +6014,7 @@
       <div class="m-act"><button class="save" onclick="showAuditHistory()">⬅️ رجوع للسجل</button><button class="cancel" onclick="closeModal()">إغلاق</button></div>`);
   }
   async function showAuditHistory(){
+    await loadIngredients();
     const {data, error} = await db.from('inventory_audits')
       .select('*, branches(name_ar)').order('created_at',{ascending:false}).limit(50);
     if(error){
@@ -6033,6 +6048,7 @@
   async function renderDailyAudits(){
     const C = document.getElementById('admContent');
     C.innerHTML = '<div class="empty-note">... جاري التحميل</div>';
+    await loadIngredients(); // 🔧 لازم تكون محمّلة قبل عرض أسماء المواد بالتفاصيل، وإلا تطلع "—"
     if(!DA_FILTER.from){
       const today = new Date().toISOString().split('T')[0];
       DA_FILTER.from = today; DA_FILTER.to = today;
@@ -6094,9 +6110,9 @@
         <tr><th>المادة</th><th>المتوقع</th><th>الفعلي</th><th>الفرق</th></tr>
         ${details.map(d=>`<tr class="${Math.abs(d.variance)>0.001?'late':''}">
           <td><b>${esc(ingName(d.ingredient_id))}</b></td>
-          <td>${d.expected}</td>
-          <td>${d.actual}</td>
-          <td><b style="color:${d.variance<0?'var(--red)':d.variance>0?'var(--warn)':'var(--ok)'}">${d.variance>0?'+':''}${d.variance}</b></td>
+          <td>${fmt(d.expected)}</td>
+          <td>${fmt(d.actual)}</td>
+          <td><b style="color:${d.variance<0?'var(--red)':d.variance>0?'var(--warn)':'var(--ok)'}">${d.variance>0?'+':''}${fmt(d.variance)}</b></td>
         </tr>`).join('')||'<tr><td colspan="4" class="empty-note">لا شي</td></tr>'}
       </table></div>
       <div class="m-act"><button class="save" onclick="printOneAuditPDF(${idx})">📄 طباعة PDF</button><button class="cancel" onclick="closeModal()">إغلاق</button></div>`);
@@ -6720,17 +6736,68 @@
     HR_FILTER.to = document.getElementById('hr_to')?.value || HR_FILTER.to;
     renderHR();
   }
-  function attendanceForm(empId, empName){
-    const today = new Date().toISOString().split('T')[0];
-    modal(`<h3>🕐 تسجيل ساعات عمل — ${esc(empName)}</h3>
-      <div class="fld"><label>التاريخ</label><input type="date" id="att_date" value="${today}"></div>
-      <div class="fld"><label>عدد الساعات</label><input id="att_hours" type="number" step="0.25" min="0" placeholder="مثال: 8"></div>
-      <div class="fld"><label>ملاحظة</label><input id="att_note" placeholder="اختياري"></div>
-      <div class="m-act"><button class="save" onclick="saveAttendance('${empId}','${esc(empName)}')">حفظ ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
+  async function attendanceForm(empId, empName){
+    modal(`<h3>🕐 ساعات العمل اليدوية — ${esc(empName)}</h3><div id="attBody" class="empty-note">... جاري التحميل</div>`);
+    await loadAttendanceList(empId, empName);
+  }
+  async function loadAttendanceList(empId, empName){
+    const body = document.getElementById('attBody'); if(!body) return;
+    try{
+      const { data, error } = await db.from('hr_attendance').select('*').eq('employee_id', empId).order('work_date',{ascending:false}).limit(100);
+      if(error){ body.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message||'خطأ')}</div>`; return; }
+      const list = data||[];
+      window.__ATT_LIST = list;
+      const totalHours = list.reduce((a,x)=>a+parseFloat(x.hours||0),0);
+      body.innerHTML = `
+        <div style="background:#fff8e1;border-radius:10px;padding:8px 12px;margin-bottom:10px;font-weight:800">إجمالي الساعات المسجّلة يدويًا: <span style="color:var(--red)">${totalHours.toFixed(2)}</span></div>
+        <div style="font-weight:900;color:var(--maroon);margin-bottom:6px">➕ إضافة يوم جديد</div>
+        <div class="two" style="gap:6px;margin-bottom:6px">
+          <input type="date" id="att_date" value="${new Date().toISOString().split('T')[0]}" style="flex:1">
+          <input id="att_hours" type="number" step="0.25" min="0" placeholder="عدد الساعات" style="flex:1">
+        </div>
+        <div style="display:flex;gap:6px;margin-bottom:14px">
+          <input id="att_note" placeholder="ملاحظة (اختياري)" style="flex:1;border:1.5px solid var(--line);border-radius:8px;padding:6px">
+          <button class="mini ok" onclick="saveAttendance('${empId}','${esc(empName)}')">+ إضافة</button>
+        </div>
+        <div class="tbl-wrap"><table class="tbl">
+          <tr><th>التاريخ</th><th>الساعات</th><th>ملاحظة</th><th></th></tr>
+          ${list.map((a,idx)=>`<tr>
+            <td>${a.work_date}</td>
+            <td><b>${a.hours}</b></td>
+            <td style="font-size:.82rem;color:var(--muted)">${esc(a.note||'—')}</td>
+            <td style="white-space:nowrap">
+              <button class="mini edit" onclick="editAttendance(${idx},'${empId}','${esc(empName)}')">تعديل</button>
+              <button class="mini del" onclick="deleteAttendance('${a.id}','${empId}','${esc(empName)}')">حذف</button>
+            </td>
+          </tr>`).join('')||'<tr><td colspan="4" class="empty-note">ما في سجلات بعد</td></tr>'}
+        </table></div>
+        <div class="m-act"><button class="cancel" onclick="closeModal()">إغلاق</button></div>`;
+    }catch(e){ body.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
+  }
+  function editAttendance(idx, empId, empName){
+    const a = (window.__ATT_LIST||[])[idx]; if(!a) return;
+    const dateVal = prompt('التاريخ (YYYY-MM-DD):', a.work_date);
+    if(dateVal===null) return;
+    const hoursVal = prompt('عدد الساعات:', a.hours);
+    if(hoursVal===null) return;
+    const hours = parseFloat(normalizeDigits(hoursVal));
+    if(isNaN(hours)||hours<=0){ toast('⚠️ رقم غير صحيح'); return; }
+    db.from('hr_attendance').update({ work_date: dateVal, hours }).eq('id', a.id).then(({error})=>{
+      if(error){ toast('✗ '+error.message); return; }
+      toast('✓ اتعدّل'); loadAttendanceList(empId, empName);
+    });
+  }
+  async function deleteAttendance(id, empId, empName){
+    if(!confirm('⚠️ حذف هاي السجلة نهائيًا؟')) return;
+    try{
+      const { error } = await db.from('hr_attendance').delete().eq('id', id);
+      if(error){ toast('✗ '+error.message); return; }
+      toast('✓ انحذفت'); loadAttendanceList(empId, empName);
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
   async function saveAttendance(empId, empName){
     const date = document.getElementById('att_date')?.value;
-    const hours = parseFloat(document.getElementById('att_hours')?.value);
+    const hours = parseFloat(normalizeDigits(document.getElementById('att_hours')?.value));
     const note = document.getElementById('att_note')?.value.trim();
     if(!date){ toast('⚠️ اختر التاريخ'); return; }
     if(isNaN(hours)||hours<=0){ toast('⚠️ اكتب عدد ساعات صحيح'); return; }
@@ -6739,7 +6806,7 @@
         employee_id: empId, employee_name: empName, work_date: date, hours, note: note||null, created_by: ME.full_name
       });
       if(error){ toast('✗ '+error.message); console.error(error); return; }
-      toast('✓ اتسجلت الساعات'); closeModal(); renderHR();
+      toast('✓ اتسجلت الساعات'); loadAttendanceList(empId, empName); renderHrTable?.();
     }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
   function hrStatement(empId){
@@ -6761,8 +6828,112 @@
       <div class="m-act">
         <button class="save" onclick="hrAdvancesView('${empId}','${esc(r.emp.name)}')">💰 تفاصيل السلف</button>
         <button class="mini ok" style="background:var(--maroon);color:#fff" onclick="printHrEmployeePDF('${empId}')">📄 طباعة كشف مفصل</button>
+        <button class="mini ok" style="background:#7b2cbf" onclick="closeEmployeeMonth('${empId}')">🔒 قفل هالشهر وترحيل الرصيد</button>
         <button class="cancel" onclick="closeModal()">إغلاق</button>
       </div>`);
+  }
+  async function closeEmployeeMonth(empId){
+    const r = (window.__HR_ROWS||[]).find(x=>x.emp.id===empId); if(!r) return;
+    const monthLabel = HR_FILTER.from.slice(0,7); // 'YYYY-MM'
+    try{
+      const { data: existing } = await db.from('hr_month_closures').select('id').eq('employee_id', empId).eq('month_label', monthLabel).maybeSingle();
+      if(existing){ toast('⚠️ هالشهر ('+monthLabel+') مقفول أصلًا لهاد الموظف — ما بينقفل مرتين'); return; }
+    }catch(e){}
+    if(!confirm(`🔒 قفل الفترة ${HR_FILTER.from} → ${HR_FILTER.to} لـ"${r.emp.name}"؟\n\nصافي هالفترة (${fmt(r.net)} ${CURRENCY}) رح يصير هو "الرصيد السابق" الجديد لهالموظف تلقائيًا.\nبعد القفل، أي تعديل على بيانات هالفترة لازم يكون من المالك حصرًا.\n\nمتابعة؟`)) return;
+    try{
+      const { error: e1 } = await db.from('hr_month_closures').insert({
+        employee_id: empId, employee_name: r.emp.name, month_label: monthLabel,
+        period_from: HR_FILTER.from, period_to: HR_FILTER.to,
+        hours: r.hours, hourly_wage: r.emp.hourly_wage||0, gross: r.gross,
+        advances: r.advTotal, meals: r.mealsTotal, shift_deduction: r.shiftDeduction,
+        opening_balance: r.opening||0, net: r.net, closed_by: ME.full_name
+      });
+      if(e1){ toast('✗ '+e1.message); console.error(e1); return; }
+      const { error: e2 } = await db.from('meal_names').update({ opening_balance: r.net }).eq('id', empId);
+      if(e2){ toast('✗ فشل ترحيل الرصيد: '+e2.message); return; }
+      toast('✓ اتقفل الشهر وترحّل الرصيد ('+fmt(r.net)+' '+CURRENCY+') لبداية الشهر الجاي');
+      closeModal(); renderHR();
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
+  }
+  async function renderHrMonthClosures(){
+    const C = document.getElementById('admContent');
+    C.innerHTML = '<div class="empty-note">... جاري التحميل</div>';
+    try{
+      const [empRes, closRes] = await Promise.all([
+        db.from('meal_names').select('id,name').order('name'),
+        db.from('hr_month_closures').select('*').order('closed_at',{ascending:false}),
+      ]);
+      if(closRes.error){ C.innerHTML = `<div class="alert-red">⚠️ ${esc(closRes.error.message||'الجدول hr_month_closures غير موجود — نفّذ SQL أولاً')}</div>`; return; }
+      const empList = empRes.data||[];
+      const list = closRes.data||[];
+      window.__HR_CLOSURES = list;
+      const filtered = HRC_FILTER.emp ? list.filter(c=>c.employee_id===HRC_FILTER.emp) : list;
+      C.innerHTML = `
+        <div class="panel" style="margin-bottom:14px">
+          <h3>📜 كشوفات الأشهر المقفولة</h3>
+          <div class="two" style="flex-wrap:wrap;gap:10px;margin:10px 0">
+            <div><label style="font-weight:700;font-size:.82rem">الموظف</label><br>
+              <select id="hrc_emp" class="dfield" onchange="applyHrcFilter()"><option value="">كل الموظفين</option>
+                ${empList.map(e=>`<option value="${e.id}" ${HRC_FILTER.emp===e.id?'selected':''}>${esc(e.name)}</option>`).join('')}</select></div>
+          </div>
+        </div>
+        <div class="tbl-wrap"><table class="tbl">
+          <tr><th>الموظف</th><th>الشهر</th><th>الفترة</th><th>الساعات</th><th>صافي الشهر</th><th>قفله</th><th></th></tr>
+          ${filtered.map((c,idx)=>`<tr>
+            <td><b>${esc(c.employee_name)}</b></td>
+            <td>${esc(c.month_label)}</td>
+            <td style="font-size:.78rem;color:var(--muted)">${c.period_from} → ${c.period_to}</td>
+            <td>${c.hours}</td>
+            <td><b style="color:${c.net<0?'var(--red)':'var(--ok)'}">${fmt(c.net)} ${CURRENCY}</b></td>
+            <td style="font-size:.78rem;color:var(--muted)">${esc(c.closed_by||'—')}</td>
+            <td><button class="mini ok" onclick="showHrClosureDetail(${idx})">👁️ كشف</button></td>
+          </tr>`).join('')||'<tr><td colspan="7" class="empty-note">ما في أشهر مقفولة بعد</td></tr>'}
+        </table></div>`;
+    }catch(e){ C.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
+  }
+  let HRC_FILTER = { emp:'' };
+  function applyHrcFilter(){ HRC_FILTER.emp = document.getElementById('hrc_emp')?.value||''; renderHrMonthClosures(); }
+  function showHrClosureDetail(idx){
+    const c = (window.__HR_CLOSURES||[])[idx]; if(!c) return;
+    modal(`<h3>📋 كشف شهر ${esc(c.month_label)} — ${esc(c.employee_name)}</h3>
+      <div style="color:var(--muted);font-weight:700;margin-bottom:10px">${c.period_from} → ${c.period_to} — انقفل بواسطة ${esc(c.closed_by||'—')} بتاريخ ${new Date(c.closed_at).toLocaleString('ar-JO')}</div>
+      <div class="tbl-wrap"><table class="tbl">
+        <tr><td>📒 رصيد سابق (بداية الشهر)</td><td><b>${fmt(c.opening_balance)} ${CURRENCY}</b></td></tr>
+        <tr><td>سعر ساعة العمل</td><td>${fmt(c.hourly_wage)} ${CURRENCY}</td></tr>
+        <tr><td>ساعات العمل</td><td>${c.hours}</td></tr>
+        <tr><td>الراتب الإجمالي</td><td>${fmt(c.gross)} ${CURRENCY}</td></tr>
+        <tr><td>السلف</td><td style="color:var(--warn)">${fmt(c.advances)} ${CURRENCY}</td></tr>
+        <tr><td>الوجبات</td><td style="color:var(--warn)">${fmt(c.meals)} ${CURRENCY}</td></tr>
+        <tr><td>خصم الشيفتات</td><td style="color:var(--red)">${fmt(c.shift_deduction)} ${CURRENCY}</td></tr>
+        <tr><td><b>الصافي (ترحّل كرصيد للشهر الجاي)</b></td><td><b style="color:${c.net<0?'var(--red)':'var(--ok)'}">${fmt(c.net)} ${CURRENCY}</b></td></tr>
+      </table></div>
+      <div class="m-act">
+        <button class="mini ok" style="background:var(--maroon);color:#fff" onclick="printHrClosurePDF(${idx})">📄 طباعة PDF</button>
+        <button class="cancel" onclick="closeModal()">إغلاق</button>
+      </div>`);
+  }
+  function printHrClosurePDF(idx){
+    const c = (window.__HR_CLOSURES||[])[idx]; if(!c) return;
+    const html = `<html dir="rtl"><head><meta charset="UTF-8">
+      <style>body{font-family:Cairo,Arial;padding:28px}h1{color:#4a1010}table{width:100%;border-collapse:collapse;margin-top:14px}td,th{padding:8px 10px;border:1px solid #eadfd4;text-align:right;font-size:.9rem}th{background:#FFF8EE;width:40%}.tot{font-weight:900;color:#F60100}@media print{.no-print{display:none}}</style>
+      </head><body>
+      <button class="no-print" onclick="window.print()" style="margin-bottom:16px;background:#4a1010;color:#FDE507;border:none;border-radius:10px;padding:10px 20px;font-weight:800;cursor:pointer">🖨️ طباعة / حفظ PDF</button>
+      <h1>📋 كشف شهر ${esc(c.month_label)} — ${esc(c.employee_name)}</h1>
+      <div>الفترة: ${c.period_from} → ${c.period_to} — Saber Jo Snack</div>
+      <div>انقفل بواسطة ${esc(c.closed_by||'—')} بتاريخ ${new Date(c.closed_at).toLocaleString('ar-JO')}</div>
+      <table>
+        <tr><th>📒 رصيد سابق (بداية الشهر)</th><td>${fmt(c.opening_balance)} ${CURRENCY}</td></tr>
+        <tr><th>سعر ساعة العمل</th><td>${fmt(c.hourly_wage)} ${CURRENCY}</td></tr>
+        <tr><th>ساعات العمل</th><td>${c.hours}</td></tr>
+        <tr><th>الراتب الإجمالي</th><td>${fmt(c.gross)} ${CURRENCY}</td></tr>
+        <tr><th>السلف</th><td>${fmt(c.advances)} ${CURRENCY}</td></tr>
+        <tr><th>الوجبات</th><td>${fmt(c.meals)} ${CURRENCY}</td></tr>
+        <tr><th>خصم الشيفتات</th><td>${fmt(c.shift_deduction)} ${CURRENCY}</td></tr>
+        <tr><th>الصافي (رصيد الشهر الجاي)</th><td class="tot">${fmt(c.net)} ${CURRENCY}</td></tr>
+      </table>
+      </body></html>`;
+    const win = window.open('','_blank');
+    win.document.write(html); win.document.close();
   }
   async function printHrEmployeePDF(empId){
     const r = (window.__HR_ROWS||[]).find(x=>x.emp.id===empId); if(!r) return;
@@ -6990,14 +7161,15 @@
         <button class="mini ok" style="background:var(--maroon)" onclick="sweepBranchesToCapital()">🔁 ترحيل مصاري كل الفروع لرأس المال (نهاية اليوم)</button>
         <details style="margin-top:10px"><summary style="cursor:pointer;font-weight:800;color:var(--muted)">📜 عرض حركات رأس المال بالتفصيل</summary>
           <div class="tbl-wrap" style="margin-top:8px"><table class="tbl">
-            <tr><th>التاريخ</th><th>النوع</th><th>المبلغ</th><th>ملاحظة</th><th>من فرع</th></tr>
+            <tr><th>التاريخ</th><th>النوع</th><th>المبلغ</th><th>ملاحظة</th><th>من فرع</th><th></th></tr>
             ${capitalList.slice(0,100).map(t=>`<tr>
               <td>${new Date(t.created_at).toLocaleString('ar-JO')}</td>
               <td>${CAP_TYPE_AR[t.type]||t.type}</td>
               <td><b style="color:${t.amount<0?'var(--red)':'var(--ok)'}">${t.amount>0?'+':''}${fmt(t.amount)}</b></td>
               <td style="font-size:.85rem;color:var(--muted)">${esc(t.note||'—')}</td>
               <td>${t.source_branch_id?esc(brName(t.source_branch_id)):'—'}</td>
-            </tr>`).join('')||'<tr><td colspan="5" class="empty-note">ما في حركات بعد</td></tr>'}
+              <td><button class="mini del" onclick="deleteCapitalTx('${t.id}')">🗑️</button></td>
+            </tr>`).join('')||'<tr><td colspan="6" class="empty-note">ما في حركات بعد</td></tr>'}
           </table></div>
         </details>
       </div>
@@ -7056,7 +7228,7 @@
       <div class="panel">
         <h4 style="color:var(--maroon);margin-bottom:8px">📜 سجل الحركات المالية (${TR_FILTER.from} → ${TR_FILTER.to})</h4>
         <div class="tbl-wrap"><table class="tbl">
-          <tr><th>التاريخ</th><th>الحساب</th><th>النوع</th><th>المبلغ</th><th>ملاحظة</th><th>الموظف</th></tr>
+          <tr><th>التاريخ</th><th>الحساب</th><th>النوع</th><th>المبلغ</th><th>ملاحظة</th><th>الموظف</th><th></th></tr>
           ${filtered.map(t=>`<tr>
             <td>${new Date(t.created_at).toLocaleString('ar-JO')}</td>
             <td>${t.account==='cash'?'💵 كاش':'🏦 بنك/كليك'}</td>
@@ -7064,10 +7236,29 @@
             <td><b style="color:${t.amount<0?'var(--red)':'var(--ok)'}">${t.amount>0?'+':''}${fmt(t.amount)}</b></td>
             <td style="font-size:.85rem;color:var(--muted)">${esc(t.note||'—')}</td>
             <td>${esc(t.created_by||'—')}</td>
-          </tr>`).join('')||'<tr><td colspan="6" class="empty-note">ما في حركات بهاي الفترة</td></tr>'}
+            <td><button class="mini del" onclick="deleteTreasuryTx('${t.id}')">🗑️</button></td>
+          </tr>`).join('')||'<tr><td colspan="7" class="empty-note">ما في حركات بهاي الفترة</td></tr>'}
         </table></div>
       </div>`;
     window.__TR_ALL = all; window.__TR_FILTERED = filtered;
+  }
+  async function deleteTreasuryTx(id){
+    if(!isAdmin()){ toast('⛔ صلاحية المالك فقط'); return; }
+    if(!confirm('⚠️ حذف هاي الحركة نهائيًا من مصاري الفرع؟ هاد بيغيّر الرصيد المحسوب.\nمتابعة؟')) return;
+    try{
+      const { error } = await db.from('treasury_transactions').delete().eq('id', id);
+      if(error){ toast('✗ '+error.message); return; }
+      toast('✓ انحذفت الحركة'); renderTreasury();
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
+  }
+  async function deleteCapitalTx(id){
+    if(!isAdmin()){ toast('⛔ صلاحية المالك فقط'); return; }
+    if(!confirm('⚠️ حذف هاي الحركة نهائيًا من رأس المال؟ هاد بيغيّر الرصيد المحسوب.\nمتابعة؟')) return;
+    try{
+      const { error } = await db.from('capital_transactions').delete().eq('id', id);
+      if(error){ toast('✗ '+error.message); return; }
+      toast('✓ انحذفت الحركة'); renderTreasury();
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
   function applyTrFilter(){
     TR_FILTER.from = document.getElementById('tr_from')?.value || TR_FILTER.from;
@@ -9067,8 +9258,17 @@ try {
       if(error){ console.error('checkUnreadMessages failed:', error); return; }
       const badge = document.getElementById('chatUnreadBadge');
       if(badge) badge.textContent = count ? '('+count+')' : '';
-      // 🔔 نغمة الشات — بس لما يزيد العدد عن آخر فحص (رسالة جديدة فعليًا وصلت)
-      if(__lastUnreadMsgCount!==null && count>__lastUnreadMsgCount) playChatTone();
+      // 🔔 نغمة الشات + فتح المحادثة تلقائيًا — بس لما يزيد العدد عن آخر فحص (رسالة جديدة فعليًا وصلت)
+      if(__lastUnreadMsgCount!==null && count>__lastUnreadMsgCount){
+        playChatTone();
+        try{
+          const { data: latest } = await db.from('staff_messages').select('from_id, from_name')
+            .eq('to_id', ME.id).is('read_at', null).order('created_at',{ascending:false}).limit(1).maybeSingle();
+          if(latest && !(CHAT_ACTIVE_WITH && CHAT_ACTIVE_WITH.id===latest.from_id)){
+            openChatConversation(latest.from_id, latest.from_name);
+          }
+        }catch(e){ console.error('auto-open chat failed:', e); }
+      }
       __lastUnreadMsgCount = count;
     }catch(e){ console.error('checkUnreadMessages failed:', e); }
   }
@@ -9535,6 +9735,11 @@ try {
     const body = document.getElementById('empPortalBody');
     body.innerHTML = '<div class="empty-note">... جاري التحميل</div>';
     try{
+      // 🔄 نحدّث بيانات الموظف (سعر الساعة، الرصيد السابق) من قاعدة البيانات كل مرة —
+      // عشان أي تعديل يعمله الأدمن ينعكس فورًا حتى لو الموظف فاتح البوابة من قبل
+      const { data: freshEmp } = await db.from('meal_names').select('*').eq('id', EMP.id).maybeSingle();
+      if(freshEmp) EMP = freshEmp;
+
       const { data: openLog } = await db.from('hr_time_logs').select('*').eq('employee_id', EMP.id).is('clock_out', null).order('clock_in',{ascending:false}).limit(1).maybeSingle();
       EMP_OPEN_LOG = openLog||null;
       if(EMP_OPEN_LOG) startGeofenceWatch(); else stopGeofenceWatch();
@@ -9553,7 +9758,8 @@ try {
       const meals = mealsRes.data||[];
       const mealsTotal = meals.reduce((a,o)=>a+parseFloat(o.total||0),0);
       const gross = hoursThisMonth * (EMP.hourly_wage||0);
-      const net = gross - advOutstanding - mealsTotal;
+      const prevBalance = parseFloat(EMP.opening_balance||0);
+      const net = gross - advOutstanding - mealsTotal + prevBalance;
 
       const { data: reqs } = await db.from('hr_advance_requests').select('*').eq('employee_id', EMP.id).order('created_at',{ascending:false}).limit(10);
 
@@ -9574,6 +9780,7 @@ try {
           <div class="stat">صافي المستحق<b style="color:${net<0?'var(--red)':'var(--ok)'}">${fmt(net)} ${CURRENCY}</b></div>
           <div class="stat">السلف القائمة<b style="color:var(--warn)">${fmt(advOutstanding)} ${CURRENCY}</b></div>
           <div class="stat">وجبات هالشهر<b>${meals.length} <small>(${fmt(mealsTotal)})</small></b></div>
+          ${prevBalance!==0?`<div class="stat" style="grid-column:1/-1">📒 رصيد سابق (مرحّل)<b style="color:${prevBalance<0?'var(--red)':'var(--ok)'}">${prevBalance>0?'+':''}${fmt(prevBalance)} ${CURRENCY}</b></div>`:''}
         </div>
 
         <button onclick="empRequestAdvanceForm()" style="width:100%;background:var(--warn);color:#fff;border:none;border-radius:12px;padding:12px;font-weight:900;margin-bottom:14px;cursor:pointer">🧾 طلب سلفة</button>
