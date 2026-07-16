@@ -19,9 +19,9 @@
       --line:#eadfd4; --shadow:0 2px 10px rgba(74,16,16,.08); --r:14px;
     }
     *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
-    html{overflow-y:auto;height:auto}
-    html, body{ overscroll-behavior-y: contain; }
-    body{font-family:'Cairo',sans-serif;background:var(--cream);color:var(--ink);min-height:100vh;overflow-y:auto;height:auto}
+    html{overflow-y:scroll!important;height:auto;-webkit-overflow-scrolling:touch}
+    html, body{ overscroll-behavior-y: contain; touch-action:pan-y; }
+    body{font-family:'Cairo',sans-serif;background:var(--cream);color:var(--ink);min-height:100vh;overflow-y:auto!important;height:auto;-webkit-overflow-scrolling:touch}
     button{font-family:inherit;cursor:pointer;border:none;background:none}
     input,select{font-family:inherit;font-size:1rem}
     .hidden{display:none!important}
@@ -134,8 +134,9 @@
       nav button{ padding:8px 2px }
     }
 
-    /* WebView أندرويد: تعطيل التحديد والسحب */
-    * { -webkit-user-select:none; -webkit-tap-highlight-color:transparent; touch-action:manipulation }
+    /* WebView أندرويد: تعطيل التحديد والسحب — بس مع ضمان إن السكرول العمودي يضل شغال 100% دايمًا */
+    * { -webkit-user-select:none; -webkit-tap-highlight-color:transparent; touch-action:pan-y; }
+    button, .item-card, .cats button, nav button, a { touch-action:manipulation; }
     input, textarea, select { -webkit-user-select:text !important }
 
     .cats{display:flex;gap:8px;overflow-x:auto;padding-bottom:8px}
@@ -814,15 +815,9 @@
   document.addEventListener('click', unlockAudioOnce);
   document.addEventListener('touchstart', unlockAudioOnce);
 
-  // 🔒 منع إيماءة "اسحب للتحديث" (Pull-to-refresh) — هاي كانت تسبب تعليق/هنج للسستم
-  // على الموبايل لأنها بتعمل reload خام للصفحة بينقطع فيه اتصال قاعدة البيانات بمنتصف عملية
-  let __ptrStartY = 0;
-  document.addEventListener('touchstart', e=>{ __ptrStartY = e.touches[0].clientY; }, {passive:true});
-  document.addEventListener('touchmove', e=>{
-    const atTop = (window.scrollY||document.documentElement.scrollTop||0) <= 0;
-    const pullingDown = e.touches[0].clientY - __ptrStartY > 0;
-    if(atTop && pullingDown && e.cancelable) e.preventDefault();
-  }, {passive:false});
+  // 🔒 منع إيماءة "اسحب للتحديث" (Pull-to-refresh) — صار بالـCSS فقط (overscroll-behavior-y:none)
+  // ⚠️ الكود القديم كان يعمل preventDefault على touchmove وهاد هو يلي كان يمنع الشاشة تطلع وتنزل نهائيًا
+  // على بعض الأجهزة/الويب فيو — انحذف بالكامل والمنع صار بالـCSS الآمن يلي ما بيأثر على السكرول
   const TONE_PRESETS = {
     classic: { wave:'sawtooth', freq:1200 },
     soft:    { wave:'sine',     freq:800  },
@@ -1414,6 +1409,9 @@
   // ⚠️ إصلاح حرج: شاشة التحميل لازم تنشال دايمًا بسرعة بغض النظر صار تسجيل دخول تلقائي أو لأ —
   // وإلا أي حدا لسا ما سجّل دخول (معظم الحالات) بيضل عالق خلفها للأبد وما بيشوف شاشة الـPIN إطلاقًا
   setTimeout(()=>{ document.getElementById('loadingOverlay')?.remove(); }, 400);
+  // 🛡️ شبكة أمان إضافية للأجهزة/الشاشات البطيئة (زي شاشات العرض الخارجية الكبيرة): لو لأي سبب
+  // ضلت شاشة التحميل عالقة أكتر من هيك، منشيلها بالقوة عشان ما تضل حاجبة اللمس والسكرول عن الشاشة كلها
+  setTimeout(()=>{ document.getElementById('loadingOverlay')?.remove(); }, 4000);
 
   /* ================= إعدادات الطابعة (محلية لهاد الجهاز فقط — مو مشتركة) ================= */
   const LOCAL_PRINTER_KEYS = ['printer_method','printer_ip','printer_port','printer_bt_address','auto_print_branch'];
@@ -2673,7 +2671,9 @@
           <div style="padding:8px 0">
             <p><strong>#${ord.order_number}</strong> - ${new Date(ord.created_at).toLocaleString('ar-JO')}</p>
             <p>${TYPE_AR[ord.order_type]} | ${PAY_AR[ord.payment_method]}</p>
-            ${cust && (cust.name||cust.phone) ? `<p>👤 ${esc(cust.name||'')}${cust.phone?` — 📞 ${esc(cust.phone)}`:''}</p>${cust.addr?`<p>📍 ${esc(cust.addr)}</p>`:''}` : ''}
+            ${ord.employee_tab_name ? `<p style="font-weight:900;color:var(--red)">🍽️ وجبة موظف: ${esc(ord.employee_tab_name)}</p>` : ''}
+            ${cust && (cust.name||cust.phone) ? `<p>👤 ${esc(cust.name||'')}${cust.phone?` — 📞 ${esc(cust.phone)}`:''}</p>` : ''}
+            ${cust && cust.addr ? `<p>📍 ${esc(cust.addr)}${t.del > 0 ? ` — 🛵 توصيل: ${t.del.toFixed(2)} ${CURRENCY}` : ''}</p>` : (t.del > 0 ? `<p>🛵 توصيل: ${t.del.toFixed(2)} ${CURRENCY}</p>` : '')}
           </div>
           <hr style="border-top:1px dashed #ccc">
           ${lines.map(l => {
@@ -2689,7 +2689,6 @@
           <div style="font-weight:700;padding:4px 0">
             <div style="display:flex;justify-content:space-between"><span>المجموع</span><span>${t.sub.toFixed(2)}</span></div>
             ${t.disc > 0 ? `<div style="display:flex;justify-content:space-between;color:green"><span>خصم</span><span>-${t.disc.toFixed(2)}</span></div>` : ''}
-            ${t.del > 0 ? `<div style="display:flex;justify-content:space-between"><span>توصيل</span><span>${t.del.toFixed(2)}</span></div>` : ''}
             <div style="display:flex;justify-content:space-between;font-size:18px;color:var(--red);border-top:2px solid var(--red);padding-top:4px;margin-top:4px">
               <span>الإجمالي</span>
               <span>${t.total.toFixed(2)} ${CURRENCY}</span>
@@ -2709,7 +2708,9 @@
           <table style="width:100%;font-size:12px">
             <tr><td>طلب #${ord.order_number}</td><td style="text-align:right">${new Date(ord.created_at).toLocaleString('ar-JO')}</td></tr>
             <tr><td>${TYPE_AR[ord.order_type]}</td><td style="text-align:right">${PAY_AR[ord.payment_method]}</td></tr>
-            ${cust && (cust.name||cust.phone) ? `<tr><td colspan="2">👤 ${esc(cust.name||'')}${cust.phone?` — 📞 ${esc(cust.phone)}`:''}</td></tr>${cust.addr?`<tr><td colspan="2">📍 ${esc(cust.addr)}</td></tr>`:''}` : ''}
+            ${ord.employee_tab_name ? `<tr><td colspan="2" style="font-weight:900">🍽️ وجبة موظف: ${esc(ord.employee_tab_name)}</td></tr>` : ''}
+            ${cust && (cust.name||cust.phone) ? `<tr><td colspan="2">👤 ${esc(cust.name||'')}${cust.phone?` — 📞 ${esc(cust.phone)}`:''}</td></tr>` : ''}
+            ${cust && cust.addr ? `<tr><td colspan="2">📍 ${esc(cust.addr)}${t.del > 0 ? ` — 🛵 توصيل: ${t.del.toFixed(2)}` : ''}</td></tr>` : (t.del > 0 ? `<tr><td colspan="2">🛵 توصيل: ${t.del.toFixed(2)}</td></tr>` : '')}
           </table>
           <hr style="border-top:1px dashed #000">
           ${lines.map(l => {
@@ -2725,7 +2726,6 @@
           <div style="font-size:12px">
             <div style="display:flex;justify-content:space-between">المجموع: ${t.sub.toFixed(2)}</div>
             ${t.disc > 0 ? `<div style="display:flex;justify-content:space-between">خصم: -${t.disc.toFixed(2)}</div>` : ''}
-            ${t.del > 0 ? `<div style="display:flex;justify-content:space-between">توصيل: ${t.del.toFixed(2)}</div>` : ''}
             <div style="display:flex;justify-content:space-between;font-weight:900;font-size:14px;border-top:1px solid #000;padding-top:4px">
               الإجمالي: ${t.total.toFixed(2)} ${CURRENCY}
             </div>
@@ -2742,7 +2742,9 @@
           <div style="font-size:11px;padding:4px 0;border-bottom:1px solid #ddd">
             #${ord.order_number} | ${new Date(ord.created_at).toLocaleString('ar-JO')}
           </div>
-          ${cust && (cust.name||cust.phone) ? `<div style="font-size:10px;color:#666">👤 ${esc(cust.name||'')}${cust.phone?` — 📞 ${esc(cust.phone)}`:''}</div>${cust.addr?`<div style="font-size:10px;color:#666">📍 ${esc(cust.addr)}</div>`:''}` : ''}
+          ${ord.employee_tab_name ? `<div style="font-size:10px;font-weight:900">🍽️ وجبة موظف: ${esc(ord.employee_tab_name)}</div>` : ''}
+          ${cust && (cust.name||cust.phone) ? `<div style="font-size:10px;color:#666">👤 ${esc(cust.name||'')}${cust.phone?` — 📞 ${esc(cust.phone)}`:''}</div>` : ''}
+          ${cust && cust.addr ? `<div style="font-size:10px;color:#666">📍 ${esc(cust.addr)}${t.del > 0 ? ` — 🛵 توصيل: ${t.del.toFixed(2)}` : ''}</div>` : (t.del > 0 ? `<div style="font-size:10px;color:#666">🛵 توصيل: ${t.del.toFixed(2)}</div>` : '')}
           ${lines.map(l => {
             const qty = l.qty ?? l.quantity;
             const nm = l.item ? (l.item.name_ar + (l.compositionDesc?' — '+l.compositionDesc:'')) : l.item_name;
@@ -2795,11 +2797,16 @@
     text += `دفع: ${PAY_AR[ord.payment_method]}\n`;
     const __platformName = getPlatformName(ord);
     if(__platformName) text += `🛵 عبر: ${__platformName}\n`;
-    if (cust && (cust.name || cust.phone)) {
+    if (ord.employee_tab_name) text += `🍽️ وجبة موظف: ${ord.employee_tab_name}\n`;
+    if (cust && (cust.name || cust.phone || cust.addr)) {
       text += '─'.repeat(32) + '\n';
       if (cust.name)  text += `عميل: ${cust.name}\n`;
       if (cust.phone) text += `هاتف: ${cust.phone}\n`;
-      if (cust.addr)  text += `عنوان: ${cust.addr}\n`;
+      if (cust.addr)  text += `عنوان: ${cust.addr}${t.del > 0 ? ` — توصيل: ${t.del.toFixed(2)}` : ''}\n`;
+      else if (t.del > 0) text += `توصيل: ${t.del.toFixed(2)}\n`;
+    } else if (t.del > 0) {
+      text += '─'.repeat(32) + '\n';
+      text += `توصيل: ${t.del.toFixed(2)}\n`;
     }
     text += '─'.repeat(32) + '\n';
     lines.forEach(l => {
@@ -2814,7 +2821,6 @@
     text += '─'.repeat(32) + '\n';
     text += `المجموع`.padEnd(24) + `${t.sub.toFixed(2)}\n`;
     if (t.disc > 0) text += `خصم`.padEnd(24) + `-${t.disc.toFixed(2)}\n`;
-    if (t.del > 0) text += `توصيل`.padEnd(24) + `${t.del.toFixed(2)}\n`;
     text += '═'.repeat(32) + '\n';
     text += `الإجمالي`.padEnd(24) + `${t.total.toFixed(2)} ${CURRENCY}\n`;
     text += '═'.repeat(32) + '\n';
