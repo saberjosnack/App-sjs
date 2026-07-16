@@ -5276,38 +5276,101 @@
         <button class="mini ok" onclick="printPurchasesPDF()">📄 PDF منسّق</button>
       </div>
       <div class="tbl-wrap"><table class="tbl">
-        <tr><th>التاريخ</th><th>المورد</th><th>المواد</th><th>الإجمالي</th><th>الدفع</th><th></th></tr>
-        ${filtered.map(p=>`<tr>
+        <tr><th>التاريخ</th><th>المورد</th><th>المواد</th><th>الإجمالي</th><th>المدفوع</th><th>الحالة</th><th></th></tr>
+        ${filtered.map(p=>{
+          const paid = parseFloat(p.paid_amount||0);
+          const remain = parseFloat(p.total||0) - paid;
+          const st = remain<=0.005 ? '<b style="color:var(--ok)">✅ مدفوعة كليًا</b>'
+            : paid>0.005 ? `<b style="color:var(--warn)">🟡 جزئي (${fmt(paid)}/${fmt(p.total)})</b>`
+            : '<b style="color:var(--red)">🔴 دين</b>';
+          return `<tr>
           <td>${new Date(p.purchase_date).toLocaleDateString('ar-JO')}</td>
           <td><b>${esc(p.supplier||'—')}</b></td>
           <td>${(p.purchase_items||[]).map(i=>esc(i.ingredients?.name||'—')).join('، ')}</td>
           <td><b style="color:var(--red)">${fmt(p.total)} ${CURRENCY}</b></td>
-          <td>${p.payment_status==='cash'?'✅ كاش':p.payment_status==='bank'?'✅ كليك/بنك':p.payment_status==='capital'?'🏦 رأس المال':'<b style="color:var(--red)">🔴 دين</b>'}</td>
+          <td>${fmt(paid)} ${CURRENCY}</td>
+          <td>${st}</td>
           <td style="white-space:nowrap">
             <button class="mini tog" onclick="showPurchaseDetail('${p.id}')">👁️</button>
             <button class="mini edit" onclick="editPurchaseInfo('${p.id}')">تعديل</button>
-            ${(!p.payment_status||p.payment_status==='unpaid')?`<button class="mini ok" onclick="settlePurchase('${p.id}')">💰 تسديد</button>`:''}
+            ${remain>0.005?`<button class="mini ok" onclick="settlePurchase('${p.id}')">💰 دفعة</button>`:''}
             <button class="mini del" onclick="deletePurchase('${p.id}')">حذف</button>
           </td>
-        </tr>`).join('')||'<tr><td colspan="6" class="empty-note">ما في مشتريات</td></tr>'}
+        </tr>`;}).join('')||'<tr><td colspan="7" class="empty-note">ما في مشتريات</td></tr>'}
       </table></div>`;
   }
   function settlePurchase(id){
+    if(!isAdmin()){ toast('⛔ صلاحية المالك فقط — الدفع قرارك إنت'); return; }
     const p = PURCHASES_DATA.find(x=>x.id===id); if(!p) return;
-    modal(`<h3>💰 تسديد فاتورة — ${esc(p.supplier||'—')}</h3>
-      <div style="color:var(--muted);font-weight:700;margin-bottom:10px">المبلغ: <b style="color:var(--red)">${fmt(p.total)} ${CURRENCY}</b></div>
+    const paid = parseFloat(p.paid_amount||0);
+    const remain = parseFloat(p.total||0) - paid;
+    modal(`<h3>💰 دفعة — ${esc(p.supplier||'—')}</h3>
+      <div style="color:var(--muted);font-weight:700;margin-bottom:10px">
+        الإجمالي: <b>${fmt(p.total)} ${CURRENCY}</b> — مدفوع سابقًا: <b>${fmt(paid)}</b> — المتبقي: <b style="color:var(--red)">${fmt(remain)} ${CURRENCY}</b>
+      </div>
+      <div class="fld"><label>مبلغ الدفعة (كاملة أو جزء منها)</label><input id="settle_amt" type="number" step="0.01" min="0.01" max="${remain.toFixed(2)}" value="${remain.toFixed(2)}"></div>
       <div class="fld"><label>الدفع من</label>
         <select id="settle_acc"><option value="cash">💵 كاش (مصاري الفرع)</option><option value="bank">🏦 كليك/بنك (مصاري الفرع)</option><option value="capital">🏦 رأس المال</option></select></div>
-      <div class="m-act"><button class="save" onclick="confirmSettlePurchase('${id}')">تأكيد التسديد ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
+      <div class="fld"><label>ملاحظة (اختياري)</label><input id="settle_note" placeholder="مثال: دفعة أولى..."></div>
+      <div class="m-act"><button class="save" onclick="confirmSettlePurchase('${id}')">تأكيد الدفع ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
   }
   async function confirmSettlePurchase(id){
+    if(!isAdmin()){ toast('⛔ صلاحية المالك فقط — الموظف يقدر يدخل الفاتورة بس، الدفع قرارك إنت'); return; }
     const p = PURCHASES_DATA.find(x=>x.id===id); if(!p) return;
     const acc = document.getElementById('settle_acc')?.value||'cash';
+    const note = document.getElementById('settle_note')?.value.trim();
+    const paidSoFar = parseFloat(p.paid_amount||0);
+    const remain = parseFloat(p.total||0) - paidSoFar;
+    const amt = parseFloat(normalizeDigits(document.getElementById('settle_amt')?.value));
+    if(isNaN(amt)||amt<=0){ toast('⚠️ اكتب مبلغ صحيح'); return; }
+    if(amt > remain + 0.01){ toast('⚠️ المبلغ أكبر من المتبقي على الفاتورة ('+fmt(remain)+')'); return; }
     try{
-      await db.from('purchases').update({ payment_status: acc, paid_at: new Date().toISOString() }).eq('id', id);
-      if(acc==='capital') await addCapitalTx(-p.total, 'purchase', id, 'تسديد فاتورة شراء — '+(p.supplier||''));
-      else await addTreasuryTx(acc, -p.total, 'purchase', id, 'تسديد فاتورة شراء — '+(p.supplier||''), p.branch_id||null);
-      closeModal(); toast('✓ اتسددت الفاتورة'); renderPurchases();
+      const newPaid = paidSoFar + amt;
+      const newStatus = (newPaid >= parseFloat(p.total||0) - 0.005) ? acc : 'partial';
+      await db.from('purchases').update({ payment_status: newStatus, paid_amount: newPaid, paid_at: new Date().toISOString() }).eq('id', id);
+      await db.from('supplier_payments').insert({ supplier: p.supplier, amount: amt, account: acc, purchase_id: id, branch_id: p.branch_id||null, note: note||null, created_by: ME.full_name });
+      if(acc==='capital') await addCapitalTx(-amt, 'purchase', id, 'دفعة فاتورة شراء — '+(p.supplier||''));
+      else await addTreasuryTx(acc, -amt, 'purchase', id, 'دفعة فاتورة شراء — '+(p.supplier||''), p.branch_id||null);
+      closeModal(); toast('✓ اتسجلت الدفعة'); renderPurchases();
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
+  }
+  function supplierGeneralPaymentForm(supplierName, totalDebt){
+    if(!isAdmin()){ toast('⛔ صلاحية المالك فقط'); return; }
+    modal(`<h3>💰 دفعة عامة — ${esc(supplierName)}</h3>
+      <div style="color:var(--muted);font-weight:700;margin-bottom:10px">إجمالي المستحق حاليًا: <b style="color:var(--red)">${fmt(totalDebt)} ${CURRENCY}</b></div>
+      <div style="font-size:.78rem;color:var(--muted);font-weight:600;margin-bottom:10px">💡 المبلغ رح يتوزّع تلقائيًا على أقدم الفواتير المستحقة أول شي، وهيك دواليك.</div>
+      <div class="fld"><label>مبلغ الدفعة</label><input id="sgp_amt" type="number" step="0.01" min="0.01" max="${totalDebt.toFixed(2)}" value="${totalDebt.toFixed(2)}"></div>
+      <div class="fld"><label>الدفع من</label>
+        <select id="sgp_acc"><option value="cash">💵 كاش (مصاري الفرع)</option><option value="bank">🏦 كليك/بنك (مصاري الفرع)</option><option value="capital">🏦 رأس المال</option></select></div>
+      <div class="fld"><label>ملاحظة (اختياري)</label><input id="sgp_note" placeholder="مثال: دفعة على الحساب..."></div>
+      <div class="m-act"><button class="save" onclick="confirmSupplierGeneralPayment('${esc(supplierName)}')">تأكيد الدفع ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
+  }
+  async function confirmSupplierGeneralPayment(supplierName){
+    if(!isAdmin()){ toast('⛔ صلاحية المالك فقط'); return; }
+    const acc = document.getElementById('sgp_acc')?.value||'cash';
+    const note = document.getElementById('sgp_note')?.value.trim();
+    let amt = parseFloat(normalizeDigits(document.getElementById('sgp_amt')?.value));
+    if(isNaN(amt)||amt<=0){ toast('⚠️ اكتب مبلغ صحيح'); return; }
+    try{
+      const { data: openInvoices } = await db.from('purchases').select('id,total,paid_amount,branch_id,purchase_date')
+        .eq('supplier', supplierName).order('purchase_date',{ascending:true});
+      const remaining = (openInvoices||[]).map(p=>({...p, remain: parseFloat(p.total||0)-parseFloat(p.paid_amount||0)})).filter(p=>p.remain>0.005);
+      const totalAvailable = remaining.reduce((a,p)=>a+p.remain,0);
+      if(amt > totalAvailable + 0.01){ toast('⚠️ المبلغ أكبر من إجمالي المستحق ('+fmt(totalAvailable)+')'); return; }
+      let left = amt;
+      for(const inv of remaining){
+        if(left<=0.005) break;
+        const applyAmt = Math.min(left, inv.remain);
+        const newPaid = parseFloat(inv.paid_amount||0) + applyAmt;
+        const newStatus = (newPaid >= parseFloat(inv.total||0) - 0.005) ? acc : 'partial';
+        await db.from('purchases').update({ payment_status: newStatus, paid_amount: newPaid, paid_at: new Date().toISOString() }).eq('id', inv.id);
+        await db.from('supplier_payments').insert({ supplier: supplierName, amount: applyAmt, account: acc, purchase_id: inv.id, branch_id: inv.branch_id||null, note: note||'دفعة عامة', created_by: ME.full_name });
+        left -= applyAmt;
+      }
+      const applied = amt - left;
+      if(acc==='capital') await addCapitalTx(-applied, 'purchase', null, 'دفعة عامة — '+supplierName);
+      else await addTreasuryTx(acc, -applied, 'purchase', null, 'دفعة عامة — '+supplierName, null);
+      closeModal(); toast('✓ اتوزّعت الدفعة على '+remaining.filter(inv=>true).length+' فاتورة'); renderSuppliers();
     }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
   function printPurchasesReport(){
@@ -5418,7 +5481,7 @@
         <option value="">اختر الفرع...</option>
         <option value="__all__">🌐 توزيع على كل الفروع</option>
         ${BRANCHES.map(b=>`<option value="${b.id}">${esc(b.name_ar)}</option>`).join('')}</select></div>
-      <div class="fld"><label>💰 حالة الدفع</label>
+      <div class="fld" id="fp_paystatus_wrap" style="${isAdmin()?'':'display:none'}"><label>💰 حالة الدفع</label>
         <select id="fp_paystatus" onchange="document.getElementById('fp_payacc_wrap').classList.toggle('hidden', this.value==='unpaid')">
           <option value="unpaid">🔴 غير مدفوعة (دين على المطعم)</option>
           <option value="cash">✅ مدفوعة — كاش (من مصاري الفرع)</option>
@@ -5426,6 +5489,7 @@
           <option value="capital">🏦 مدفوعة — من رأس المال</option>
         </select>
       </div>
+      ${isAdmin()?'':'<div style="font-size:.78rem;color:var(--muted);font-weight:600;margin-bottom:8px">💡 الفاتورة رح تنسجل كدين — المالك بيقرر الدفع لاحقًا من شاشة المشتريات</div>'}
       <div class="fld" id="fp_payacc_wrap" style="background:#fff8e1;border-radius:10px;padding:10px 12px">
         <div style="font-size:.8rem;color:var(--muted);font-weight:700">💡 المبلغ رح ينخصم تلقائيًا (من مصاري الفرع أو رأس المال حسب اختيارك)</div>
       </div>
@@ -5473,13 +5537,16 @@
       branch_id: isAllBranches ? null : window.__purchaseBranchId,
       notes:document.getElementById('fp_note').value.trim()||null,
       payment_status: payStatus,
-      paid_at: payStatus!=='unpaid' ? new Date().toISOString() : null
+      paid_at: payStatus!=='unpaid' ? new Date().toISOString() : null,
+      paid_amount: payStatus!=='unpaid' ? total : 0
     }).select().single();
     if(error){toast('✗ '+error.message);return;}
     if(payStatus==='capital'){
       await addCapitalTx(-total, 'purchase', pur.id, 'فاتورة شراء — '+sup);
+      await db.from('supplier_payments').insert({ supplier:sup, amount:total, account:'capital', purchase_id:pur.id, branch_id: isAllBranches?null:window.__purchaseBranchId, note:'دفع كامل وقت الفاتورة', created_by: ME.full_name });
     } else if(payStatus!=='unpaid'){
       await addTreasuryTx(payStatus, -total, 'purchase', pur.id, 'فاتورة شراء — '+sup, isAllBranches ? null : window.__purchaseBranchId);
+      await db.from('supplier_payments').insert({ supplier:sup, amount:total, account:payStatus, purchase_id:pur.id, branch_id: isAllBranches?null:window.__purchaseBranchId, note:'دفع كامل وقت الفاتورة', created_by: ME.full_name });
     }
     await db.from('purchase_items').insert(items.map(x=>({...x,purchase_id:pur.id})));
     for(const it of items){
@@ -7966,7 +8033,7 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
       const { data, error } = await db.from('suppliers').select('*').order('name');
       if(error){ C.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message||'الجدول suppliers غير موجود — نفّذ SQL أولاً')}</div>`; return; }
       SUPPLIERS_DATA = data||[];
-      const { data: purchases } = await db.from('purchases').select('supplier, total, purchase_date, payment_status');
+      const { data: purchases } = await db.from('purchases').select('supplier, total, paid_amount, purchase_date, payment_status');
       // 🔧 إصلاح ذاتي: أي مورد اتكتب اسمه بفاتورة شراء قديمة بس ما انسجل بجدول الموردين
       // (بسبب خلل سابق بحفظ صامت) — نضيفه هلأ عشان تقرير الموردين ما يطلع فاضي
       const existingNames = new Set(SUPPLIERS_DATA.map(s=>s.name));
@@ -7984,7 +8051,8 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
         if(!bySupplier[p.supplier]) bySupplier[p.supplier] = {count:0, total:0, last:null, debt:0};
         bySupplier[p.supplier].count++;
         bySupplier[p.supplier].total += parseFloat(p.total||0);
-        if(!p.payment_status || p.payment_status==='unpaid') bySupplier[p.supplier].debt += parseFloat(p.total||0);
+        const remaining = parseFloat(p.total||0) - parseFloat(p.paid_amount||0);
+        if(remaining>0.005) bySupplier[p.supplier].debt += remaining;
         if(!bySupplier[p.supplier].last || p.purchase_date > bySupplier[p.supplier].last) bySupplier[p.supplier].last = p.purchase_date;
       });
       C.innerHTML = `
@@ -8005,6 +8073,7 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
               <td>${st.last?new Date(st.last).toLocaleDateString('ar-JO'):'—'}</td>
               <td><button class="mini edit" onclick="supplierForm('${s.id}')">تعديل</button>
                   <button class="mini ok" onclick="showSupplierStatement('${s.id}','${esc(s.name)}')">📄 كشف حساب</button>
+                  ${st.debt>0.005?`<button class="mini ok" style="background:var(--maroon)" onclick="supplierGeneralPaymentForm('${esc(s.name)}',${st.debt})">💰 دفعة عامة</button>`:''}
                   <button class="mini del" onclick="deleteSupplier('${s.id}','${esc(s.name)}')">حذف</button></td>
             </tr>`;
           }).join('')||'<tr><td colspan="7" class="empty-note">ما في موردين مضافين بعد</td></tr>'}
@@ -8067,15 +8136,18 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
     if(!from||!to) return;
     R.innerHTML = '<div class="empty-note">... جاري الحساب</div>';
     try{
-      const { data: purchases, error } = await db.from('purchases')
-        .select('*, purchase_items(*, ingredients(name,unit)), branches(name_ar)')
-        .eq('supplier', supplierName)
-        .gte('purchase_date', from).lte('purchase_date', to)
-        .order('purchase_date', {ascending:false});
-      if(error){ R.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message)}</div>`; return; }
-      const list = purchases||[];
+      const [purRes, payRes] = await Promise.all([
+        db.from('purchases').select('*, purchase_items(*, ingredients(name,unit)), branches(name_ar)')
+          .eq('supplier', supplierName).gte('purchase_date', from).lte('purchase_date', to).order('purchase_date', {ascending:false}),
+        db.from('supplier_payments').select('*').eq('supplier', supplierName)
+          .gte('created_at', from+'T00:00:00').lte('created_at', to+'T23:59:59').order('created_at', {ascending:false}),
+      ]);
+      if(purRes.error){ R.innerHTML = `<div class="alert-red">⚠️ ${esc(purRes.error.message)}</div>`; return; }
+      const list = purRes.data||[];
+      const payments = payRes.error ? [] : (payRes.data||[]);
       const total = list.reduce((a,p)=>a+parseFloat(p.total||0),0);
-      const debt = list.filter(p=>!p.payment_status||p.payment_status==='unpaid').reduce((a,p)=>a+parseFloat(p.total||0),0);
+      const debt = list.reduce((a,p)=>a+Math.max(0, parseFloat(p.total||0)-parseFloat(p.paid_amount||0)),0);
+      const totalPaid = payments.reduce((a,x)=>a+parseFloat(x.amount||0),0);
       // تجميع كل المواد المشتراة من هالمورد بهاي الفترة
       const byItem = {};
       list.forEach(p=>(p.purchase_items||[]).forEach(i=>{
@@ -8084,18 +8156,30 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
         byItem[nm].qty += parseFloat(i.quantity||0);
         byItem[nm].cost += (i.quantity||0)*(i.unit_cost||0);
       }));
-      window.__lastSupplierStmt = { supplierName, from, to, list, total, debt, byItem };
-      const payLbl = p => p.payment_status==='cash'?'✅ كاش':p.payment_status==='bank'?'✅ كليك/بنك':p.payment_status==='capital'?'🏦 رأس المال':'<b style="color:var(--red)">🔴 دين</b>';
+      window.__lastSupplierStmt = { supplierName, from, to, list, payments, total, debt, totalPaid, byItem };
+      const payLbl = p => {
+        const paid = parseFloat(p.paid_amount||0), rem = parseFloat(p.total||0)-paid;
+        if(rem<=0.005) return '<b style="color:var(--ok)">✅ مدفوعة كليًا</b>';
+        if(paid>0.005) return `<b style="color:var(--warn)">🟡 جزئي (${fmt(paid)}/${fmt(p.total)})</b>`;
+        return '<b style="color:var(--red)">🔴 دين</b>';
+      };
+      const accLbl = a => a==='cash'?'💵 كاش':a==='bank'?'🏦 كليك/بنك':'🏦 رأس المال';
       R.innerHTML = `
         <div class="day-head" style="margin:10px 0">
           <div class="stat">عدد الفواتير<b>${list.length}</b></div>
           <div class="stat">إجمالي المشتريات<b style="color:var(--red)">${fmt(total)} ${CURRENCY}</b></div>
-          <div class="stat">الدين المستحق حاليًا<b style="color:var(--red)">${fmt(debt)} ${CURRENCY}</b></div>
+          <div class="stat">إجمالي المدفوع بالفترة<b style="color:var(--ok)">${fmt(totalPaid)} ${CURRENCY}</b></div>
+          <div class="stat">الدين المستحق حاليًا (كل الوقت)<b style="color:var(--red)">${fmt(debt)} ${CURRENCY}</b></div>
         </div>
         <div style="font-weight:900;color:var(--maroon);margin-bottom:8px">📦 المواد المشتراة (مجمّعة كل الفترة)</div>
         <div class="tbl-wrap" style="margin-bottom:14px"><table class="tbl">
           <tr><th>المادة</th><th>الكمية الإجمالية</th><th>التكلفة</th></tr>
           ${Object.entries(byItem).map(([nm,d])=>`<tr><td><b>${esc(nm)}</b></td><td>${fmt(d.qty)} ${esc(d.unit)}</td><td>${fmt(d.cost)}</td></tr>`).join('')||'<tr><td colspan="3" class="empty-note">لا شي</td></tr>'}
+        </table></div>
+        <div style="font-weight:900;color:var(--maroon);margin-bottom:8px">💰 الدفعات المسجّلة بالفترة</div>
+        <div class="tbl-wrap" style="margin-bottom:14px"><table class="tbl">
+          <tr><th>التاريخ</th><th>المبلغ</th><th>من</th><th>ملاحظة</th></tr>
+          ${payments.map(pm=>`<tr><td>${new Date(pm.created_at).toLocaleString('ar-JO')}</td><td><b style="color:var(--ok)">${fmt(pm.amount)}</b></td><td>${accLbl(pm.account)}</td><td style="font-size:.82rem;color:var(--muted)">${esc(pm.note||'—')}</td></tr>`).join('')||'<tr><td colspan="4" class="empty-note">ما في دفعات بهاي الفترة</td></tr>'}
         </table></div>
         <div style="font-weight:900;color:var(--maroon);margin-bottom:8px">🧾 تفصيل كل فاتورة على حدة</div>
         ${list.map(p=>`
@@ -8135,7 +8219,8 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
   }
   function printSupplierStatementPDF(){
     const d = window.__lastSupplierStmt; if(!d) return;
-    const payLbl = p => p.payment_status==='cash'?'✅ مدفوعة كاش':p.payment_status==='bank'?'✅ مدفوعة كليك/بنك':p.payment_status==='capital'?'🏦 مدفوعة من رأس المال':'🔴 دين (غير مدفوعة)';
+    const payLbl = p => { const rem=parseFloat(p.total||0)-parseFloat(p.paid_amount||0); return rem<=0.005?'✅ مدفوعة كليًا':parseFloat(p.paid_amount||0)>0.005?'🟡 جزئي ('+fmt(p.paid_amount)+'/'+fmt(p.total)+')':'🔴 دين'; };
+    const accLbl = a => a==='cash'?'كاش':a==='bank'?'كليك/بنك':'رأس المال';
     const html = `<html dir="rtl"><head><meta charset="UTF-8">
       <style>
         body{font-family:Cairo,Arial;padding:28px;color:#241414}
@@ -8154,13 +8239,18 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
       <div class="sub">الفترة: ${d.from} → ${d.to} — Saber Jo Snack — تاريخ الطباعة: ${new Date().toLocaleString('ar-JO')}</div>
 
       <h2>الملخص</h2>
-      <table><tr><th>عدد الفواتير</th><th>إجمالي المشتريات</th><th>الدين المستحق حاليًا</th></tr>
-        <tr><td>${d.list.length}</td><td><b>${fmt(d.total)} ${CURRENCY}</b></td><td><b style="color:#F60100">${fmt(d.debt)} ${CURRENCY}</b></td></tr>
+      <table><tr><th>عدد الفواتير</th><th>إجمالي المشتريات</th><th>مدفوع بالفترة</th><th>الدين المستحق حاليًا</th></tr>
+        <tr><td>${d.list.length}</td><td><b>${fmt(d.total)} ${CURRENCY}</b></td><td><b style="color:#1a9c4b">${fmt(d.totalPaid)} ${CURRENCY}</b></td><td><b style="color:#F60100">${fmt(d.debt)} ${CURRENCY}</b></td></tr>
       </table>
 
       <h2>📦 المواد المشتراة (مجمّعة كل الفترة)</h2>
       <table><tr><th>المادة</th><th>الكمية</th><th>التكلفة</th></tr>
       ${Object.entries(d.byItem).map(([nm,x])=>`<tr><td>${esc(nm)}</td><td>${fmt(x.qty)} ${esc(x.unit)}</td><td>${fmt(x.cost)}</td></tr>`).join('')}
+      </table>
+
+      <h2>💰 الدفعات المسجّلة بالفترة</h2>
+      <table><tr><th>التاريخ</th><th>المبلغ</th><th>من</th><th>ملاحظة</th></tr>
+      ${(d.payments||[]).map(pm=>`<tr><td>${new Date(pm.created_at).toLocaleString('ar-JO')}</td><td>${fmt(pm.amount)}</td><td>${accLbl(pm.account)}</td><td>${esc(pm.note||'—')}</td></tr>`).join('')||'<tr><td colspan="4">لا شي</td></tr>'}
       </table>
 
       <h2>🧾 تفصيل كل فاتورة</h2>
