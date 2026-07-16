@@ -20,7 +20,6 @@
     }
     *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
     html{overflow-y:auto;height:auto}
-    html, body{ overscroll-behavior-y: contain; }
     body{font-family:'Cairo',sans-serif;background:var(--cream);color:var(--ink);min-height:100vh;overflow-y:auto;height:auto}
     button{font-family:inherit;cursor:pointer;border:none;background:none}
     input,select{font-family:inherit;font-size:1rem}
@@ -353,7 +352,10 @@
 <div id="empPortalApp" class="hidden" style="min-height:100vh;background:var(--cream);padding:16px;max-width:520px;margin:0 auto">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
     <div style="font-weight:900;font-size:1.1rem;color:var(--maroon)">👷 <span id="ep_name"></span></div>
-    <button onclick="empPortalLogout()" style="background:rgba(0,0,0,.1);border:none;border-radius:10px;padding:8px 14px;font-weight:800">خروج</button>
+    <div style="display:flex;gap:6px">
+      <button onclick="loadEmpPortal()" style="background:rgba(0,0,0,.1);border:none;border-radius:10px;padding:8px 14px;font-weight:800">🔄 تحديث</button>
+      <button onclick="empPortalLogout()" style="background:rgba(0,0,0,.1);border:none;border-radius:10px;padding:8px 14px;font-weight:800">خروج</button>
+    </div>
   </div>
   <div id="empPortalBody"></div>
 </div>
@@ -814,9 +816,44 @@
   document.addEventListener('click', unlockAudioOnce);
   document.addEventListener('touchstart', unlockAudioOnce);
 
-  // 🔒 منع إيماءة "اسحب للتحديث" (Pull-to-refresh) — الاعتماد على CSS بس (overscroll-behavior-y)
-  // بدل جافاسكربت، لأنه أي فحص جافاسكربت لازم يعرف بالضبط أي حاوية داخلية عم يتم تمريرها
-  // (السلة، الشبكة، المودالز...) وإلا بيمنع التمرير الطبيعي بالغلط بكل مكان بالتطبيق
+  // 🔆 منع سكون الشاشة (Wake Lock) — لما الموبايل ينام أو الشاشة تطفي، Chrome بيوقف كل الفحوصات
+  // الدورية (استقبال الطلبات، الطباعة التلقائية...) فيصير "عم بيهنج" أو "أوفلاين" لحد ما تصحّي
+  // الشاشة يدويًا. هاد بيخلي الشاشة تضل مضوية طول ما التطبيق مفتوح وبالواجهة (مش بالخلفية).
+  let __wakeLock = null;
+  async function requestWakeLock(){
+    try{
+      if('wakeLock' in navigator){
+        __wakeLock = await navigator.wakeLock.request('screen');
+        __wakeLock.addEventListener('release', ()=>{ __wakeLock = null; });
+      }
+    }catch(e){ console.error('wakeLock request failed:', e); }
+  }
+  requestWakeLock();
+  document.addEventListener('visibilitychange', ()=>{
+    // لما ترجع للتطبيق بعد ما تحوّل لتطبيق تاني (زي RawBT للطباعة)، نطلب القفل من جديد فورًا
+    if(document.visibilityState==='visible' && !__wakeLock) requestWakeLock();
+  });
+
+  // 💤 حل حقيقي لمشكلة "السستم بينام" — المتصفحات (خصوصًا الموبايل) بتوقف/تبطّئ كل الفحوصات
+  // الدورية (setInterval) لما التطبيق يروح للخلفية (تقفيل الشاشة، تبديل تطبيق...). لما يرجع
+  // المستخدم للتطبيق، منجبر كل الفحوصات المهمة تشتغل فورًا بدل ما تستنى دورتها الطبيعية —
+  // هيك التطبيق "يصحى" فورًا بدل ما يضل عالق لحد الفحص الجاي أو يحتاج تحديث يدوي
+  let __hiddenSince = null;
+  document.addEventListener('visibilitychange', ()=>{
+    if(document.visibilityState==='hidden'){
+      __hiddenSince = Date.now();
+    } else if(document.visibilityState==='visible' && __hiddenSince){
+      const awayMs = Date.now()-__hiddenSince;
+      __hiddenSince = null;
+      if(awayMs > 8000){ // كان غايب أكتر من 8 ثواني — فعليًا كان بالخلفية
+        try{ if(typeof checkShift==='function') checkShift(); }catch(e){}
+        try{ if(typeof checkOverdue==='function') checkOverdue(); }catch(e){}
+        try{ if(typeof checkUnreadMessages==='function') checkUnreadMessages(); }catch(e){}
+        try{ if(typeof checkPrintRequests==='function') checkPrintRequests(); }catch(e){}
+        try{ if(typeof updateOnlineCount==='function') updateOnlineCount(); }catch(e){}
+      }
+    }
+  });
   const TONE_PRESETS = {
     classic: { wave:'sawtooth', freq:1200 },
     soft:    { wave:'sine',     freq:800  },
@@ -6664,7 +6701,7 @@
       db.from('meal_names').select('*').eq('is_active', true).order('name'),
       db.from('hr_attendance').select('employee_id, work_date, hours')
         .gte('work_date', HR_FILTER.from).lte('work_date', HR_FILTER.to),
-      db.from('hr_advances').select('employee_id, amount, created_at')
+      db.from('hr_advances').select('employee_id, amount, created_at, status')
         .gte('created_at', HR_FILTER.from+'T00:00:00').lte('created_at', HR_FILTER.to+'T23:59:59'),
       db.from('orders').select('employee_tab_name, total, status')
         .not('employee_tab_name','is',null)
@@ -6697,9 +6734,13 @@
       const myAtt = attendance.filter(a=>a.employee_id===e.id);
       const manualHours = myAtt.reduce((a,x)=>a+parseFloat(x.hours||0), 0);
       const myLogs = timeLogs.filter(l=>l.employee_id===e.id);
-      const portalHours = myLogs.reduce((a,l)=>a+((new Date(l.clock_out)-new Date(l.clock_in))/3600000), 0);
+      // 🚩 أي جلسة حضور واحدة أطول من 16 ساعة متواصلة غالبًا نسيان تسجيل خروج، مش دوام حقيقي —
+      // منستبعدها من حساب الراتب تلقائيًا ومنعلّم عليها بتنبيه، لحد ما الأدمن يراجعها ويصححها يدويًا
+      const suspiciousLogs = myLogs.filter(l=>((new Date(l.clock_out)-new Date(l.clock_in))/3600000) > 16);
+      const validLogs = myLogs.filter(l=>((new Date(l.clock_out)-new Date(l.clock_in))/3600000) <= 16);
+      const portalHours = validLogs.reduce((a,l)=>a+((new Date(l.clock_out)-new Date(l.clock_in))/3600000), 0);
       const hours = manualHours + portalHours;
-      const days = myAtt.length + myLogs.length;
+      const days = myAtt.length + validLogs.length;
       const advTotal = advances.filter(a=>a.employee_id===e.id).reduce((a,x)=>a+parseFloat(x.amount||0),0);
       const myMeals = mealOrders.filter(o=>o.employee_tab_name===e.name);
       const mealsCount = myMeals.length;
@@ -6709,10 +6750,11 @@
       const gross = hours * (e.hourly_wage||0);
       const opening = parseFloat(e.opening_balance||0);
       const net = gross - advTotal - mealsTotal - shiftDeduction + opening;
-      return { emp:e, hours, days, advTotal, mealsCount, mealsTotal, shiftDeduction, opening, gross, net };
+      return { emp:e, hours, days, advTotal, mealsCount, mealsTotal, shiftDeduction, opening, gross, net, suspiciousLogs };
     });
     const totalNet = rows.reduce((a,r)=>a+r.net,0);
     window.__HR_ROWS = rows;
+    const hrSuspicious = rows.filter(r=>r.suspiciousLogs && r.suspiciousLogs.length);
     const dupWarnings = [];
     for(let i=0;i<empList.length;i++){
       for(let j=i+1;j<empList.length;j++){
@@ -6725,6 +6767,18 @@
     }
 
     C.innerHTML = `
+      ${hrSuspicious.length?`<div class="panel" style="margin-bottom:14px;border:2px solid var(--warn)">
+        <h4 style="color:var(--warn);margin-bottom:8px">⚠️ جلسات حضور مشبوهة (${hrSuspicious.length} موظف) — أطول من 16 ساعة متواصلة، غالبًا نسيان تسجيل خروج</h4>
+        <div style="color:var(--muted);font-size:.82rem;font-weight:600;margin-bottom:8px">مستبعدة تلقائيًا من حساب الساعات والراتب لحد ما تراجعها — روح "⏰ ساعات الدوام" وعدّل وقت الخروج الصحيح.</div>
+        <div class="tbl-wrap"><table class="tbl">
+          <tr><th>الموظف</th><th>عدد الجلسات المشبوهة</th><th></th></tr>
+          ${hrSuspicious.map(r=>`<tr>
+            <td><b>${esc(r.emp.name)}</b></td>
+            <td>${r.suspiciousLogs.length}</td>
+            <td><button class="mini ok" onclick="admTab('dutyHours')">⏰ روح صحّحها</button></td>
+          </tr>`).join('')}
+        </table></div>
+      </div>`:''}
       ${dupWarnings.length?`<div class="panel" style="margin-bottom:14px;border:2px solid var(--red)">
         <h4 style="color:var(--red);margin-bottom:8px">⚠️ موظفين بأسماء متشابهة/مكرّرة (${dupWarnings.length}) — احتمال كبير إنهم نفس الشخص بسجلّين منفصلين</h4>
         <div style="color:var(--muted);font-size:.82rem;font-weight:600;margin-bottom:8px">هاد بيسبب تضارب: الأدمن بيشوف كشف حساب سجل واحد، بينما الموظف مسجّل دخول ببوابته على السجل التاني (رصيد مختلف). احذف السجل الفاضي/الغلط واحتفظ بالسجل الصحيح بس (يلي عليه التاريخ والبيانات الحقيقية).</div>
@@ -10029,17 +10083,22 @@ try {
         db.from('orders').select('total, created_at').eq('employee_tab_name', EMP.name).neq('status','cancelled').gte('created_at', monthStart.toISOString()),
       ]);
       const logs = logsRes.data||[];
-      const closedLogs = logs.filter(l=>l.clock_out);
+      // 🚩 نفس فحص الأمان: أي جلسة أطول من 16 ساعة متواصلة مستبعدة (غالبًا نسيان خروج) لحد ما الأدمن يراجعها
+      const closedLogs = logs.filter(l=>l.clock_out && ((new Date(l.clock_out)-new Date(l.clock_in))/3600000)<=16);
       const hoursThisMonth = closedLogs.reduce((a,l)=>a+((new Date(l.clock_out)-new Date(l.clock_in))/3600000),0);
       const adv = advRes.data||[];
-      const advOutstanding = adv.filter(a=>a.status==='open').reduce((a,x)=>a+parseFloat(x.amount||0),0);
+      // 🔧 نفس منطق الأدمن بالضبط: كل سلفة اتاخدت هالشهر بتخصم من الصافي، بغض النظر إذا اتسددت أو لسا —
+      // "متسددة" معناها بس إنها انحسبت/اتصفّت بمراجعة سابقة، مش إنها ما بتأثر عالشهر يلي اتاخدت فيه
+      const advTakenThisMonth = adv.filter(a=>new Date(a.created_at)>=monthStart).reduce((a,x)=>a+parseFloat(x.amount||0),0);
+      const advOutstanding = adv.reduce((a,x)=>a+parseFloat(x.amount||0),0);
       const meals = mealsRes.data||[];
       const mealsTotal = meals.reduce((a,o)=>a+parseFloat(o.total||0),0);
       const gross = hoursThisMonth * (EMP.hourly_wage||0);
       const prevBalance = parseFloat(EMP.opening_balance||0);
-      const net = gross - advOutstanding - mealsTotal + prevBalance;
+      const net = gross - advTakenThisMonth - mealsTotal + prevBalance;
 
       const { data: reqs } = await db.from('hr_advance_requests').select('*').eq('employee_id', EMP.id).order('created_at',{ascending:false}).limit(10);
+      const allAdvances = adv.slice().sort((a,b)=>new Date(b.created_at)-new Date(a.created_at));
 
       body.innerHTML = `
         <div style="background:#fff;border-radius:16px;padding:18px;text-align:center;margin-bottom:14px;box-shadow:var(--shadow)">
@@ -10056,12 +10115,22 @@ try {
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
           ${SETTINGS.hr_portal_show_hours!==false?`<div class="stat">ساعات هالشهر<b>${hoursThisMonth.toFixed(1)}</b></div>`:''}
           ${SETTINGS.hr_portal_show_net!==false?`<div class="stat">صافي المستحق<b style="color:${net<0?'var(--red)':'var(--ok)'}">${fmt(net)} ${CURRENCY}</b></div>`:''}
-          ${SETTINGS.hr_portal_show_advances!==false?`<div class="stat">السلف القائمة<b style="color:var(--warn)">${fmt(advOutstanding)} ${CURRENCY}</b></div>`:''}
+          ${SETTINGS.hr_portal_show_advances!==false?`<div class="stat">سلف هالشهر (تُخصم من الصافي)<b style="color:var(--warn)">${fmt(advTakenThisMonth)} ${CURRENCY}</b></div>`:''}
+          ${SETTINGS.hr_portal_show_advances!==false?`<div class="stat">إجمالي السلف القائمة (كل الوقت)<b style="color:var(--warn)">${fmt(advOutstanding)} ${CURRENCY}</b></div>`:''}
           ${SETTINGS.hr_portal_show_meals!==false?`<div class="stat">وجبات هالشهر<b>${meals.length} <small>(${fmt(mealsTotal)})</small></b></div>`:''}
           ${SETTINGS.hr_portal_show_balance!==false && prevBalance!==0?`<div class="stat" style="grid-column:1/-1">📒 رصيد سابق (مرحّل)<b style="color:${prevBalance<0?'var(--red)':'var(--ok)'}">${prevBalance>0?'+':''}${fmt(prevBalance)} ${CURRENCY}</b></div>`:''}
         </div>
 
+        <button onclick="loadEmpPortal()" style="width:100%;background:#7b2cbf;color:#fff;border:none;border-radius:12px;padding:10px;font-weight:900;margin-bottom:10px;cursor:pointer">🔄 تحديث</button>
         <button onclick="empRequestAdvanceForm()" style="width:100%;background:var(--warn);color:#fff;border:none;border-radius:12px;padding:12px;font-weight:900;margin-bottom:14px;cursor:pointer">🧾 طلب سلفة</button>
+
+        ${adv&&adv.length?`<div style="background:#fff;border-radius:12px;padding:12px;margin-bottom:14px">
+          <div style="font-weight:900;color:var(--maroon);margin-bottom:6px">📜 كل سلفي (تفصيل كامل)</div>
+          ${adv.map(a=>`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line);font-size:.85rem">
+            <span>${fmt(a.amount)} ${CURRENCY} — ${new Date(a.created_at).toLocaleDateString('ar-JO')}${a.note?' — '+esc(a.note):''}</span>
+            <b style="color:${a.status==='open'?'var(--warn)':'var(--ok)'}">${a.status==='open'?'⏳ قائمة':'✅ متسددة'}</b>
+          </div>`).join('')}
+        </div>`:''}
 
         ${reqs&&reqs.length?`<div style="background:#fff;border-radius:12px;padding:12px;margin-bottom:14px">
           <div style="font-weight:900;color:var(--maroon);margin-bottom:6px">طلبات السلف الأخيرة</div>
@@ -10069,6 +10138,16 @@ try {
             <span>${fmt(r.amount)} ${CURRENCY} — ${new Date(r.created_at).toLocaleDateString('ar-JO')}</span>
             <b style="color:${r.status==='pending'?'var(--warn)':r.status==='approved'?'var(--ok)':'var(--red)'}">${r.status==='pending'?'⏳ بانتظار':r.status==='approved'?'✅ موافق':'❌ مرفوض'}</b>
           </div>`).join('')}
+        </div>`:''}
+
+        ${allAdvances.length?`<div style="background:#fff;border-radius:12px;padding:12px;margin-bottom:14px">
+          <div style="font-weight:900;color:var(--maroon);margin-bottom:6px">💰 كل السلف (${allAdvances.length}) — إجمالي القائم منها: <span style="color:var(--warn)">${fmt(advOutstanding)} ${CURRENCY}</span></div>
+          <div style="max-height:220px;overflow-y:auto">
+          ${allAdvances.map(a=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--line);font-size:.85rem">
+            <span>${fmt(a.amount)} ${CURRENCY} — ${new Date(a.created_at).toLocaleDateString('ar-JO')}${a.note?' — '+esc(a.note):''}</span>
+            <b style="color:${a.status==='open'?'var(--warn)':'var(--ok)'}">${a.status==='open'?'🟡 قائمة':'✅ متسددة'}</b>
+          </div>`).join('')}
+          </div>
         </div>`:''}
 
         <div style="background:#fff;border-radius:12px;padding:12px">
@@ -10162,15 +10241,20 @@ try {
     }catch(e){ toast('⛔ '+e.message); }
   }
   async function computeEmployeeNetDue(empId, empName, hourlyWage, openingBalance, maxAdvPercent){
+    // 🔧 مهم: نفس نطاق التاريخ (الشهر الحالي) المستخدم بكل مكان تاني بالنظام —
+    // كان هاد الحساب يجمع كل تاريخ الموظف من أول يوم (بدون حد)، فيطلع رقم مختلف
+    // عن الشاشة الرئيسية وعن كشف الأدمن يلي بيحسبوا الشهر الحالي بس
+    const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0,0,0,0);
+    const fromIso = monthStart.toISOString();
     const [attRes, logsRes, advRes, mealsRes, shiftAdjRes] = await Promise.all([
-      db.from('hr_attendance').select('hours').eq('employee_id', empId),
-      db.from('hr_time_logs').select('clock_in,clock_out').eq('employee_id', empId).not('clock_out','is',null),
-      db.from('hr_advances').select('amount').eq('employee_id', empId).eq('status','open'),
-      db.from('orders').select('total').eq('employee_tab_name', empName).neq('status','cancelled'),
-      db.from('shift_adjustments').select('amount').eq('staff_name', empName).eq('status','approved'),
+      db.from('hr_attendance').select('hours').eq('employee_id', empId).gte('work_date', fromIso.split('T')[0]),
+      db.from('hr_time_logs').select('clock_in,clock_out').eq('employee_id', empId).not('clock_out','is',null).gte('clock_in', fromIso),
+      db.from('hr_advances').select('amount').eq('employee_id', empId).gte('created_at', fromIso),
+      db.from('orders').select('total').eq('employee_tab_name', empName).neq('status','cancelled').gte('created_at', fromIso),
+      db.from('shift_adjustments').select('amount').eq('staff_name', empName).eq('status','approved').gte('created_at', fromIso),
     ]);
     const manualHours = (attRes.data||[]).reduce((a,x)=>a+parseFloat(x.hours||0),0);
-    const portalHours = (logsRes.data||[]).reduce((a,l)=>a+((new Date(l.clock_out)-new Date(l.clock_in))/3600000),0);
+    const portalHours = (logsRes.data||[]).filter(l=>((new Date(l.clock_out)-new Date(l.clock_in))/3600000)<=16).reduce((a,l)=>a+((new Date(l.clock_out)-new Date(l.clock_in))/3600000),0);
     const hours = manualHours+portalHours;
     const gross = hours*(hourlyWage||0);
     const advOutstanding = (advRes.data||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
