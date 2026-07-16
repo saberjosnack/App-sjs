@@ -803,7 +803,8 @@
   let audioCtx = null;
   // 🔓 المتصفحات بتمنع تشغيل صوت من الخلفية (زي فحص دوري للرسائل) لحد ما المستخدم يتفاعل مع الصفحة مرة —
   // هيك بنفتح/نفعّل الصوت من أول نقرة أو لمسة، فبعدها أي تنبيه صوتي بالخلفية يشتغل عادي
-  function unlockAudioOnce(){
+  function unlockAudioOnce(){document.addEventListener('touchmove', e=>{
+
     try{
       audioCtx = audioCtx || new (window.AudioContext||window.webkitAudioContext)();
       if(audioCtx.state==='suspended') audioCtx.resume().catch(()=>{});
@@ -818,11 +819,25 @@
   // على الموبايل لأنها بتعمل reload خام للصفحة بينقطع فيه اتصال قاعدة البيانات بمنتصف عملية
   let __ptrStartY = 0;
   document.addEventListener('touchstart', e=>{ __ptrStartY = e.touches[0].clientY; }, {passive:true});
-  document.addEventListener('touchmove', e=>{
-    const atTop = (window.scrollY||document.documentElement.scrollTop||0) <= 0;
-    const pullingDown = e.touches[0].clientY - __ptrStartY > 0;
-    if(atTop && pullingDown && e.cancelable) e.preventDefault();
-  }, {passive:false});
+ document.addEventListener('touchmove', e => {
+  const target = e.target;
+  // تحقق إذا كان العنصر أو أحد أجداده قابلًا للتمرير الداخلي
+  let isScrollable = false;
+  let el = target;
+  while (el && el !== document.body) {
+    const style = window.getComputedStyle(el);
+    if ((style.overflowY === 'auto' || style.overflowY === 'scroll') && el.scrollHeight > el.clientHeight) {
+      isScrollable = true;
+      break;
+    }
+    el = el.parentElement;
+  }
+  if (isScrollable) return; // لا نمنع التمرير داخل العناصر القابلة للتمرير
+
+  const atTop = (window.scrollY || document.documentElement.scrollTop || 0) <= 0;
+  const pullingDown = e.touches[0].clientY - __ptrStartY > 0;
+  if (atTop && pullingDown && e.cancelable) e.preventDefault();
+}, { passive: false });
   const TONE_PRESETS = {
     classic: { wave:'sawtooth', freq:1200 },
     soft:    { wave:'sine',     freq:800  },
