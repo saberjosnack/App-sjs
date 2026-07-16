@@ -7815,12 +7815,27 @@
       <hr style="margin:10px 0"><div style="font-weight:800;color:var(--maroon);margin-bottom:6px">👷 دخول بوابة الموظف (اختياري)</div>
       <div class="fld"><label>اسم المستخدم</label><input id="mn_user" value="${esc(n.username||'')}" placeholder="بدون فراغات، بالإنجليزي مثلًا"></div>
       <div class="fld"><label>الرقم السري</label><input id="mn_pin" inputmode="numeric" value="${esc(n.pin||'')}" placeholder="مثال: 1234"></div>
+      ${id?`<div class="fld" style="background:#e8f5ff;border-radius:10px;padding:10px 12px">
+        <div style="font-weight:800;font-size:.85rem;margin-bottom:4px">🔧 إصلاح ربط طلبات/وجبات قديمة</div>
+        <div style="font-size:.78rem;color:var(--muted);font-weight:600;margin-bottom:6px">لو غيّرت اسمه قبل هيك، الطلبات القديمة المسجّلة باسمه القديم بتضيع من كشفه. اكتب اسمه القديم هون مرة وحدة تربطهم فورًا وبشكل دائم (ما تحتاج تعيدها كل مرة).</div>
+        <input id="mn_oldname" placeholder="اكتب اسمه القديم بالضبط..." style="margin-bottom:6px">
+        <button type="button" class="mini ok" onclick="relinkOldMealOrders('${id}')">🔗 اربط الطلبات القديمة</button>
+      </div>`:''}
       ${id&&n.device_id?`<div class="fld" style="background:#fff8e1;border-radius:10px;padding:10px 12px">
         <div style="font-weight:800;font-size:.85rem;margin-bottom:6px">📱 الجهاز المعتمد حاليًا: <span style="color:var(--muted);font-weight:600">${esc((n.device_name||n.device_id||'').slice(0,50))}</span></div>
         <button type="button" class="mini del" onclick="resetEmployeeDevice('${id}')">🔓 إلغاء ربط الجهاز (يسمح بدخول من جهاز جديد فورًا)</button>
       </div>`:''}
       ${id?`<div class="fld"><label class="chk"><input type="checkbox" id="mn_active" ${n.is_active!==false?'checked':''}> فعال</label></div>`:''}
       <div class="m-act"><button class="save" onclick="saveMealName('${id||''}')">حفظ ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
+  }
+  async function relinkOldMealOrders(id){
+    const oldName = document.getElementById('mn_oldname')?.value.trim();
+    if(!oldName){ toast('⚠️ اكتب الاسم القديم أول'); return; }
+    try{
+      const { data, error } = await db.from('orders').update({ employee_meal_id: id }).eq('employee_tab_name', oldName).select('id');
+      if(error){ toast('✗ '+error.message); console.error(error); return; }
+      toast('✓ اترّبط '+((data||[]).length)+' طلب باسم "'+oldName+'" بهاد الموظف — دائم ما رح يضيع تاني حتى لو غيّرت اسمه كذا مرة');
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
   async function resetEmployeeDevice(id){
     if(!confirm('⚠️ إلغاء ربط الجهاز الحالي؟ أول جهاز يسجل فيه الموظف بعد هيك رح يصير هو المعتمد الجديد تلقائيًا (بدون ما يحتاج موافقتك).')) return;
@@ -10078,15 +10093,20 @@ try {
       if(EMP_OPEN_LOG) startGeofenceWatch(); else stopGeofenceWatch();
 
       const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0,0,0,0);
-      const [logsRes, advRes, mealsRes] = await Promise.all([
+      const [logsRes, attRes, advRes, mealsRes, shiftAdjRes] = await Promise.all([
         db.from('hr_time_logs').select('*').eq('employee_id', EMP.id).gte('clock_in', monthStart.toISOString()).order('clock_in',{ascending:false}),
+        db.from('hr_attendance').select('hours').eq('employee_id', EMP.id).gte('work_date', monthStart.toISOString().split('T')[0]),
         db.from('hr_advances').select('*').eq('employee_id', EMP.id).order('created_at',{ascending:false}),
         db.from('orders').select('total, created_at').or(`employee_meal_id.eq.${EMP.id},employee_tab_name.eq."${EMP.name}"`).neq('status','cancelled').gte('created_at', monthStart.toISOString()),
+        db.from('shift_adjustments').select('amount').eq('staff_name', EMP.name).eq('status','approved').gte('created_at', monthStart.toISOString()),
       ]);
       const logs = logsRes.data||[];
       // 🚩 نفس فحص الأمان: أي جلسة أطول من 16 ساعة متواصلة مستبعدة (غالبًا نسيان خروج) لحد ما الأدمن يراجعها
       const closedLogs = logs.filter(l=>l.clock_out && ((new Date(l.clock_out)-new Date(l.clock_in))/3600000)<=16);
-      const hoursThisMonth = closedLogs.reduce((a,l)=>a+((new Date(l.clock_out)-new Date(l.clock_in))/3600000),0);
+      // 🔧 مهم: الساعات = المسجّلة ذاتيًا من البوابة + الساعات اليدوية يلي الأدمن دخّلها (كانت مفقودة تمامًا هون)
+      const portalHours = closedLogs.reduce((a,l)=>a+((new Date(l.clock_out)-new Date(l.clock_in))/3600000),0);
+      const manualHours = (attRes.data||[]).reduce((a,x)=>a+parseFloat(x.hours||0),0);
+      const hoursThisMonth = portalHours + manualHours;
       const adv = advRes.data||[];
       // 🔧 نفس منطق الأدمن بالضبط: كل سلفة اتاخدت هالشهر بتخصم من الصافي، بغض النظر إذا اتسددت أو لسا —
       // "متسددة" معناها بس إنها انحسبت/اتصفّت بمراجعة سابقة، مش إنها ما بتأثر عالشهر يلي اتاخدت فيه
@@ -10094,9 +10114,10 @@ try {
       const advOutstanding = adv.reduce((a,x)=>a+parseFloat(x.amount||0),0);
       const meals = mealsRes.data||[];
       const mealsTotal = meals.reduce((a,o)=>a+parseFloat(o.total||0),0);
+      const shiftDed = (shiftAdjRes.data||[]).reduce((a,x)=>a+Math.abs(x.amount||0),0);
       const gross = hoursThisMonth * (EMP.hourly_wage||0);
       const prevBalance = parseFloat(EMP.opening_balance||0);
-      const net = gross - advTakenThisMonth - mealsTotal + prevBalance;
+      const net = gross - advTakenThisMonth - mealsTotal - shiftDed + prevBalance;
 
       const { data: reqs } = await db.from('hr_advance_requests').select('*').eq('employee_id', EMP.id).order('created_at',{ascending:false}).limit(10);
       const allAdvances = adv.slice().sort((a,b)=>new Date(b.created_at)-new Date(a.created_at));
@@ -10119,6 +10140,7 @@ try {
           ${SETTINGS.hr_portal_show_advances!==false?`<div class="stat">سلف هالشهر (تُخصم من الصافي)<b style="color:var(--warn)">${fmt(advTakenThisMonth)} ${CURRENCY}</b></div>`:''}
           ${SETTINGS.hr_portal_show_advances!==false?`<div class="stat">إجمالي السلف القائمة (كل الوقت)<b style="color:var(--warn)">${fmt(advOutstanding)} ${CURRENCY}</b></div>`:''}
           ${SETTINGS.hr_portal_show_meals!==false?`<div class="stat">وجبات هالشهر<b>${meals.length} <small>(${fmt(mealsTotal)})</small></b></div>`:''}
+          ${shiftDed>0?`<div class="stat" style="grid-column:1/-1">🔻 خصم عجز/زيادة شيفت (معتمد)<b style="color:var(--red)">${fmt(shiftDed)} ${CURRENCY}</b></div>`:''}
           ${SETTINGS.hr_portal_show_balance!==false && prevBalance!==0?`<div class="stat" style="grid-column:1/-1">📒 رصيد سابق (مرحّل)<b style="color:${prevBalance<0?'var(--red)':'var(--ok)'}">${prevBalance>0?'+':''}${fmt(prevBalance)} ${CURRENCY}</b></div>`:''}
         </div>
 
