@@ -19,9 +19,9 @@
       --line:#eadfd4; --shadow:0 2px 10px rgba(74,16,16,.08); --r:14px;
     }
     *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
-    html{overflow-y:scroll!important;height:auto;-webkit-overflow-scrolling:touch}
-    html, body{ overscroll-behavior-y: contain; touch-action:pan-y; }
-    body{font-family:'Cairo',sans-serif;background:var(--cream);color:var(--ink);min-height:100vh;overflow-y:auto!important;height:auto;-webkit-overflow-scrolling:touch}
+    html{overflow-y:auto;height:auto}
+    html, body{ overscroll-behavior-y: contain; }
+    body{font-family:'Cairo',sans-serif;background:var(--cream);color:var(--ink);min-height:100vh;overflow-y:auto;height:auto}
     button{font-family:inherit;cursor:pointer;border:none;background:none}
     input,select{font-family:inherit;font-size:1rem}
     .hidden{display:none!important}
@@ -134,9 +134,8 @@
       nav button{ padding:8px 2px }
     }
 
-    /* WebView أندرويد: تعطيل التحديد والسحب — بس مع ضمان إن السكرول العمودي يضل شغال 100% دايمًا */
-    * { -webkit-user-select:none; -webkit-tap-highlight-color:transparent; touch-action:pan-y; }
-    button, .item-card, .cats button, nav button, a { touch-action:manipulation; }
+    /* WebView أندرويد: تعطيل التحديد والسحب */
+    * { -webkit-user-select:none; -webkit-tap-highlight-color:transparent; touch-action:manipulation }
     input, textarea, select { -webkit-user-select:text !important }
 
     .cats{display:flex;gap:8px;overflow-x:auto;padding-bottom:8px}
@@ -815,9 +814,9 @@
   document.addEventListener('click', unlockAudioOnce);
   document.addEventListener('touchstart', unlockAudioOnce);
 
-  // 🔒 منع إيماءة "اسحب للتحديث" (Pull-to-refresh) — صار بالـCSS فقط (overscroll-behavior-y:none)
-  // ⚠️ الكود القديم كان يعمل preventDefault على touchmove وهاد هو يلي كان يمنع الشاشة تطلع وتنزل نهائيًا
-  // على بعض الأجهزة/الويب فيو — انحذف بالكامل والمنع صار بالـCSS الآمن يلي ما بيأثر على السكرول
+  // 🔒 منع إيماءة "اسحب للتحديث" (Pull-to-refresh) — الاعتماد على CSS بس (overscroll-behavior-y)
+  // بدل جافاسكربت، لأنه أي فحص جافاسكربت لازم يعرف بالضبط أي حاوية داخلية عم يتم تمريرها
+  // (السلة، الشبكة، المودالز...) وإلا بيمنع التمرير الطبيعي بالغلط بكل مكان بالتطبيق
   const TONE_PRESETS = {
     classic: { wave:'sawtooth', freq:1200 },
     soft:    { wave:'sine',     freq:800  },
@@ -1409,9 +1408,6 @@
   // ⚠️ إصلاح حرج: شاشة التحميل لازم تنشال دايمًا بسرعة بغض النظر صار تسجيل دخول تلقائي أو لأ —
   // وإلا أي حدا لسا ما سجّل دخول (معظم الحالات) بيضل عالق خلفها للأبد وما بيشوف شاشة الـPIN إطلاقًا
   setTimeout(()=>{ document.getElementById('loadingOverlay')?.remove(); }, 400);
-  // 🛡️ شبكة أمان إضافية للأجهزة/الشاشات البطيئة (زي شاشات العرض الخارجية الكبيرة): لو لأي سبب
-  // ضلت شاشة التحميل عالقة أكتر من هيك، منشيلها بالقوة عشان ما تضل حاجبة اللمس والسكرول عن الشاشة كلها
-  setTimeout(()=>{ document.getElementById('loadingOverlay')?.remove(); }, 4000);
 
   /* ================= إعدادات الطابعة (محلية لهاد الجهاز فقط — مو مشتركة) ================= */
   const LOCAL_PRINTER_KEYS = ['printer_method','printer_ip','printer_port','printer_bt_address','auto_print_branch'];
@@ -2671,9 +2667,8 @@
           <div style="padding:8px 0">
             <p><strong>#${ord.order_number}</strong> - ${new Date(ord.created_at).toLocaleString('ar-JO')}</p>
             <p>${TYPE_AR[ord.order_type]} | ${PAY_AR[ord.payment_method]}</p>
-            ${ord.employee_tab_name ? `<p style="font-weight:900;color:var(--red)">🍽️ وجبة موظف: ${esc(ord.employee_tab_name)}</p>` : ''}
-            ${cust && (cust.name||cust.phone) ? `<p>👤 ${esc(cust.name||'')}${cust.phone?` — 📞 ${esc(cust.phone)}`:''}</p>` : ''}
-            ${cust && cust.addr ? `<p>📍 ${esc(cust.addr)}${t.del > 0 ? ` — 🛵 توصيل: ${t.del.toFixed(2)} ${CURRENCY}` : ''}</p>` : (t.del > 0 ? `<p>🛵 توصيل: ${t.del.toFixed(2)} ${CURRENCY}</p>` : '')}
+            ${cust && (cust.name||cust.phone) ? `<p>👤 ${esc(cust.name||'')}${cust.phone?` — 📞 ${esc(cust.phone)}`:''}</p>${cust.addr?`<p>📍 ${esc(cust.addr)}</p>`:''}${t.del>0?`<p>🛵 توصيل المنطقة: ${t.del.toFixed(2)} ${CURRENCY}</p>`:''}` : ''}
+            ${ord.employee_tab_name?`<p>🧑‍🍳 وجبة موظف: ${esc(ord.employee_tab_name)}</p>`:''}
           </div>
           <hr style="border-top:1px dashed #ccc">
           ${lines.map(l => {
@@ -2689,6 +2684,7 @@
           <div style="font-weight:700;padding:4px 0">
             <div style="display:flex;justify-content:space-between"><span>المجموع</span><span>${t.sub.toFixed(2)}</span></div>
             ${t.disc > 0 ? `<div style="display:flex;justify-content:space-between;color:green"><span>خصم</span><span>-${t.disc.toFixed(2)}</span></div>` : ''}
+            ${t.del > 0 ? `<div style="display:flex;justify-content:space-between"><span>توصيل</span><span>${t.del.toFixed(2)}</span></div>` : ''}
             <div style="display:flex;justify-content:space-between;font-size:18px;color:var(--red);border-top:2px solid var(--red);padding-top:4px;margin-top:4px">
               <span>الإجمالي</span>
               <span>${t.total.toFixed(2)} ${CURRENCY}</span>
@@ -2708,9 +2704,8 @@
           <table style="width:100%;font-size:12px">
             <tr><td>طلب #${ord.order_number}</td><td style="text-align:right">${new Date(ord.created_at).toLocaleString('ar-JO')}</td></tr>
             <tr><td>${TYPE_AR[ord.order_type]}</td><td style="text-align:right">${PAY_AR[ord.payment_method]}</td></tr>
-            ${ord.employee_tab_name ? `<tr><td colspan="2" style="font-weight:900">🍽️ وجبة موظف: ${esc(ord.employee_tab_name)}</td></tr>` : ''}
-            ${cust && (cust.name||cust.phone) ? `<tr><td colspan="2">👤 ${esc(cust.name||'')}${cust.phone?` — 📞 ${esc(cust.phone)}`:''}</td></tr>` : ''}
-            ${cust && cust.addr ? `<tr><td colspan="2">📍 ${esc(cust.addr)}${t.del > 0 ? ` — 🛵 توصيل: ${t.del.toFixed(2)}` : ''}</td></tr>` : (t.del > 0 ? `<tr><td colspan="2">🛵 توصيل: ${t.del.toFixed(2)}</td></tr>` : '')}
+            ${cust && (cust.name||cust.phone) ? `<tr><td colspan="2">👤 ${esc(cust.name||'')}${cust.phone?` — 📞 ${esc(cust.phone)}`:''}</td></tr>${cust.addr?`<tr><td colspan="2">📍 ${esc(cust.addr)}</td></tr>`:''}${t.del>0?`<tr><td colspan="2">🛵 توصيل المنطقة: ${t.del.toFixed(2)} ${CURRENCY}</td></tr>`:''}` : ''}
+            ${ord.employee_tab_name?`<tr><td colspan="2">🧑‍🍳 وجبة موظف: ${esc(ord.employee_tab_name)}</td></tr>`:''}
           </table>
           <hr style="border-top:1px dashed #000">
           ${lines.map(l => {
@@ -2726,6 +2721,7 @@
           <div style="font-size:12px">
             <div style="display:flex;justify-content:space-between">المجموع: ${t.sub.toFixed(2)}</div>
             ${t.disc > 0 ? `<div style="display:flex;justify-content:space-between">خصم: -${t.disc.toFixed(2)}</div>` : ''}
+            ${t.del > 0 ? `<div style="display:flex;justify-content:space-between">توصيل: ${t.del.toFixed(2)}</div>` : ''}
             <div style="display:flex;justify-content:space-between;font-weight:900;font-size:14px;border-top:1px solid #000;padding-top:4px">
               الإجمالي: ${t.total.toFixed(2)} ${CURRENCY}
             </div>
@@ -2742,9 +2738,8 @@
           <div style="font-size:11px;padding:4px 0;border-bottom:1px solid #ddd">
             #${ord.order_number} | ${new Date(ord.created_at).toLocaleString('ar-JO')}
           </div>
-          ${ord.employee_tab_name ? `<div style="font-size:10px;font-weight:900">🍽️ وجبة موظف: ${esc(ord.employee_tab_name)}</div>` : ''}
-          ${cust && (cust.name||cust.phone) ? `<div style="font-size:10px;color:#666">👤 ${esc(cust.name||'')}${cust.phone?` — 📞 ${esc(cust.phone)}`:''}</div>` : ''}
-          ${cust && cust.addr ? `<div style="font-size:10px;color:#666">📍 ${esc(cust.addr)}${t.del > 0 ? ` — 🛵 توصيل: ${t.del.toFixed(2)}` : ''}</div>` : (t.del > 0 ? `<div style="font-size:10px;color:#666">🛵 توصيل: ${t.del.toFixed(2)}</div>` : '')}
+          ${cust && (cust.name||cust.phone) ? `<div style="font-size:10px;color:#666">👤 ${esc(cust.name||'')}${cust.phone?` — 📞 ${esc(cust.phone)}`:''}</div>${cust.addr?`<div style="font-size:10px;color:#666">📍 ${esc(cust.addr)}</div>`:''}${t.del>0?`<div style="font-size:10px;color:#666">🛵 توصيل المنطقة: ${t.del.toFixed(2)} ${CURRENCY}</div>`:''}` : ''}
+          ${ord.employee_tab_name?`<div style="font-size:10px;color:#666">🧑‍🍳 وجبة موظف: ${esc(ord.employee_tab_name)}</div>`:''}
           ${lines.map(l => {
             const qty = l.qty ?? l.quantity;
             const nm = l.item ? (l.item.name_ar + (l.compositionDesc?' — '+l.compositionDesc:'')) : l.item_name;
@@ -2797,16 +2792,16 @@
     text += `دفع: ${PAY_AR[ord.payment_method]}\n`;
     const __platformName = getPlatformName(ord);
     if(__platformName) text += `🛵 عبر: ${__platformName}\n`;
-    if (ord.employee_tab_name) text += `🍽️ وجبة موظف: ${ord.employee_tab_name}\n`;
-    if (cust && (cust.name || cust.phone || cust.addr)) {
+    if (cust && (cust.name || cust.phone)) {
       text += '─'.repeat(32) + '\n';
       if (cust.name)  text += `عميل: ${cust.name}\n`;
       if (cust.phone) text += `هاتف: ${cust.phone}\n`;
-      if (cust.addr)  text += `عنوان: ${cust.addr}${t.del > 0 ? ` — توصيل: ${t.del.toFixed(2)}` : ''}\n`;
-      else if (t.del > 0) text += `توصيل: ${t.del.toFixed(2)}\n`;
-    } else if (t.del > 0) {
+      if (cust.addr)  text += `عنوان: ${cust.addr}\n`;
+      if (t.del > 0)  text += `توصيل المنطقة: ${t.del.toFixed(2)} ${CURRENCY}\n`;
+    }
+    if (ord.employee_tab_name) {
       text += '─'.repeat(32) + '\n';
-      text += `توصيل: ${t.del.toFixed(2)}\n`;
+      text += `🧑‍🍳 وجبة موظف: ${ord.employee_tab_name}\n`;
     }
     text += '─'.repeat(32) + '\n';
     lines.forEach(l => {
@@ -2821,6 +2816,7 @@
     text += '─'.repeat(32) + '\n';
     text += `المجموع`.padEnd(24) + `${t.sub.toFixed(2)}\n`;
     if (t.disc > 0) text += `خصم`.padEnd(24) + `-${t.disc.toFixed(2)}\n`;
+    if (t.del > 0) text += `توصيل`.padEnd(24) + `${t.del.toFixed(2)}\n`;
     text += '═'.repeat(32) + '\n';
     text += `الإجمالي`.padEnd(24) + `${t.total.toFixed(2)} ${CURRENCY}\n`;
     text += '═'.repeat(32) + '\n';
@@ -6717,8 +6713,33 @@
     });
     const totalNet = rows.reduce((a,r)=>a+r.net,0);
     window.__HR_ROWS = rows;
+    const dupWarnings = [];
+    for(let i=0;i<empList.length;i++){
+      for(let j=i+1;j<empList.length;j++){
+        const a = (empList[i].name||'').trim(), b = (empList[j].name||'').trim();
+        if(!a||!b) continue;
+        if(a===b || a.includes(b) || b.includes(a)){
+          dupWarnings.push([empList[i], empList[j]]);
+        }
+      }
+    }
 
     C.innerHTML = `
+      ${dupWarnings.length?`<div class="panel" style="margin-bottom:14px;border:2px solid var(--red)">
+        <h4 style="color:var(--red);margin-bottom:8px">⚠️ موظفين بأسماء متشابهة/مكرّرة (${dupWarnings.length}) — احتمال كبير إنهم نفس الشخص بسجلّين منفصلين</h4>
+        <div style="color:var(--muted);font-size:.82rem;font-weight:600;margin-bottom:8px">هاد بيسبب تضارب: الأدمن بيشوف كشف حساب سجل واحد، بينما الموظف مسجّل دخول ببوابته على السجل التاني (رصيد مختلف). احذف السجل الفاضي/الغلط واحتفظ بالسجل الصحيح بس (يلي عليه التاريخ والبيانات الحقيقية).</div>
+        <div class="tbl-wrap"><table class="tbl">
+          <tr><th>الاسم 1</th><th>الاسم 2</th><th></th></tr>
+          ${dupWarnings.map(([a,b])=>`<tr>
+            <td><b>${esc(a.name)}</b></td>
+            <td><b>${esc(b.name)}</b></td>
+            <td style="white-space:nowrap">
+              <button class="mini edit" onclick="mealNameForm('${a.id}')">افتح ${esc(a.name)}</button>
+              <button class="mini edit" onclick="mealNameForm('${b.id}')">افتح ${esc(b.name)}</button>
+            </td>
+          </tr>`).join('')}
+        </table></div>
+      </div>`:''}
       <div id="hrAdvReqBox"></div>
       <div id="hrDeviceReqBox"></div>
       <div class="panel" style="margin-bottom:14px">
@@ -9339,8 +9360,8 @@ try {
     const y0 = new Date(t0.getTime() - 86400000);
     // طلبات الفترة + أمس (حتى نفس الساعة)
     const [today, yest, cancels, shifts30] = await Promise.all([
-      db.from('orders').select('total, subtotal, discount, branch_id, status, order_type, employee_tab_name').gte('created_at', t0.toISOString()).lte('created_at', tEnd.toISOString()),
-      db.from('orders').select('total, created_at, status, employee_tab_name').gte('created_at', y0.toISOString()).lt('created_at', t0.toISOString()),
+      db.from('orders').select('total, subtotal, discount, delivery_fee, branch_id, status, order_type, employee_tab_name').gte('created_at', t0.toISOString()).lte('created_at', tEnd.toISOString()),
+      db.from('orders').select('total, subtotal, discount, delivery_fee, created_at, status, employee_tab_name').gte('created_at', y0.toISOString()).lt('created_at', t0.toISOString()),
       db.from('orders').select('cancel_reason').eq('status','cancelled').not('cancel_reason','is',null).gte('created_at', new Date(Date.now()-30*86400000).toISOString()),
       db.from('cash_shifts').select('opening_balance, closing_balance, expected_balance, status, staff(full_name)').eq('status','closed').gte('start_time', new Date(Date.now()-30*86400000).toISOString()),
     ]);
@@ -9349,7 +9370,8 @@ try {
     const mealsToday = (today.data||[]).filter(o=>o.status!=='cancelled' && o.employee_tab_name);
     const mealsTodaySum = mealsToday.reduce((a,o)=>a+parseFloat(o.total||0),0);
     const sameHour = (yest.data||[]).filter(o=>o.status!=='cancelled' && !o.employee_tab_name && (new Date(o.created_at).getTime() - y0.getTime()) <= (now.getTime() - t0.getTime()));
-    const sum = a=>a.reduce((x,o)=>x+parseFloat(o.total||0),0);
+    // 🚗 نفس تعريف "صافي المبيعات" المستخدم بشاشة المبيعات بالضبط — بدون أجور التوصيل، عشان الرقمين يتطابقوا دايمًا
+    const sum = a=>a.reduce((x,o)=>x+(parseFloat(o.subtotal||0)-parseFloat(o.discount||0)),0);
     const tSum = sum(T), ySum = sum(sameHour);
     const tDiscSum = T.reduce((x,o)=>x+parseFloat(o.discount||0),0);
 
