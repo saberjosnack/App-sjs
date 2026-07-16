@@ -3412,6 +3412,7 @@
         discount_code: appliedCode ? appliedCode.code : null,
         platform_id: document.getElementById('orderPlatform')?.value || null,
         employee_tab_name: empMealName || null,
+        employee_meal_id: empMealName ? (MEAL_NAMES_DATA.find(n=>n.name===empMealName)?.id || null) : null,
         split_details: payMethod==='split' ? {
           m1: document.getElementById('split_m1')?.value||'cash',
           amt1: parseFloat(document.getElementById('split_amt1')?.value)||0,
@@ -6703,7 +6704,7 @@
         .gte('work_date', HR_FILTER.from).lte('work_date', HR_FILTER.to),
       db.from('hr_advances').select('employee_id, amount, created_at, status')
         .gte('created_at', HR_FILTER.from+'T00:00:00').lte('created_at', HR_FILTER.to+'T23:59:59'),
-      db.from('orders').select('employee_tab_name, total, status')
+      db.from('orders').select('employee_tab_name, employee_meal_id, total, status')
         .not('employee_tab_name','is',null)
         .gte('created_at', HR_FILTER.from+'T00:00:00').lte('created_at', HR_FILTER.to+'T23:59:59'),
       db.from('shift_adjustments').select('staff_name, amount, status, created_at')
@@ -6742,7 +6743,7 @@
       const hours = manualHours + portalHours;
       const days = myAtt.length + validLogs.length;
       const advTotal = advances.filter(a=>a.employee_id===e.id).reduce((a,x)=>a+parseFloat(x.amount||0),0);
-      const myMeals = mealOrders.filter(o=>o.employee_tab_name===e.name);
+      const myMeals = mealOrders.filter(o=>o.employee_meal_id ? o.employee_meal_id===e.id : o.employee_tab_name===e.name);
       const mealsCount = myMeals.length;
       const mealsTotal = myMeals.reduce((a,o)=>a+parseFloat(o.total||0),0);
       const myShiftAdj = shiftAdjustments.filter(a=>a.staff_name===e.name);
@@ -7213,7 +7214,7 @@
         .gte('work_date', HR_FILTER.from).lte('work_date', HR_FILTER.to).order('work_date'),
       db.from('hr_advances').select('created_at, amount, account, note, status').eq('employee_id', empId)
         .gte('created_at', HR_FILTER.from+'T00:00:00').lte('created_at', HR_FILTER.to+'T23:59:59').order('created_at'),
-      db.from('orders').select('created_at, order_number, total').eq('employee_tab_name', r.emp.name).neq('status','cancelled')
+      db.from('orders').select('created_at, order_number, total').or(`employee_meal_id.eq.${empId},employee_tab_name.eq."${r.emp.name}"`).neq('status','cancelled')
         .gte('created_at', HR_FILTER.from+'T00:00:00').lte('created_at', HR_FILTER.to+'T23:59:59').order('created_at'),
       db.from('shift_adjustments').select('created_at, amount, note').eq('staff_name', r.emp.name).eq('status','approved')
         .gte('created_at', HR_FILTER.from+'T00:00:00').lte('created_at', HR_FILTER.to+'T23:59:59').order('created_at'),
@@ -10080,7 +10081,7 @@ try {
       const [logsRes, advRes, mealsRes] = await Promise.all([
         db.from('hr_time_logs').select('*').eq('employee_id', EMP.id).gte('clock_in', monthStart.toISOString()).order('clock_in',{ascending:false}),
         db.from('hr_advances').select('*').eq('employee_id', EMP.id).order('created_at',{ascending:false}),
-        db.from('orders').select('total, created_at').eq('employee_tab_name', EMP.name).neq('status','cancelled').gte('created_at', monthStart.toISOString()),
+        db.from('orders').select('total, created_at').or(`employee_meal_id.eq.${EMP.id},employee_tab_name.eq."${EMP.name}"`).neq('status','cancelled').gte('created_at', monthStart.toISOString()),
       ]);
       const logs = logsRes.data||[];
       // 🚩 نفس فحص الأمان: أي جلسة أطول من 16 ساعة متواصلة مستبعدة (غالبًا نسيان خروج) لحد ما الأدمن يراجعها
@@ -10250,7 +10251,7 @@ try {
       db.from('hr_attendance').select('hours').eq('employee_id', empId).gte('work_date', fromIso.split('T')[0]),
       db.from('hr_time_logs').select('clock_in,clock_out').eq('employee_id', empId).not('clock_out','is',null).gte('clock_in', fromIso),
       db.from('hr_advances').select('amount').eq('employee_id', empId).gte('created_at', fromIso),
-      db.from('orders').select('total').eq('employee_tab_name', empName).neq('status','cancelled').gte('created_at', fromIso),
+      db.from('orders').select('total').or(`employee_meal_id.eq.${empId},employee_tab_name.eq."${empName}"`).neq('status','cancelled').gte('created_at', fromIso),
       db.from('shift_adjustments').select('amount').eq('staff_name', empName).eq('status','approved').gte('created_at', fromIso),
     ]);
     const manualHours = (attRes.data||[]).reduce((a,x)=>a+parseFloat(x.hours||0),0);
