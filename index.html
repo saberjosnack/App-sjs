@@ -2798,7 +2798,18 @@
         </div>
       `
     };
-    return templates[template] || templates.modern;
+    const body = templates[template] || templates.modern;
+    if(!ord.__isReprint) return body;
+    // 🔁 غلاف بعلامة مائية شفافة مائلة + اسم من أعاد الطباعة تحت — يطبّق على أي قالب مستخدم
+    return `<div style="position:relative;overflow:hidden">
+      <div style="position:absolute;top:38%;left:50%;transform:translate(-50%,-50%) rotate(-28deg);
+        font-size:30px;font-weight:900;color:rgba(200,0,0,0.18);white-space:nowrap;pointer-events:none;
+        letter-spacing:2px;z-index:5;font-family:'Cairo',sans-serif">فاتورة مطبوعة</div>
+      ${body}
+      <div style="text-align:center;color:#888;font-size:9px;margin-top:10px;border-top:1px dotted #ccc;padding-top:6px;font-family:'Cairo',sans-serif">
+        أُعيدت الطباعة بواسطة: ${esc(ord.__reprintBy||'—')} — ${new Date().toLocaleString('ar-JO')}
+      </div>
+    </div>`;
   }
 
   function getPlatformName(ord){
@@ -2824,6 +2835,13 @@
   function generateReceiptText(ord, lines, t, cust) {
     const br = BRANCHES.find(b => b.id === ord.branch_id);
     let text = '';
+    // 🔁 لو هاي إعادة طباعة (مش أول مرة)، نحط شارة واضحة فوق — الطابعة الحرارية ما بتعمل شفافية/ميلان
+    // زي الشاشة، فبنعوّض عنها بسطر بارز بالأعلى
+    if(ord.__isReprint){
+      text += '▓'.repeat(32) + '\n';
+      text += '   🔁 فاتورة معاد طباعتها   \n';
+      text += '▓'.repeat(32) + '\n';
+    }
     text += '═'.repeat(32) + '\n';
     text += '  SABER JO SNACK  \n';
     text += `  ${br ? br.name_ar : ''}  \n`;
@@ -2864,6 +2882,11 @@
     text += '═'.repeat(32) + '\n';
     text += '  شكراً لزيارتكم  \n';
     text += '  SJS 🍔  \n';
+    if(ord.__isReprint){
+      text += '─'.repeat(32) + '\n';
+      text += `أُعيدت الطباعة بواسطة: ${ord.__reprintBy||'—'}\n`;
+      text += `${new Date().toLocaleString('ar-JO')}\n`;
+    }
     text += '\n\n\n';
     return text;
   }
@@ -3842,6 +3865,7 @@
       return;
     }
     const cust = o.customers ? { name: o.customers.name, phone: o.customers.phone, addr: o.customers.address||'' } : null;
+    o.__isReprint = true; o.__reprintBy = ME.full_name; // 🔁 هاي إعادة طباعة يدوية — نعلّمها للعلامة المائية
     printSmart(o, o.order_items||[], { sub: +o.subtotal, disc: +o.discount, del: +o.delivery_fee, total: +o.total }, cust);
   }
   // ⚠️ إصلاح حرج: إعادة تعيين auto_printed=false ما بتشتغل إلا للطلبات بحالة "new" فقط
@@ -3867,7 +3891,7 @@
       if(!scopeBranchId) return;
       if(SETTINGS.auto_print_branch===false) return;
       const { data, error } = await db.from('print_requests')
-        .select('id, order_id, orders(*, order_items(*), customers(name,phone,address))')
+        .select('id, order_id, requested_by, orders(*, order_items(*), customers(name,phone,address))')
         .eq('target_branch_id', scopeBranchId)
         .eq('fulfilled', false)
         .order('created_at', {ascending:true})
@@ -3883,6 +3907,7 @@
           if(!o) continue;
           const cust = o.customers ? { name:o.customers.name, phone:o.customers.phone, addr:o.customers.address||'' } : null;
           beepUrgentIncoming();
+          o.__isReprint = true; o.__reprintBy = req.requested_by; // 🔁 كل طلبات print_requests أصلها إعادة طباعة (من reprintDay فقط)
           await printSmart(o, o.order_items||[], { sub:+o.subtotal, disc:+o.discount, del:+o.delivery_fee, total:+o.total }, cust);
         } catch(e){ console.error('print request fulfill failed:', e); }
         finally { _printReqBusy.delete(req.id); }
