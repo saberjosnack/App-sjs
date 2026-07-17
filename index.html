@@ -4543,6 +4543,7 @@
         const {data}=await db.from('staff').select('*, branches(name_ar)').order('created_at');
         STAFF=data||[];
         C.innerHTML=`<button class="add-btn" onclick="staffForm()">＋ إضافة موظف</button>
+          <button class="mini ok" style="background:#7b2cbf" onclick="showHrLinkChecker()">🔗 تحقّق من ربط الأسماء مع HR</button>
           <input id="staffSearch" placeholder="🔍 ابحث بالاسم أو الدور..." oninput="renderStaffTable()" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:10px">
           <div id="staffTableWrap"></div>`;
         renderStaffTable();
@@ -9267,6 +9268,64 @@ try {
     const q = (document.getElementById('staffSearch')?.value||'').trim().toLowerCase();
     const list = q ? STAFF.filter(s=>(s.full_name||'').toLowerCase().includes(q) || (ROLE_AR[s.role]||s.role||'').toLowerCase().includes(q)) : STAFF;
     wrap.innerHTML = `<div class="tbl-wrap"><table class="tbl"><tr><th>الاسم</th><th>الدور</th><th>الفرع</th><th>PIN</th><th>الحالة</th><th></th></tr>${list.map(s=>`<tr class="${s.is_active?'':'off'}"><td>${esc(s.full_name)}</td><td>${ROLE_AR[s.role]||esc(s.role)}</td><td>${esc(s.branches?.name_ar||'كل الفروع')}</td><td>${s.pin}</td><td>${s.is_active?'✅':'🚫'}</td><td style="white-space:nowrap"><button class="mini edit" onclick="staffForm('${s.id}')">تعديل</button>${s.id!==ME.id?`<button class="mini tog" onclick="toggleStaff('${s.id}',${!s.is_active})">${s.is_active?'تعطيل/أرشفة':'تفعيل'}</button><button class="mini del" onclick="deleteStaff('${s.id}','${esc(s.full_name)}')">حذف نهائي</button>`:''}</td></tr>`).join('')||'<tr><td colspan="6" class="empty-note">ما في نتائج</td></tr>'}</table></div>`;
+  }
+  async function showHrLinkChecker(){
+    modal(`<h3>🔗 تحقّق من ربط الأسماء مع HR</h3><div id="hrLinkCheckerBody" class="empty-note">... جاري الفحص</div>`);
+    await loadHrLinkChecker();
+  }
+  async function loadHrLinkChecker(){
+    const body = document.getElementById('hrLinkCheckerBody'); if(!body) return;
+    try{
+      const [staffRes, hrRes] = await Promise.all([
+        db.from('staff').select('id, full_name, linked_hr_id').eq('is_active', true).order('full_name'),
+        db.from('meal_names').select('id, name').eq('is_active', true).order('name'),
+      ]);
+      const staffList = staffRes.data||[];
+      const hrList = hrRes.data||[];
+      const norm = s => (s||'').trim().replace(/^ال/, '').replace(/[أإآ]/g,'ا').replace(/ة/g,'ه');
+      const rows = staffList.map(s=>{
+        if(s.linked_hr_id){
+          const linked = hrList.find(h=>h.id===s.linked_hr_id);
+          return { staff:s, status:'linked', hr:linked };
+        }
+        const exact = hrList.find(h=>h.name.trim()===s.full_name.trim());
+        if(exact) return { staff:s, status:'exact', hr:exact };
+        const near = hrList.find(h=>norm(h.name)===norm(s.full_name) || norm(h.name).includes(norm(s.full_name)) || norm(s.full_name).includes(norm(h.name)));
+        if(near) return { staff:s, status:'near', hr:near };
+        return { staff:s, status:'none', hr:null };
+      });
+      window.__HR_LINK_CHECK = { rows, hrList };
+      const statusLbl = { linked:'✅ مربوط', exact:'🟢 تطابق تام — اربطه بزر واحد', near:'🟡 شبه متطابق — راجع وأكّد', none:'🔴 بدون أي تطابق — اختر يدويًا' };
+      const statusColor = { linked:'var(--ok)', exact:'var(--ok)', near:'var(--warn)', none:'var(--red)' };
+      body.innerHTML = `
+        <div style="color:var(--muted);font-weight:700;font-size:.82rem;margin-bottom:10px">فحصت ${staffList.length} موظف مقابل ${hrList.length} سجل بـHR. قارنت الأسماء بعد تجاهل الفروقات الشكلية (ال التعريف، الألف/الهمزة، التاء المربوطة).</div>
+        <div class="tbl-wrap"><table class="tbl">
+          <tr><th>الموظف (تسجيل دخول)</th><th>الحالة</th><th>المطابق بـHR</th><th></th></tr>
+          ${rows.map((r,idx)=>`<tr>
+            <td><b>${esc(r.staff.full_name)}</b></td>
+            <td><b style="color:${statusColor[r.status]}">${statusLbl[r.status]}</b></td>
+            <td>
+              ${r.status==='linked'?esc(r.hr?.name||'—'):
+                r.status==='none'? `<select id="hrlc_sel_${idx}"><option value="">اختر يدويًا...</option>${hrList.map(h=>`<option value="${h.id}">${esc(h.name)}</option>`).join('')}</select>`
+                : esc(r.hr?.name||'—')}
+            </td>
+            <td>${r.status==='linked'?'—':`<button class="mini ok" onclick="confirmHrLink(${idx})">🔗 اربط</button>`}</td>
+          </tr>`).join('')||'<tr><td colspan="4" class="empty-note">ما في موظفين</td></tr>'}
+        </table></div>
+        <div class="m-act"><button class="cancel" onclick="closeModal()">إغلاق</button></div>`;
+    }catch(e){ body.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
+  }
+  async function confirmHrLink(idx){
+    const { rows } = window.__HR_LINK_CHECK||{}; if(!rows) return;
+    const r = rows[idx]; if(!r) return;
+    let hrId = r.hr?.id;
+    if(r.status==='none'){ hrId = document.getElementById('hrlc_sel_'+idx)?.value; if(!hrId){ toast('⚠️ اختر موظف HR أول'); return; } }
+    if(r.status==='near' && !confirm(`تأكيد الربط بين "${r.staff.full_name}" و"${r.hr.name}"؟ تأكد إنهم نفس الشخص فعلًا.`)) return;
+    try{
+      const { error } = await db.from('staff').update({ linked_hr_id: hrId }).eq('id', r.staff.id);
+      if(error){ toast('✗ '+error.message); return; }
+      toast('✓ اترّبط'); loadHrLinkChecker();
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
   async function staffForm(id){
     await loadCustomRoles();
