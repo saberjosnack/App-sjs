@@ -5625,9 +5625,25 @@
           <option value="">المادة...</option>${INGR.map(i=>`<option value="${i.id}" ${i.id===matchedIngId?'selected':''}>${esc(i.name)} (${esc(i.unit)})</option>`).join('')}
         </select>
       </div>
-      <input class="pi_qty" type="number" step="0.01" placeholder="الكمية" value="${prefill.quantity??''}" style="flex:1;border:1.5px solid var(--line);border-radius:10px;padding:7px 10px">
-      <input class="pi_uc" type="number" step="0.01" placeholder="السعر/وحدة" value="${prefill.unit_cost??''}" style="flex:1;border:1.5px solid var(--line);border-radius:10px;padding:7px 10px">
+      <input class="pi_qty" type="number" step="0.01" placeholder="الكمية" value="${prefill.quantity??''}" style="flex:1;border:1.5px solid var(--line);border-radius:10px;padding:7px 10px" oninput="piRecalc(${idx},'qty')">
+      <input class="pi_uc" id="pi_uc_${idx}" type="number" step="0.01" placeholder="سعر الوحدة" value="${prefill.unit_cost??''}" style="flex:1;border:1.5px solid var(--line);border-radius:10px;padding:7px 10px" oninput="piRecalc(${idx},'unit')">
+      <input class="pi_total" id="pi_total_${idx}" type="number" step="0.01" placeholder="السعر الكلي" style="flex:1;border:1.5px solid var(--line);border-radius:10px;padding:7px 10px" oninput="piRecalc(${idx},'total')">
       <button type="button" class="mini del" onclick="document.getElementById('pi_row_${idx}').remove()">✗</button></div>`;
+  }
+  // 🧮 تحديث تلقائي بين سعر الوحدة والسعر الكلي — تكتب أي وحدة منهم وبيحسبلك التانية حسب الكمية
+  function piRecalc(idx, changed){
+    const row = document.getElementById('pi_row_'+idx); if(!row) return;
+    const qty = parseFloat(normalizeDigits(row.querySelector('.pi_qty')?.value))||0;
+    const ucEl = document.getElementById('pi_uc_'+idx);
+    const totalEl = document.getElementById('pi_total_'+idx);
+    if(!qty) return;
+    if(changed==='total'){
+      const total = parseFloat(normalizeDigits(totalEl.value))||0;
+      if(total>0) ucEl.value = (total/qty).toFixed(4);
+    } else {
+      const uc = parseFloat(normalizeDigits(ucEl.value))||0;
+      if(uc>0) totalEl.value = (uc*qty).toFixed(2);
+    }
   }
   function addPiRow(){document.getElementById('pi_list').insertAdjacentHTML('beforeend',piRow(++piIdx));}
   async function scanInvoiceWithAI(input){
@@ -8819,26 +8835,20 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
     const toBranch = BRANCHES.find(b=>b.id===toId);
     const transferredItems = [];
 
-    // 1) فحص المخزون الكافي بكل المواد قبل أي تعديل
-    for(const it of items){
-      const {data:src, error} = await db.from('branch_inventory')
-        .select('id,stock').eq('branch_id',fromId).eq('ingredient_id',it.ingredient_id).maybeSingle();
-      if(error){ toast('✗ خطأ بفحص المخزون: '+error.message); console.error(error); return; }
-      if(!src || (src.stock||0) < it.quantity){
-        const ingName = INGR.find(x=>x.id===it.ingredient_id)?.name||'مادة';
-        toast(`⚠️ المخزون غير كافي لـ${ingName} — المتاح: ${src?.stock||0}`);
-        return;
-      }
-    }
-
-    // 2) تنفيذ النقل فعليًا — مع فحص خطأ بكل خطوة
+    // 📉 نسمح بالنقل حتى لو المخزون بالمصدر غير كافي — بينزل تحت الصفر (سالب) بدل ما يمنع العملية،
+    // بالاتساق مع نفس سياسة البيع والإتلاف (أول فاتورة شراء جديدة بتصححه)
     for(const it of items){
       const {data:src, error:e1} = await db.from('branch_inventory')
-        .select('id,stock').eq('branch_id',fromId).eq('ingredient_id',it.ingredient_id).single();
+        .select('id,stock').eq('branch_id',fromId).eq('ingredient_id',it.ingredient_id).maybeSingle();
       if(e1){ toast('✗ خطأ: '+e1.message); console.error(e1); return; }
 
-      const {error:e2} = await db.from('branch_inventory').update({stock: src.stock - it.quantity}).eq('id',src.id);
-      if(e2){ toast('✗ فشل الخصم من المصدر: '+e2.message); console.error(e2); return; }
+      if(src){
+        const {error:e2} = await db.from('branch_inventory').update({stock: (src.stock||0) - it.quantity}).eq('id',src.id);
+        if(e2){ toast('✗ فشل الخصم من المصدر: '+e2.message); console.error(e2); return; }
+      } else {
+        const {error:e2b} = await db.from('branch_inventory').insert({branch_id:fromId, ingredient_id:it.ingredient_id, stock:-it.quantity, min_stock:0});
+        if(e2b){ toast('✗ فشل إنشاء مخزون المصدر: '+e2b.message); console.error(e2b); return; }
+      }
 
       const {data:dst, error:e3} = await db.from('branch_inventory')
         .select('id,stock').eq('branch_id',toId).eq('ingredient_id',it.ingredient_id).maybeSingle();
