@@ -665,6 +665,14 @@
 
   let ME = null;
   let BRANCHES = [], CATS = [], ITEMS = [], STAFF = [], CUSTOMERS = [], SETTINGS = {};
+  // 🔧 جدول settings يخزّن كل القيم كنص (حتى القيم المنطقية) — فلو خزّنّا false مباشرة بترجع نص "false"
+  // مش boolean false، والمقارنة "!==false" ما بتلتقطها أبدًا (نص لا يساوي boolean بجافاسكربت).
+  // هاي الدالة بتتعامل مع الحالتين مع بعض بأمان — تستخدم بدل أي مقارنة "SETTINGS.x!==false" يدوية.
+  function settingOn(key, defaultOn){
+    const v = SETTINGS[key];
+    if(v===undefined || v===null || v==='') return defaultOn!==false;
+    return v!==false && v!=='false';
+  }
   let cart = [], orderType = 'takeaway', payMethod = 'cash', activeCat = '__all__';
   let matchedCustomer = null, appliedCode = null, editingOrder = null;
   let currentShift = null;
@@ -1489,7 +1497,7 @@
         <option value="58" ${localStorage.getItem('sjs_paper_width')==='58'?'selected':''}>58 مم (صغير)</option>
       </select></div>
       <label class="chk" style="display:flex;align-items:center;gap:8px;margin:10px 0">
-        <input type="checkbox" id="dps_autoPrint" ${SETTINGS.auto_print_branch!==false?'checked':''}> 🔔 طباعة تلقائية لطلبات فرع هاد الجهاز
+        <input type="checkbox" id="dps_autoPrint" ${settingOn('auto_print_branch')?'checked':''}> 🔔 طباعة تلقائية لطلبات فرع هاد الجهاز
       </label>
       <div class="m-act">
         <button class="save" onclick="saveDevicePrinterSettings()">حفظ ✓</button>
@@ -2097,7 +2105,7 @@
       if(!ME) return;
       const scopeBranchId = ME.branch_id || getDeviceBranchId(); // فرع حساب الموظف (لو ثابت) أهم دايمًا، وفرع الجهاز احتياطي بس لحسابات بدون فرع (مدير/كول سنتر)
       if(!scopeBranchId) return;                      // بس أجهزة مرتبطة بفرع معيّن
-      if(SETTINGS.auto_print_branch===false) return;  // 🔧 مفعّلة افتراضيًا الآن — بتوقف بس لو المستخدم عطّلها صراحة (مش لو الإعداد ضاع بمسح الكاش)
+      if(!settingOn('auto_print_branch')) return;  // 🔧 مفعّلة افتراضيًا الآن — بتوقف بس لو المستخدم عطّلها صراحة (مش لو الإعداد ضاع بمسح الكاش)
       const { data, error } = await db.from('orders')
         .select('*, order_items(*), customers(name, phone, address)')
         .eq('branch_id', scopeBranchId)
@@ -3903,7 +3911,7 @@
       if(!ME) return;
       const scopeBranchId = ME.branch_id || getDeviceBranchId();
       if(!scopeBranchId) return;
-      if(SETTINGS.auto_print_branch===false) return;
+      if(!settingOn('auto_print_branch')) return;
       const { data, error } = await db.from('print_requests')
         .select('id, order_id, requested_by, orders(*, order_items(*), customers(name,phone,address))')
         .eq('target_branch_id', scopeBranchId)
@@ -4672,7 +4680,7 @@
         <div class="fld"><label>🔌 المنفذ</label><input id="f_printerPort" inputmode="numeric" value="${esc(SETTINGS.printer_port||'9100')}"></div>
         <div class="fld" style="background:#fff8e1;border-radius:10px;padding:10px 12px">
           <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
-            <input type="checkbox" id="f_autoPrintBranch" ${SETTINGS.auto_print_branch!==false?'checked':''} style="width:18px;height:18px">
+            <input type="checkbox" id="f_autoPrintBranch" ${settingOn('auto_print_branch')?'checked':''} style="width:18px;height:18px">
             🔔 طباعة تلقائية لطلبات الكول سنتر بهاد الفرع (فعّلها بس بجهاز الكاشير المتصل بالطابعة)
           </label>
         </div>
@@ -4690,11 +4698,11 @@
         <hr style="margin:16px 0"><h4 style="color:var(--maroon)">👷 بوابة الموظف — شو يشوف الموظف من بياناته</h4>
         <div style="color:var(--muted);font-size:.78rem;font-weight:600;margin-bottom:8px">بتطبّق على كل موظفي HR مع بعض</div>
         <div class="fld" style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
-          <label class="chk"><input type="checkbox" id="f_hrShowHours" ${SETTINGS.hr_portal_show_hours!==false?'checked':''}> ساعات العمل</label>
-          <label class="chk"><input type="checkbox" id="f_hrShowNet" ${SETTINGS.hr_portal_show_net!==false?'checked':''}> صافي المستحق</label>
-          <label class="chk"><input type="checkbox" id="f_hrShowAdvances" ${SETTINGS.hr_portal_show_advances!==false?'checked':''}> السلف القائمة</label>
-          <label class="chk"><input type="checkbox" id="f_hrShowMeals" ${SETTINGS.hr_portal_show_meals!==false?'checked':''}> الوجبات</label>
-          <label class="chk"><input type="checkbox" id="f_hrShowBalance" ${SETTINGS.hr_portal_show_balance!==false?'checked':''}> الرصيد السابق</label>
+          <label class="chk"><input type="checkbox" id="f_hrShowHours" ${settingOn('hr_portal_show_hours')?'checked':''}> ساعات العمل</label>
+          <label class="chk"><input type="checkbox" id="f_hrShowNet" ${settingOn('hr_portal_show_net')?'checked':''}> صافي المستحق</label>
+          <label class="chk"><input type="checkbox" id="f_hrShowAdvances" ${settingOn('hr_portal_show_advances')?'checked':''}> السلف القائمة</label>
+          <label class="chk"><input type="checkbox" id="f_hrShowMeals" ${settingOn('hr_portal_show_meals')?'checked':''}> الوجبات</label>
+          <label class="chk"><input type="checkbox" id="f_hrShowBalance" ${settingOn('hr_portal_show_balance')?'checked':''}> الرصيد السابق</label>
         </div>
         ${window.SJSPrinter?`
         <div class="fld"><label>🔵 طابعة البلوتوث (لوضع تطبيق أندرويد — بلوتوث)</label>
@@ -10407,13 +10415,13 @@ try {
         </div>
 
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
-          ${SETTINGS.hr_portal_show_hours!==false?`<div class="stat">ساعات هالشهر<b>${hoursThisMonth.toFixed(1)}</b></div>`:''}
-          ${SETTINGS.hr_portal_show_net!==false?`<div class="stat">صافي المستحق<b style="color:${net<0?'var(--red)':'var(--ok)'}">${fmt(net)} ${CURRENCY}</b></div>`:''}
-          ${SETTINGS.hr_portal_show_advances!==false?`<div class="stat">سلف هالشهر (تُخصم من الصافي)<b style="color:var(--warn)">${fmt(advTakenThisMonth)} ${CURRENCY}</b></div>`:''}
-          ${SETTINGS.hr_portal_show_advances!==false?`<div class="stat">إجمالي السلف القائمة (كل الوقت)<b style="color:var(--warn)">${fmt(advOutstanding)} ${CURRENCY}</b></div>`:''}
-          ${SETTINGS.hr_portal_show_meals!==false?`<div class="stat">وجبات هالشهر<b>${meals.length} <small>(${fmt(mealsTotal)})</small></b></div>`:''}
+          ${settingOn('hr_portal_show_hours')?`<div class="stat">ساعات هالشهر<b>${hoursThisMonth.toFixed(1)}</b></div>`:''}
+          ${settingOn('hr_portal_show_net')?`<div class="stat">صافي المستحق<b style="color:${net<0?'var(--red)':'var(--ok)'}">${fmt(net)} ${CURRENCY}</b></div>`:''}
+          ${settingOn('hr_portal_show_advances')?`<div class="stat">سلف هالشهر (تُخصم من الصافي)<b style="color:var(--warn)">${fmt(advTakenThisMonth)} ${CURRENCY}</b></div>`:''}
+          ${settingOn('hr_portal_show_advances')?`<div class="stat">إجمالي السلف القائمة (كل الوقت)<b style="color:var(--warn)">${fmt(advOutstanding)} ${CURRENCY}</b></div>`:''}
+          ${settingOn('hr_portal_show_meals')?`<div class="stat">وجبات هالشهر<b>${meals.length} <small>(${fmt(mealsTotal)})</small></b></div>`:''}
           ${shiftDed>0?`<div class="stat" style="grid-column:1/-1">🔻 خصم عجز/زيادة شيفت (معتمد)<b style="color:var(--red)">${fmt(shiftDed)} ${CURRENCY}</b></div>`:''}
-          ${SETTINGS.hr_portal_show_balance!==false && prevBalance!==0?`<div class="stat" style="grid-column:1/-1">📒 رصيد سابق (مرحّل)<b style="color:${prevBalance<0?'var(--red)':'var(--ok)'}">${prevBalance>0?'+':''}${fmt(prevBalance)} ${CURRENCY}</b></div>`:''}
+          ${settingOn('hr_portal_show_balance') && prevBalance!==0?`<div class="stat" style="grid-column:1/-1">📒 رصيد سابق (مرحّل)<b style="color:${prevBalance<0?'var(--red)':'var(--ok)'}">${prevBalance>0?'+':''}${fmt(prevBalance)} ${CURRENCY}</b></div>`:''}
         </div>
 
         <button onclick="loadEmpPortal()" style="width:100%;background:#7b2cbf;color:#fff;border:none;border-radius:12px;padding:10px;font-weight:900;margin-bottom:10px;cursor:pointer">🔄 تحديث</button>
