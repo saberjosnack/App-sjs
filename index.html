@@ -3044,17 +3044,24 @@
     const bytes = [];
     // init + محاذاة يسار
     bytes.push(0x1b,0x40,0x1b,0x61,0x00);
-    // GS v 0 — طباعة راستر
-    bytes.push(0x1d,0x76,0x30,0x00, BW&0xff,(BW>>8)&0xff, H&0xff,(H>>8)&0xff);
-    for(let yy=0; yy<H; yy++){
-      for(let xb=0; xb<BW; xb++){
-        let b=0;
-        for(let bit=0; bit<8; bit++){
-          const x=xb*8+bit, idx=(yy*W+x)*4;
-          const lum = 0.3*img[idx]+0.59*img[idx+1]+0.11*img[idx+2];
-          if(lum < 160) b |= (0x80>>bit);
+    // 🔧 مهم: أغلب الطابعات الحرارية الرخيصة عندها حد أقصى لطول صورة الراستر الواحدة —
+    // لو بعتنا التقرير كامل (خصوصًا تقرير إغلاق الشيفت الطويل) بأمر واحد، الطابعة بتوقف/تقص
+    // بمنتصفه بصمت. الحل القياسي: نقسّم الصورة لشرائح (بانداجات) ونرسل كل شريحة بأمر راستر
+    // منفصل ورا بعض — هيك ما في حد أقصى فعلي لطول الفاتورة إطلاقًا.
+    const BAND_H = 200; // ارتفاع الشريحة الواحدة بالبكسل — آمن لمعظم الطابعات
+    for(let bandStart=0; bandStart<H; bandStart+=BAND_H){
+      const bandH = Math.min(BAND_H, H-bandStart);
+      bytes.push(0x1d,0x76,0x30,0x00, BW&0xff,(BW>>8)&0xff, bandH&0xff,(bandH>>8)&0xff);
+      for(let yy=bandStart; yy<bandStart+bandH; yy++){
+        for(let xb=0; xb<BW; xb++){
+          let b=0;
+          for(let bit=0; bit<8; bit++){
+            const x=xb*8+bit, idx=(yy*W+x)*4;
+            const lum = 0.3*img[idx]+0.59*img[idx+1]+0.11*img[idx+2];
+            if(lum < 160) b |= (0x80>>bit);
+          }
+          bytes.push(b);
         }
-        bytes.push(b);
       }
     }
     // تغذية + قص
