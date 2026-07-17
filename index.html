@@ -3017,22 +3017,48 @@
     const is58 = paperSize==='58';
     const W = is58 ? 384 : 576;                      // 58mm≈384 نقطة، 80mm≈576 نقطة
     const scale = is58 ? 0.72 : 1;                    // تصغير الخط تناسبيًا لورق 58مم
-    const lines = textContent.split('\n');
+    const rawLines = textContent.split('\n');
     const LH = Math.round(34*scale), PAD = 8;
+    const maxW = W - 20; // هامش يمين ويسار
+    // 🔧 إصلاح جذري: نستخدم كانفاس مؤقت بس لقياس عرض النص، ونلف أي سطر أطول من عرض الورقة
+    // لأكثر من سطر — قبل هيك كان السطر الطويل يكمل يكتب برا حدود الصفحة الفعلية وينقص فعليًا
+    // من الطباعة (مش مجرد مظهر) لأنه أي بكسل خارج عرض الكانفاس ما بينرسم إطلاقًا.
+    const measureCv = document.createElement('canvas');
+    const mctx = measureCv.getContext('2d');
+    const visualLines = []; // كل عنصر: {text, isSep, isBig, isCentered}
+    rawLines.forEach(line=>{
+      const sep = /^[═─-]{5,}/.test(line.trim());
+      if(sep){ visualLines.push({isSep:true}); return; }
+      const big = /SABER|إجمالي|تقرير/.test(line);
+      const centered = /SABER|شكرًا|توقيع|طلب #|SJS/.test(line);
+      mctx.font = "bold " + Math.round((big?30:26)*scale) + "px 'Cairo', Arial, sans-serif";
+      if(mctx.measureText(line).width <= maxW){
+        visualLines.push({text:line, isBig:big, isCentered:centered});
+        return;
+      }
+      // لف السطر الطويل — نقسّمه على المسافات، ونجمع كلمات لحد ما نقارب أقصى عرض
+      const words = line.split(' ');
+      let cur = '';
+      words.forEach(w=>{
+        const test = cur ? cur+' '+w : w;
+        if(mctx.measureText(test).width > maxW && cur){
+          visualLines.push({text:cur, isBig:big, isCentered:centered});
+          cur = w;
+        } else cur = test;
+      });
+      if(cur) visualLines.push({text:cur, isBig:big, isCentered:centered});
+    });
     const cv = document.createElement('canvas');
-    cv.width = W; cv.height = PAD*2 + lines.length*LH + 20;
+    cv.width = W; cv.height = PAD*2 + visualLines.length*LH + 20;
     const ctx = cv.getContext('2d');
     ctx.fillStyle = '#fff'; ctx.fillRect(0,0,cv.width,cv.height);
     ctx.fillStyle = '#000'; ctx.direction = 'rtl'; ctx.textBaseline = 'top';
     let y = PAD;
-    lines.forEach(line=>{
-      const sep = /^[═─-]{5,}/.test(line.trim());
-      if(sep){ ctx.fillRect(8, y+LH/2-1, W-16, 2); y += LH; return; }
-      const big = /SABER|إجمالي|تقرير/.test(line);
-      ctx.font = "bold " + Math.round((big?30:26)*scale) + "px 'Cairo', Arial, sans-serif";
-      const centered = /SABER|شكرًا|توقيع|طلب #|SJS/.test(line);
-      if(centered){ ctx.textAlign = 'center'; ctx.fillText(line.trim(), W/2, y); }
-      else { ctx.textAlign = 'right'; ctx.fillText(line, W-10, y); }
+    visualLines.forEach(vl=>{
+      if(vl.isSep){ ctx.fillRect(8, y+LH/2-1, W-16, 2); y += LH; return; }
+      ctx.font = "bold " + Math.round((vl.isBig?30:26)*scale) + "px 'Cairo', Arial, sans-serif";
+      if(vl.isCentered){ ctx.textAlign = 'center'; ctx.fillText(vl.text.trim(), W/2, y); }
+      else { ctx.textAlign = 'right'; ctx.fillText(vl.text, W-10, y); }
       y += LH;
     });
     return cv;
