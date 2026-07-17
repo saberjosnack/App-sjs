@@ -1345,6 +1345,7 @@
     const loginScreen = document.getElementById('loginScreen');
     const app = document.getElementById('app');
     if (loginScreen) loginScreen.classList.add('hidden');
+    document.getElementById('empPortalLogin')?.classList.add('hidden'); // 🔧 كانت تضل ظاهرة فوق شاشة الكاشير
     if (app) app.classList.remove('hidden');
     // منع فعلي (مش بس تنبيه) لو فيه تعارض بين فرع حساب الموظف وفرع الجهاز
     const devBr = getDeviceBranchId();
