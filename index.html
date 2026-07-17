@@ -6709,7 +6709,7 @@
       db.from('orders').select('employee_tab_name, employee_meal_id, total, status')
         .not('employee_tab_name','is',null)
         .gte('created_at', HR_FILTER.from+'T00:00:00').lte('created_at', HR_FILTER.to+'T23:59:59'),
-      db.from('shift_adjustments').select('staff_name, amount, status, created_at')
+      db.from('shift_adjustments').select('staff_id, staff_name, amount, status, created_at')
         .eq('status','approved')
         .gte('created_at', HR_FILTER.from+'T00:00:00').lte('created_at', HR_FILTER.to+'T23:59:59'),
       db.from('hr_time_logs').select('employee_id, clock_in, clock_out')
@@ -6748,7 +6748,11 @@
       const myMeals = mealOrders.filter(o=>o.employee_meal_id ? o.employee_meal_id===e.id : o.employee_tab_name===e.name);
       const mealsCount = myMeals.length;
       const mealsTotal = myMeals.reduce((a,o)=>a+parseFloat(o.total||0),0);
-      const myShiftAdj = shiftAdjustments.filter(a=>a.staff_name===e.name);
+      const myShiftAdj = shiftAdjustments.filter(a=>{
+        const linkedStaff = STAFF.find(s=>s.id===a.staff_id);
+        if(linkedStaff?.linked_hr_id) return linkedStaff.linked_hr_id===e.id;
+        return a.staff_name===e.name;
+      });
       const shiftDeduction = myShiftAdj.reduce((a,x)=>a+Math.abs(x.amount||0),0);
       const gross = hours * (e.hourly_wage||0);
       const opening = parseFloat(e.opening_balance||0);
@@ -7218,10 +7222,12 @@
         .gte('created_at', HR_FILTER.from+'T00:00:00').lte('created_at', HR_FILTER.to+'T23:59:59').order('created_at'),
       db.from('orders').select('created_at, order_number, total').or(`employee_meal_id.eq.${empId},employee_tab_name.eq."${r.emp.name}"`).neq('status','cancelled')
         .gte('created_at', HR_FILTER.from+'T00:00:00').lte('created_at', HR_FILTER.to+'T23:59:59').order('created_at'),
-      db.from('shift_adjustments').select('created_at, amount, note').eq('staff_name', r.emp.name).eq('status','approved')
+      db.from('shift_adjustments').select('created_at, amount, note, staff_id, staff_name').eq('status','approved')
         .gte('created_at', HR_FILTER.from+'T00:00:00').lte('created_at', HR_FILTER.to+'T23:59:59').order('created_at'),
     ]);
-    const att = attRes.data||[], adv = advRes.data||[], meals = ordRes.data||[], shiftAdj = shiftAdjRes.data||[];
+    const att = attRes.data||[], adv = advRes.data||[], meals = ordRes.data||[];
+    const linkedStaffIds = STAFF.filter(s=>s.linked_hr_id===empId).map(s=>s.id);
+    const shiftAdj = (shiftAdjRes.data||[]).filter(a=> linkedStaffIds.length ? linkedStaffIds.includes(a.staff_id) : a.staff_name===r.emp.name);
     const html = `<html dir="rtl"><head><meta charset="UTF-8">
       <style>
         body{font-family:Cairo,Arial;padding:28px;color:#241414}
@@ -9264,6 +9270,7 @@ try {
   }
   async function staffForm(id){
     await loadCustomRoles();
+    if(!MEAL_NAMES_DATA.length){ const {data} = await db.from('meal_names').select('*').eq('is_active', true).order('name'); MEAL_NAMES_DATA = data||[]; }
     const st = STAFF.find(x=>x.id===id)||{};
     const effPerm = k => {
       if(st.permissions && typeof st.permissions==='object' && k in st.permissions) return !!st.permissions[k];
@@ -9291,6 +9298,13 @@ try {
         </select></div>
       <div class="fld"><label>الفرع</label><select id="f_sb"><option value="">كل الفروع</option>
         ${BRANCHES.map(b=>`<option value="${b.id}" ${st.branch_id===b.id?'selected':''}>${esc(b.name_ar)}</option>`).join('')}</select></div>
+      <div class="fld" style="background:#e8f5ff;border-radius:10px;padding:10px 12px">
+        <label>🔗 اربطه بموظف HR (اختياري)</label>
+        <select id="f_hrLink"><option value="">— بدون ربط —</option>
+          ${MEAL_NAMES_DATA.map(n=>`<option value="${n.id}" ${st.linked_hr_id===n.id?'selected':''}>${esc(n.name)}</option>`).join('')}
+        </select>
+        <div style="font-size:.78rem;color:var(--muted);font-weight:600;margin-top:4px">لو هاد الموظف عنده كمان راتب/رصيد بـHR (نفس الشخص)، اربطه هون عشان عجز/زيادة الشيفت تنزل عليه صح بدون ما تعتمد على تطابق الاسم.</div>
+      </div>
       <div class="fld" id="permsBox"><label>الصلاحيات * <span id="permsHint" style="font-weight:600">(عدّل زي ما بدك — بتنحفظ لهاد الموظف تحديدًا)</span></label>
         <div style="display:flex;gap:8px;margin:6px 0">
           <button type="button" class="mini ok" onclick="document.querySelectorAll('.permChk').forEach(c=>c.checked=true)">تحديد الكل</button>
@@ -9345,7 +9359,7 @@ try {
     let roleVal = f_sr ? f_sr.value : 'cashier';
     let roleId = null;
     if(roleVal.startsWith('custom:')){ roleId = roleVal.split(':')[1]; roleVal='custom'; }
-    const rec={full_name: f_sn ? f_sn.value.trim() : '', username: f_su ? f_su.value.trim() : '', pin: f_sp ? f_sp.value.trim() : '', role: roleVal, role_id: roleId, branch_id: f_sb ? f_sb.value||null : null, permissions};
+    const rec={full_name: f_sn ? f_sn.value.trim() : '', username: f_su ? f_su.value.trim() : '', pin: f_sp ? f_sp.value.trim() : '', role: roleVal, role_id: roleId, branch_id: f_sb ? f_sb.value||null : null, permissions, linked_hr_id: document.getElementById('f_hrLink')?.value || null};
     if(!rec.full_name||!rec.username||!/^\d{4}$/.test(rec.pin)){ toast('⚠️ جميع الحقول مطلوبة'); return; }
     if(rec.role==='cashier'&&!rec.branch_id){ toast('⚠️ الكاشير يحتاج فرع'); return; }
     const dup=STAFF.find(x=>x.pin===rec.pin&&x.id!==id&&x.is_active);
@@ -10099,12 +10113,16 @@ try {
       if(EMP_OPEN_LOG) startGeofenceWatch(); else stopGeofenceWatch();
 
       const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0,0,0,0);
+      const { data: linkedStaffRows } = await db.from('staff').select('id').eq('linked_hr_id', EMP.id);
+      const linkedIds = (linkedStaffRows||[]).map(s=>s.id);
       const [logsRes, attRes, advRes, mealsRes, shiftAdjRes] = await Promise.all([
         db.from('hr_time_logs').select('*').eq('employee_id', EMP.id).gte('clock_in', monthStart.toISOString()).order('clock_in',{ascending:false}),
         db.from('hr_attendance').select('hours').eq('employee_id', EMP.id).gte('work_date', monthStart.toISOString().split('T')[0]),
         db.from('hr_advances').select('*').eq('employee_id', EMP.id).order('created_at',{ascending:false}),
         db.from('orders').select('total, created_at').or(`employee_meal_id.eq.${EMP.id},employee_tab_name.eq."${EMP.name}"`).neq('status','cancelled').gte('created_at', monthStart.toISOString()),
-        db.from('shift_adjustments').select('amount').eq('staff_name', EMP.name).eq('status','approved').gte('created_at', monthStart.toISOString()),
+        linkedIds.length
+          ? db.from('shift_adjustments').select('amount').in('staff_id', linkedIds).eq('status','approved').gte('created_at', monthStart.toISOString())
+          : db.from('shift_adjustments').select('amount').eq('staff_name', EMP.name).eq('status','approved').gte('created_at', monthStart.toISOString()),
       ]);
       const logs = logsRes.data||[];
       // 🚩 نفس فحص الأمان: أي جلسة أطول من 16 ساعة متواصلة مستبعدة (غالبًا نسيان خروج) لحد ما الأدمن يراجعها
@@ -10275,12 +10293,16 @@ try {
     // عن الشاشة الرئيسية وعن كشف الأدمن يلي بيحسبوا الشهر الحالي بس
     const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0,0,0,0);
     const fromIso = monthStart.toISOString();
+    const { data: linkedStaffRows2 } = await db.from('staff').select('id').eq('linked_hr_id', empId);
+    const linkedIds2 = (linkedStaffRows2||[]).map(s=>s.id);
     const [attRes, logsRes, advRes, mealsRes, shiftAdjRes] = await Promise.all([
       db.from('hr_attendance').select('hours').eq('employee_id', empId).gte('work_date', fromIso.split('T')[0]),
       db.from('hr_time_logs').select('clock_in,clock_out').eq('employee_id', empId).not('clock_out','is',null).gte('clock_in', fromIso),
       db.from('hr_advances').select('amount').eq('employee_id', empId).gte('created_at', fromIso),
       db.from('orders').select('total').or(`employee_meal_id.eq.${empId},employee_tab_name.eq."${empName}"`).neq('status','cancelled').gte('created_at', fromIso),
-      db.from('shift_adjustments').select('amount').eq('staff_name', empName).eq('status','approved').gte('created_at', fromIso),
+      linkedIds2.length
+        ? db.from('shift_adjustments').select('amount').in('staff_id', linkedIds2).eq('status','approved').gte('created_at', fromIso)
+        : db.from('shift_adjustments').select('amount').eq('staff_name', empName).eq('status','approved').gte('created_at', fromIso),
     ]);
     const manualHours = (attRes.data||[]).reduce((a,x)=>a+parseFloat(x.hours||0),0);
     const portalHours = (logsRes.data||[]).filter(l=>((new Date(l.clock_out)-new Date(l.clock_in))/3600000)<=16).reduce((a,l)=>a+((new Date(l.clock_out)-new Date(l.clock_in))/3600000),0);
