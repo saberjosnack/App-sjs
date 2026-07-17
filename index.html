@@ -3337,7 +3337,9 @@
     });
     for(const [ingId, qty] of Object.entries(consumption)){
       const {data:bi} = await db.from('branch_inventory').select('id,stock').eq('branch_id',branchId).eq('ingredient_id',ingId).maybeSingle();
-      if(bi) await db.from('branch_inventory').update({stock: Math.max(0,(bi.stock||0)-qty)}).eq('id',bi.id);
+      // 📉 نسمح للمخزون ينزل تحت الصفر (سالب) لو البيع تجاوز المسجّل — بدل ما يتوقف عند صفر ويخفي
+      // الفرق الحقيقي. هيك أول فاتورة شراء جديدة بتصحح الرصيد تلقائيًا (تضيف على الرقم السالب)
+      if(bi) await db.from('branch_inventory').update({stock: (bi.stock||0)-qty}).eq('id',bi.id);
       logMovement(branchId, ingId, -qty, 'sale', 'خصم بيع');
     }
   }
@@ -6072,7 +6074,7 @@
         </div>
         <table class="tbl"><tr><th>المادة</th>${admin?'<th>المخزون الحالي</th>':''}<th>الوحدة</th>${admin?'<th>الحد الأدنى</th><th>الحالة</th><th></th>':''}</tr>
           ${br.items.map(i=>{
-            const low = (i.min_stock||0) > 0 && (i.stock||0) <= (i.min_stock||0);
+            const low = (i.stock||0) < 0 || ((i.min_stock||0) > 0 && (i.stock||0) <= (i.min_stock||0));
             return `<tr class="${admin&&low?'late':''}">
               <td><b>${esc(i.ingredients?.name||'—')}</b></td>
               ${admin?`<td><b style="color:${low?'var(--red)':'var(--ok)'}">${i.stock||0}</b></td>`:''}
@@ -6082,7 +6084,7 @@
         </table>
       </div>`).join('') || '<div class="empty-note">ما في مخزون مسجل بفرعك</div>';
 
-    const lowAlerts = admin ? (inv||[]).filter(x=>(x.min_stock||0)>0 && (x.stock||0)<=(x.min_stock||0)) : [];
+    const lowAlerts = admin ? (inv||[]).filter(x=>(x.stock||0)<0 || ((x.min_stock||0)>0 && (x.stock||0)<=(x.min_stock||0))) : [];
     C.innerHTML = `
       ${admin ? (lowAlerts.length ? `<div class="alert-red" style="margin-bottom:12px">⚠️ ${lowAlerts.length} مادة تحتاج تعبئة: ${lowAlerts.map(x=>esc(x.ingredients?.name||'—')).join('، ')}</div>` : '<div class="alert-ok" style="margin-bottom:12px">✅ المخزون كافي في كل الفروع</div>') : ''}
       <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">
@@ -8141,11 +8143,11 @@ window.__lastEmpMealsData = null;
       // خصم من مخزون الفرع
       const {data:bi} = await db.from('branch_inventory').select('id,stock').eq('branch_id',branchId).eq('ingredient_id',ingId).maybeSingle();
       if(!bi || (bi.stock||0) < qty){
-        if(!confirm('⚠️ المخزون المتاح ('+((bi?.stock)||0)+') أقل من الكمية المتلفة — تكمل بالتسجيل؟ (المخزون رح ينزل لصفر)')) return;
+        if(!confirm('⚠️ المخزون المتاح ('+((bi?.stock)||0)+') أقل من الكمية المتلفة — تكمل بالتسجيل؟ (المخزون رح ينزل تحت الصفر لحد ما تنزل فاتورة شراء جديدة تصححه)')) return;
       }
-      const newStock = Math.max(0, (bi?.stock||0) - qty);
+      const newStock = (bi?.stock||0) - qty;
       if(bi) await db.from('branch_inventory').update({stock:newStock}).eq('id',bi.id);
-      else await db.from('branch_inventory').insert({branch_id:branchId, ingredient_id:ingId, stock:0, min_stock:0});
+      else await db.from('branch_inventory').insert({branch_id:branchId, ingredient_id:ingId, stock:-qty, min_stock:0});
       // تسجيل بجدول الإتلاف
       const { error } = await db.from('waste_log').insert({
         branch_id: branchId, ingredient_id: ingId, quantity: qty,
@@ -10083,10 +10085,14 @@ try {
     const body = document.getElementById('empPortalBody');
     body.innerHTML = '<div class="empty-note">... جاري التحميل</div>';
     try{
-      // 🔄 نحدّث بيانات الموظف (سعر الساعة، الرصيد السابق) من قاعدة البيانات كل مرة —
+      // 🔄 نحدّث بيانات الموظف (سعر الساعة، الرصيد السابق) وإعدادات النظام من قاعدة البيانات كل مرة —
       // عشان أي تعديل يعمله الأدمن ينعكس فورًا حتى لو الموظف فاتح البوابة من قبل
-      const { data: freshEmp } = await db.from('meal_names').select('*').eq('id', EMP.id).maybeSingle();
-      if(freshEmp) EMP = freshEmp;
+      const [freshEmpRes, settingsRes] = await Promise.all([
+        db.from('meal_names').select('*').eq('id', EMP.id).maybeSingle(),
+        db.from('settings').select('*'),
+      ]);
+      if(freshEmpRes.data) EMP = freshEmpRes.data;
+      SETTINGS = {}; (settingsRes.data||[]).forEach(x=>SETTINGS[x.key]=x.value);
 
       const { data: openLog } = await db.from('hr_time_logs').select('*').eq('employee_id', EMP.id).is('clock_out', null).order('clock_in',{ascending:false}).limit(1).maybeSingle();
       EMP_OPEN_LOG = openLog||null;
