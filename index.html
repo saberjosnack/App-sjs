@@ -10429,6 +10429,14 @@ try {
 
   async function empClockIn(){
     try{
+      // 🔒 فحص أمان: نتأكد إنه ما في جلسة دخول مفتوحة أصلًا قبل ما نسمح بواحدة جديدة —
+      // هاد بيمنع تسجيل دخول مزدوج (نقرة مضاعفة، صفحة قديمة، جهاز تاني...) يلي كان ممكن يضاعف ساعاته بالغلط
+      const { data: openCheck } = await db.from('hr_time_logs').select('id, clock_in').eq('employee_id', EMP.id).is('clock_out', null).limit(1).maybeSingle();
+      if(openCheck){
+        toast('⚠️ عندك جلسة دخول مفتوحة أصلًا من '+new Date(openCheck.clock_in).toLocaleTimeString('ar-JO',{hour:'2-digit',minute:'2-digit'})+' — سجّل خروج منها أول');
+        loadEmpPortal();
+        return;
+      }
       toast('📍 جاري تحديد موقعك...');
       const geo = await getGeo();
       const fence = await checkGeofence(geo.lat, geo.lng, EMP.id);
@@ -10437,7 +10445,12 @@ try {
         employee_id: EMP.id, employee_name: EMP.name, clock_in: new Date().toISOString(),
         lat_in: geo.lat, lng_in: geo.lng
       });
-      if(error){ toast('✗ '+error.message); return; }
+      if(error){
+        if(error.message?.includes('idx_hr_time_logs_one_open_session')) toast('⚠️ عندك جلسة دخول مفتوحة أصلًا — سجّل خروج منها أول');
+        else toast('✗ '+error.message);
+        loadEmpPortal();
+        return;
+      }
       toast('✅ تم تسجيل الدخول'+(fence.name?' — '+fence.name:''));
       loadEmpPortal();
     }catch(e){ toast('⛔ '+e.message); }
