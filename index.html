@@ -3339,7 +3339,9 @@
       const {data:bi} = await db.from('branch_inventory').select('id,stock').eq('branch_id',branchId).eq('ingredient_id',ingId).maybeSingle();
       // 📉 نسمح للمخزون ينزل تحت الصفر (سالب) لو البيع تجاوز المسجّل — بدل ما يتوقف عند صفر ويخفي
       // الفرق الحقيقي. هيك أول فاتورة شراء جديدة بتصحح الرصيد تلقائيًا (تضيف على الرقم السالب)
+      // 🔧 مهم: لو ما كان في سجل مخزون أصلًا لهاد الفرع/المادة، ننشئه بالسالب بدل ما نتجاهل الخصم بصمت
       if(bi) await db.from('branch_inventory').update({stock: (bi.stock||0)-qty}).eq('id',bi.id);
+      else await db.from('branch_inventory').insert({branch_id:branchId, ingredient_id:ingId, stock:-qty, min_stock:0});
       logMovement(branchId, ingId, -qty, 'sale', 'خصم بيع');
     }
   }
@@ -5097,7 +5099,24 @@
   async function renderIngredients(){
     await loadIngredients();
     const C=document.getElementById('admContent');
-    C.innerHTML=`<button class="add-btn" onclick="ingredientForm()">＋ إضافة مكون</button>
+    const dupWarnings = [];
+    for(let i=0;i<INGR.length;i++){
+      for(let j=i+1;j<INGR.length;j++){
+        const a=(INGR[i].name||'').trim(), b=(INGR[j].name||'').trim();
+        if(!a||!b) continue;
+        if(a===b || a.includes(b) || b.includes(a)) dupWarnings.push([INGR[i], INGR[j]]);
+      }
+    }
+    C.innerHTML=`
+      ${dupWarnings.length?`<div class="panel" style="margin-bottom:14px;border:2px solid var(--red)">
+        <h4 style="color:var(--red);margin-bottom:8px">⚠️ مكونات بأسماء متشابهة/مكرّرة (${dupWarnings.length})</h4>
+        <div style="color:var(--muted);font-size:.82rem;font-weight:600;margin-bottom:8px">لو صنف مبيع مربوط بوصفة تستخدم مكون واحد من الاثنين، والمخزون المعروض هو التاني، الخصم رح يصير على مكون والعرض على مكون تاني — فيبين إنه "ما عم ينزل" رغم إنه فعليًا عم ينزل بسجل تاني. وحّد الاسم أو احذف المكرر.</div>
+        <div class="tbl-wrap"><table class="tbl">
+          <tr><th>مكون 1</th><th>مكون 2</th></tr>
+          ${dupWarnings.map(([a,b])=>`<tr><td><b>${esc(a.name)}</b> (${a.stock||0} ${esc(a.unit)})</td><td><b>${esc(b.name)}</b> (${b.stock||0} ${esc(b.unit)})</td></tr>`).join('')}
+        </table></div>
+      </div>`:''}
+      <button class="add-btn" onclick="ingredientForm()">＋ إضافة مكون</button>
       <div class="tbl-wrap"><table class="tbl">
         <tr><th>المكون</th><th>الوحدة</th><th>سعر الوحدة</th><th>المخزون</th><th>الحد الأدنى</th><th>الحالة</th><th></th></tr>
         ${INGR.map(i=>`<tr>
@@ -7812,8 +7831,31 @@
       <div id="em_result"></div>`;
     runEmpMealsReport();
   }
-  function mealNameForm(id){
+  async function mealNameForm(id){
     const n = MEAL_NAMES_DATA.find(x=>x.id===id) || {};
+    let locSection = '';
+    if(id){
+      try{
+        const [allLocsRes, myLocsRes] = await Promise.all([
+          db.from('hr_locations').select('*').order('name'),
+          db.from('hr_employee_locations').select('*').eq('employee_id', id),
+        ]);
+        const allLocs = allLocsRes.data||[];
+        const myLocs = myLocsRes.data||[];
+        const myLocMap = {}; myLocs.forEach(l=>myLocMap[l.location_id]=l);
+        locSection = `<hr style="margin:10px 0"><div style="font-weight:800;color:var(--maroon);margin-bottom:6px">📍 مواقع الدوام المسموحة (رئيسي/فرعي)</div>
+          <div style="font-size:.78rem;color:var(--muted);font-weight:600;margin-bottom:6px">لو ما حددت أي موقع، بيصير مسموح يسجل دخول من أي موقع معرّف بالنظام عمومًا. حدد موقع رئيسي واحد على الأقل لو بدك تقيّده.</div>
+          <div id="mn_locsWrap">
+            ${allLocs.map(loc=>`<div style="display:flex;align-items:center;gap:8px;background:#fff;border:1.5px solid var(--line);border-radius:10px;padding:8px 10px;margin-bottom:6px">
+              <input type="checkbox" id="mn_loc_${loc.id}" ${myLocMap[loc.id]?'checked':''} style="width:18px;height:18px">
+              <span style="flex:1;font-weight:700">${esc(loc.name)}</span>
+              <label style="display:flex;align-items:center;gap:4px;font-size:.8rem;font-weight:700">
+                <input type="radio" name="mn_primary" id="mn_primary_${loc.id}" value="${loc.id}" ${myLocMap[loc.id]?.is_primary?'checked':''}> رئيسي
+              </label>
+            </div>`).join('')||'<div class="empty-note">ما في مواقع معرّفة بالنظام بعد — ضيفهم من "📍 مواقع الدخول"</div>'}
+          </div>`;
+      }catch(e){ console.error('load employee locations failed:', e); }
+    }
     modal(`<h3>${id?'تعديل موظف HR':'إضافة موظف HR جديد'}</h3>
       <div class="fld"><label>الاسم</label><input id="mn_name" value="${esc(n.name||'')}" placeholder="مثال: أبو محمد (نظافة)"></div>
       <div class="fld"><label>نسبة خصم الوجبة %</label><input id="mn_disc" type="number" step="1" min="0" max="100" value="${n.discount_percent??20}"></div>
@@ -7824,6 +7866,7 @@
       <hr style="margin:10px 0"><div style="font-weight:800;color:var(--maroon);margin-bottom:6px">👷 دخول بوابة الموظف (اختياري)</div>
       <div class="fld"><label>اسم المستخدم</label><input id="mn_user" value="${esc(n.username||'')}" placeholder="بدون فراغات، بالإنجليزي مثلًا"></div>
       <div class="fld"><label>الرقم السري</label><input id="mn_pin" inputmode="numeric" value="${esc(n.pin||'')}" placeholder="مثال: 1234"></div>
+      ${locSection}
       ${id?`<div class="fld" style="background:#e8f5ff;border-radius:10px;padding:10px 12px">
         <div style="font-weight:800;font-size:.85rem;margin-bottom:4px">🔧 إصلاح ربط طلبات/وجبات قديمة</div>
         <div style="font-size:.78rem;color:var(--muted);font-weight:600;margin-bottom:6px">لو غيّرت اسمه قبل هيك، الطلبات القديمة المسجّلة باسمه القديم بتضيع من كشفه. اكتب اسمه القديم هون مرة وحدة تربطهم فورًا وبشكل دائم (ما تحتاج تعيدها كل مرة).</div>
@@ -7866,8 +7909,20 @@
     if(isNaN(disc)||disc<0||disc>100){ toast('⚠️ نسبة الخصم يجب أن تكون بين 0 و100'); return; }
     const rec = { name, discount_percent: disc, hourly_wage: wage, opening_balance, max_advance_percent, username, pin };
     if(id) rec.is_active = document.getElementById('mn_active')?.checked ?? true;
-    const r = id ? await db.from('meal_names').update(rec).eq('id',id) : await db.from('meal_names').insert(rec);
+    const r = id ? await db.from('meal_names').update(rec).eq('id',id) : await db.from('meal_names').insert(rec).select().single();
     if(r.error){ toast('✗ '+r.error.message+(r.error.message.includes('username')?' — اسم المستخدم هاد مستخدم لموظف تاني':'')); return; }
+    // 📍 حفظ مواقع الدوام المخصصة (رئيسي/فرعي) لو كانت الشاشة عارضاها
+    const empId = id || r.data?.id;
+    if(empId && document.getElementById('mn_locsWrap')){
+      try{
+        const { data: allLocs } = await db.from('hr_locations').select('id');
+        await db.from('hr_employee_locations').delete().eq('employee_id', empId);
+        const primaryVal = document.querySelector('input[name="mn_primary"]:checked')?.value;
+        const toInsert = (allLocs||[]).filter(loc=>document.getElementById('mn_loc_'+loc.id)?.checked)
+          .map(loc=>({ employee_id: empId, location_id: loc.id, is_primary: loc.id===primaryVal }));
+        if(toInsert.length) await db.from('hr_employee_locations').insert(toInsert);
+      }catch(e){ console.error('save employee locations failed (نفّذ SQL):', e); }
+    }
     closeModal(); toast('✓ انحفظ'); renderEmpMeals();
   }
 window.__lastEmpMealsData = null;
@@ -9857,38 +9912,77 @@ try {
     const wrap = document.getElementById('dhTableWrap'); if(!wrap) return;
     wrap.innerHTML = '<div class="empty-note">... جاري التحميل</div>';
     try{
-      let q = db.from('hr_time_logs').select('*')
+      let q1 = db.from('hr_time_logs').select('*')
         .gte('clock_in', DH_FILTER.from+'T00:00:00').lte('clock_in', DH_FILTER.to+'T23:59:59')
         .order('clock_in',{ascending:false});
-      if(DH_FILTER.emp) q = q.eq('employee_id', DH_FILTER.emp);
-      const { data, error } = await q;
-      if(error){ wrap.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message||'الجدول hr_time_logs غير موجود — نفّذ SQL بوابة الموظف أولاً')}</div>`; return; }
-      const logs = data||[];
+      if(DH_FILTER.emp) q1 = q1.eq('employee_id', DH_FILTER.emp);
+      let q2 = db.from('hr_attendance').select('*')
+        .gte('work_date', DH_FILTER.from).lte('work_date', DH_FILTER.to)
+        .order('work_date',{ascending:false});
+      if(DH_FILTER.emp) q2 = q2.eq('employee_id', DH_FILTER.emp);
+      const [logsRes, attRes] = await Promise.all([q1, q2]);
+      if(logsRes.error){ wrap.innerHTML = `<div class="alert-red">⚠️ ${esc(logsRes.error.message||'الجدول hr_time_logs غير موجود — نفّذ SQL بوابة الموظف أولاً')}</div>`; return; }
+      const logs = logsRes.data||[];
+      const manual = attRes.data||[];
       window.__DH_LOGS = logs;
-      const totalHours = logs.filter(l=>l.clock_out).reduce((a,l)=>a+((new Date(l.clock_out)-new Date(l.clock_in))/3600000),0);
+      window.__DH_MANUAL = manual;
+      // 🧩 نوحّد السجلات الذاتية (بصمة GPS) واليدوية (أدخلها الأدمن) بقائمة واحدة، ونجمعهم حسب الموظف
+      const rows = [];
+      logs.forEach((l,idx)=>{
+        const hrs = l.clock_out ? (new Date(l.clock_out)-new Date(l.clock_in))/3600000 : null;
+        rows.push({ empKey: l.employee_id||l.employee_name, empName: l.employee_name||'—', date: l.clock_in, kind:'auto', logIdx:idx, clockIn:l.clock_in, clockOut:l.clock_out, hrs });
+      });
+      manual.forEach((m,idx)=>{
+        rows.push({ empKey: m.employee_id||m.employee_name, empName: m.employee_name||'—', date: m.work_date+'T12:00:00', kind:'manual', attIdx:idx, hrs: parseFloat(m.hours||0), note:m.note });
+      });
+      const totalHours = rows.reduce((a,r)=>a+(r.hrs||0),0);
+      // تجميع حسب الموظف
+      const byEmp = {};
+      rows.forEach(r=>{ if(!byEmp[r.empKey]) byEmp[r.empKey] = { name:r.empName, rows:[] }; byEmp[r.empKey].rows.push(r); });
+      Object.values(byEmp).forEach(g=>g.rows.sort((a,b)=>b.date.localeCompare(a.date)));
+      const empGroups = Object.values(byEmp).sort((a,b)=>a.name.localeCompare(b.name,'ar'));
+
       wrap.innerHTML = `
         <div class="panel">
-          <div style="margin-bottom:10px;font-weight:800">إجمالي الساعات بالفترة: <span style="color:var(--red)">${totalHours.toFixed(1)} ساعة</span> — ${logs.length} سجل</div>
-          <div class="tbl-wrap"><table class="tbl">
-            <tr><th>الموظف</th><th>التاريخ</th><th>دخول</th><th>خروج</th><th>الساعات</th><th>موقع</th><th></th></tr>
-            ${logs.map((l,idx)=>{
-              const hrs = l.clock_out ? ((new Date(l.clock_out)-new Date(l.clock_in))/3600000).toFixed(2) : '...';
-              return `<tr class="${!l.clock_out?'late':''}">
-                <td><b>${esc(l.employee_name||'—')}</b></td>
-                <td>${new Date(l.clock_in).toLocaleDateString('ar-JO')}</td>
-                <td>${new Date(l.clock_in).toLocaleTimeString('ar-JO',{hour:'2-digit',minute:'2-digit'})}</td>
-                <td>${l.clock_out?new Date(l.clock_out).toLocaleTimeString('ar-JO',{hour:'2-digit',minute:'2-digit'}):'<b style="color:var(--ok)">🟢 لسا مفتوح</b>'}</td>
-                <td>${hrs}</td>
-                <td>${(l.lat_in||l.lat_out)?`<button class="mini ok" onclick="showDhMap(${idx})">🗺️</button>`:'—'}</td>
-                <td style="white-space:nowrap">
-                  <button class="mini edit" onclick="editDhLog(${idx})">✏️ تعديل</button>
-                  <button class="mini del" onclick="deleteDhLog(${idx})">🗑️ حذف</button>
-                </td>
-              </tr>`;
-            }).join('')||'<tr><td colspan="7" class="empty-note">ما في سجلات بهاي الفترة</td></tr>'}
-          </table></div>
+          <div style="margin-bottom:14px;font-weight:800">إجمالي الساعات بالفترة: <span style="color:var(--red)">${totalHours.toFixed(1)} ساعة</span> — ${rows.length} سجل — ${empGroups.length} موظف</div>
+          ${empGroups.map(g=>{
+            const empTotal = g.rows.reduce((a,r)=>a+(r.hrs||0),0);
+            return `<div style="border:1.5px solid var(--line);border-radius:12px;margin-bottom:14px;overflow:hidden">
+              <div style="background:var(--maroon);color:#fff;padding:10px 14px;display:flex;justify-content:space-between;align-items:center;font-weight:900">
+                <span>👤 ${esc(g.name)}</span>
+                <span>${empTotal.toFixed(1)} ساعة</span>
+              </div>
+              <table class="tbl" style="margin:0">
+                <tr><th>التاريخ</th><th>النوع</th><th>دخول</th><th>خروج</th><th>الساعات</th><th></th></tr>
+                ${g.rows.map(r=>`<tr class="${r.kind==='auto'&&!r.clockOut?'late':''}">
+                  <td>${new Date(r.date).toLocaleDateString('ar-JO',{weekday:'short',day:'2-digit',month:'2-digit'})}</td>
+                  <td>${r.kind==='auto'?'📍 ذاتي (بصمة)':'✍️ يدوي'}</td>
+                  <td>${r.kind==='auto'?new Date(r.clockIn).toLocaleTimeString('ar-JO',{hour:'2-digit',minute:'2-digit'}):'—'}</td>
+                  <td>${r.kind==='auto'?(r.clockOut?new Date(r.clockOut).toLocaleTimeString('ar-JO',{hour:'2-digit',minute:'2-digit'}):'<b style="color:var(--ok)">🟢 لسا مفتوح</b>'):'—'}</td>
+                  <td><b>${r.hrs!=null?r.hrs.toFixed(2):'...'}</b></td>
+                  <td style="white-space:nowrap">
+                    ${r.kind==='auto'?`
+                      ${(logs[r.logIdx].lat_in||logs[r.logIdx].lat_out)?`<button class="mini ok" onclick="showDhMap(${r.logIdx})">🗺️</button>`:''}
+                      <button class="mini edit" onclick="editDhLog(${r.logIdx})">✏️</button>
+                      <button class="mini del" onclick="deleteDhLog(${r.logIdx})">🗑️</button>
+                    `:`
+                      <button class="mini del" onclick="deleteDhManual('${manual[r.attIdx].id}')">🗑️ حذف</button>
+                    `}
+                  </td>
+                </tr>`).join('')}
+              </table>
+            </div>`;
+          }).join('')||'<div class="empty-note">ما في سجلات بهاي الفترة</div>'}
         </div>`;
     }catch(e){ wrap.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
+  }
+  async function deleteDhManual(attId){
+    if(!confirm('⚠️ حذف هاي السجلة اليدوية نهائيًا؟')) return;
+    try{
+      const { error } = await db.from('hr_attendance').delete().eq('id', attId);
+      if(error){ toast('✗ '+error.message); return; }
+      toast('✓ انحذفت'); loadDutyHoursTable();
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
   function editDhLog(idx){
     const l = (window.__DH_LOGS||[])[idx]; if(!l) return;
@@ -10276,7 +10370,7 @@ try {
       if(now-__lastAutoCheck < 60000) return; // ما نفحص أكتر من مرة بالدقيقة
       __lastAutoCheck = now;
       if(!EMP_OPEN_LOG) return;
-      const fence = await checkGeofence(pos.coords.latitude, pos.coords.longitude);
+      const fence = await checkGeofence(pos.coords.latitude, pos.coords.longitude, EMP?.id);
       if(!fence.ok){
         try{
           await db.from('hr_time_logs').update({
@@ -10309,7 +10403,22 @@ try {
     const a=Math.sin(dLat/2)**2+Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLng/2)**2;
     return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
   }
-  async function checkGeofence(lat,lng){
+  async function checkGeofence(lat,lng,empId){
+    // 📍 لو الموظف عنده مواقع محددة إله (رئيسي/فرعي)، نتحقق منها بس — غيرها ما يقبل
+    if(empId){
+      const { data: myLocIds } = await db.from('hr_employee_locations').select('location_id, is_primary').eq('employee_id', empId);
+      if(myLocIds && myLocIds.length){
+        const { data: myLocs } = await db.from('hr_locations').select('*').in('id', myLocIds.map(x=>x.location_id));
+        for(const loc of (myLocs||[])){
+          if(distMeters(lat,lng,loc.lat,loc.lng) <= (loc.radius_m||200)){
+            const isPrimary = myLocIds.find(x=>x.location_id===loc.id)?.is_primary;
+            return { ok:true, name:loc.name+(isPrimary?' (رئيسي)':' (فرعي)') };
+          }
+        }
+        return { ok:false, name:null };
+      }
+    }
+    // ما عنده مواقع محددة — نرجع للسلوك القديم (أي موقع معرّف بالنظام مسموح)
     const { data: locs } = await db.from('hr_locations').select('*');
     if(!locs || !locs.length) return { ok:true, name:null }; // ما في قيود محددة بعد — نسمح
     for(const loc of locs){
@@ -10322,7 +10431,7 @@ try {
     try{
       toast('📍 جاري تحديد موقعك...');
       const geo = await getGeo();
-      const fence = await checkGeofence(geo.lat, geo.lng);
+      const fence = await checkGeofence(geo.lat, geo.lng, EMP.id);
       if(!fence.ok){ toast('⛔ مش مسموح تسجل دخول من هاد الموقع — لازم تكون بمكان العمل'); return; }
       const { error } = await db.from('hr_time_logs').insert({
         employee_id: EMP.id, employee_name: EMP.name, clock_in: new Date().toISOString(),
