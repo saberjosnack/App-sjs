@@ -4084,11 +4084,12 @@
   let __bulkWaQueue = [];
   function openBulkWhatsapp(){
     if(!CUST_SELECTED.size){ toast('⚠️ حدد عميل واحد على الأقل'); return; }
+    const defaultMsg = SETTINGS.feedback_msg_template || 'مرحبا، شو رأيك بطلبك الأخير من صابر جو سناك؟ رأيك بهمنا كتير وبساعدنا نتحسن 🙏';
     modal(`<h3>📢 رسالة واتساب جماعية</h3>
       <div style="color:var(--muted);font-size:.82rem;font-weight:700;margin-bottom:10px">هيك بتحدد لكل عميل واحد لحاله (واتساب ما بيسمح إرسال جماعي تلقائي بدون تطبيق رسمي) — بس هي أسرع طريقة: رسالة جاهزة، تفتح واتساب لكل عميل، تضغط إرسال، وننتقل للتالي.</div>
       <div class="fld"><label>نص الرسالة</label>
-        <textarea id="bulk_msg" rows="5" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;font-family:inherit;font-size:1rem" placeholder="مرحبا [الاسم]، شو رأيك بطلبك الأخير من صابر جو سناك؟ رأيك بهمنا 🙏">مرحبا، شو رأيك بطلبك الأخير من صابر جو سناك؟ رأيك بهمنا كتير وبساعدنا نتحسن 🙏</textarea>
-        <div style="color:var(--muted);font-size:.78rem;margin-top:4px">💡 اكتب <b>[الاسم]</b> بأي مكان بالرسالة وبينحط اسم كل عميل تلقائيًا</div>
+        <textarea id="bulk_msg" rows="5" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;font-family:inherit;font-size:1rem" placeholder="مرحبا [الاسم]، شو رأيك بطلبك الأخير من صابر جو سناك؟ رأيك بهمنا 🙏">${esc(defaultMsg)}</textarea>
+        <div style="color:var(--muted);font-size:.78rem;margin-top:4px">💡 اكتب <b>[الاسم]</b> بأي مكان بالرسالة وبينحط اسم كل عميل تلقائيًا. 💡 تقدر تغيّر النص الافتراضي بشكل دائم من ⚙️ الإعدادات.</div>
       </div>
       <div class="m-act"><button class="save" onclick="startBulkWhatsapp()">🚀 ابدأ الإرسال (${CUST_SELECTED.size})</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
   }
@@ -4679,6 +4680,10 @@
       C.innerHTML=`<div class="mbox" style="max-width:480px">
         <h3>🔧 إعدادات النظام</h3>
         <div class="fld"><label>📱 رقم واتساب التوصيل</label><input id="f_wanum" inputmode="tel" value="${esc(SETTINGS.delivery_whatsapp||'')}"></div>
+        <div class="fld"><label>💬 نص رسالة "جربتوا الأكل؟" الافتراضي (للعملاء)</label>
+          <textarea id="f_feedbackMsg" rows="4" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;font-family:inherit;font-size:1rem" placeholder="مرحبا [الاسم]، شو رأيك بطلبك الأخير...">${esc(SETTINGS.feedback_msg_template||'مرحبا، شو رأيك بطلبك الأخير من صابر جو سناك؟ رأيك بهمنا كتير وبساعدنا نتحسن 🙏')}</textarea>
+          <div style="color:var(--muted);font-size:.78rem;margin-top:4px">💡 اكتب <b>[الاسم]</b> بأي مكان وبينحط اسم كل عميل تلقائيًا وقت الإرسال — هاد النص هو يلي بيطلع افتراضيًا كل مرة تفتح "رسالة واتساب جماعية"</div>
+        </div>
 
         <hr style="margin:16px 0"><h4 style="color:var(--maroon)">📅 اليوم المالي</h4>
         <div style="color:var(--muted);font-size:.82rem;font-weight:600;margin-bottom:8px">تحدد بداية ونهاية "اليوم" بالتقارير والطلبات — مفيد لو المطعم يشتغل لبعد نص الليل</div>
@@ -9153,6 +9158,7 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
       hr_portal_show_meals: document.getElementById('f_hrShowMeals')?.checked ?? true,
       hr_portal_show_balance: document.getElementById('f_hrShowBalance')?.checked ?? true,
       delivery_whatsapp: f_wanum ? f_wanum.value.trim() : '',
+      feedback_msg_template: document.getElementById('f_feedbackMsg')?.value.trim() || '',
       receipt_template: f_receiptTemplate ? f_receiptTemplate.value : 'modern',
       invoice_extra_info: f_extraInfo ? f_extraInfo.value.trim() : '',
       fin_start_hour: f_finStart ? f_finStart.value : '10',
