@@ -5200,6 +5200,13 @@
   async function renderIngredients(){
     await loadIngredients();
     const C=document.getElementById('admContent');
+    // 🔧 المخزون الحقيقي بيتجمّع من كل فرع (branch_inventory) — مش من رقم عام منفصل بجدول المكونات
+    // كان يظهر بالغلط قبل هيك (رقم مالوش أي علاقة بالمخزون الفعلي المستخدم بالبيع/الجرد/المشتريات)
+    let realStock = {};
+    try{
+      const { data: bal } = await db.from('branch_inventory').select('ingredient_id, stock');
+      (bal||[]).forEach(b=>{ realStock[b.ingredient_id] = (realStock[b.ingredient_id]||0) + parseFloat(b.stock||0); });
+    }catch(e){ console.error('load real stock failed:', e); }
     const dupWarnings = [];
     for(let i=0;i<INGR.length;i++){
       for(let j=i+1;j<INGR.length;j++){
@@ -5214,20 +5221,21 @@
         <div style="color:var(--muted);font-size:.82rem;font-weight:600;margin-bottom:8px">لو صنف مبيع مربوط بوصفة تستخدم مكون واحد من الاثنين، والمخزون المعروض هو التاني، الخصم رح يصير على مكون والعرض على مكون تاني — فيبين إنه "ما عم ينزل" رغم إنه فعليًا عم ينزل بسجل تاني. وحّد الاسم أو احذف المكرر.</div>
         <div class="tbl-wrap"><table class="tbl">
           <tr><th>مكون 1</th><th>مكون 2</th></tr>
-          ${dupWarnings.map(([a,b])=>`<tr><td><b>${esc(a.name)}</b> (${a.stock||0} ${esc(a.unit)})</td><td><b>${esc(b.name)}</b> (${b.stock||0} ${esc(b.unit)})</td></tr>`).join('')}
+          ${dupWarnings.map(([a,b])=>`<tr><td><b>${esc(a.name)}</b></td><td><b>${esc(b.name)}</b></td></tr>`).join('')}
         </table></div>
       </div>`:''}
       <button class="add-btn" onclick="ingredientForm()">＋ إضافة مكون</button>
+      <div style="color:var(--muted);font-size:.78rem;font-weight:600;margin-bottom:8px">💡 عمود "المخزون" هون مجموع كل الفروع مع بعض (للمرجعية بس) — التفصيل حسب كل فرع من شاشة "🏬 المستودع"</div>
       <div class="tbl-wrap"><table class="tbl">
-        <tr><th>المكون</th><th>الوحدة</th><th>سعر الوحدة</th><th>المخزون</th><th>الحد الأدنى</th><th>الحالة</th><th></th></tr>
-        ${INGR.map(i=>`<tr>
+        <tr><th>المكون</th><th>الوحدة</th><th>سعر الوحدة</th><th>المخزون (كل الفروع)</th><th>الحد الأدنى</th><th>الحالة</th><th></th></tr>
+        ${INGR.map(i=>{ const st = realStock[i.id]||0; return `<tr>
           <td><b>${esc(i.name)}</b></td><td>${esc(i.unit)}</td>
           <td>${fmt(i.unit_cost||0)} ${CURRENCY}</td>
-          <td><b style="color:${(i.stock||0)<=(i.min_stock||0)?'var(--red)':'var(--ok)'}">${i.stock||0} ${esc(i.unit)}</b></td>
+          <td><b style="color:${st<=(i.min_stock||0)?'var(--red)':'var(--ok)'}">${st} ${esc(i.unit)}</b></td>
           <td>${i.min_stock||0}</td>
-          <td>${(i.stock||0)<=(i.min_stock||0)?'⚠️ نقص':'✅'}</td>
+          <td>${(i.min_stock||0)>0 && st<=(i.min_stock||0)?'⚠️ نقص':'✅'}</td>
           <td><button class="mini edit" onclick="ingredientForm('${i.id}')">تعديل</button></td>
-        </tr>`).join('')||'<tr><td colspan="7" class="empty-note">ما في مكونات — ابدأ بإضافة أول مكون ⬆️</td></tr>'}
+        </tr>`; }).join('')||'<tr><td colspan="7" class="empty-note">ما في مكونات — ابدأ بإضافة أول مكون ⬆️</td></tr>'}
       </table></div>`;
   }
   function ingredientForm(id){
@@ -5237,8 +5245,8 @@
       <div class="fld"><label>وحدة القياس</label><select id="fi_un" onchange="document.getElementById('fi_un_custom_wrap').classList.toggle('hidden', this.value!=='__custom__')">${UNITS.map(u=>`<option ${u===it.unit?'selected':''}>${u}</option>`).join('')}<option value="__custom__" ${it.unit&&!UNITS.includes(it.unit)?'selected':''}>✏️ وحدة مخصصة...</option></select>
         <div id="fi_un_custom_wrap" class="${it.unit&&!UNITS.includes(it.unit)?'':'hidden'}" style="margin-top:6px"><input id="fi_un_custom" placeholder="اكتب اسم الوحدة (مثال: صينية، شوال...)" value="${it.unit&&!UNITS.includes(it.unit)?esc(it.unit):''}"></div></div>
       <div class="fld"><label>سعر الوحدة (${CURRENCY})</label><input id="fi_uc" inputmode="decimal" value="${it.unit_cost||''}"></div>
-      <div class="fld"><label>المخزون الحالي</label><input id="fi_st" inputmode="decimal" value="${it.stock||0}"></div>
-      <div class="fld"><label>الحد الأدنى (تنبيه نقص)</label><input id="fi_mn" inputmode="decimal" value="${it.min_stock||0}"></div>
+      <div class="fld"><label>الحد الأدنى (تنبيه نقص — نفس الرقم لكل الفروع)</label><input id="fi_mn" inputmode="decimal" value="${it.min_stock||0}"></div>
+      <div style="font-size:.78rem;color:var(--muted);font-weight:600;margin-bottom:8px">💡 مخزون كل فرع الفعلي بيتعدّل من شاشة "🏬 المستودع" أو بالجرد اليومي — مش من هون.</div>
       <div class="m-act"><button class="save" onclick="saveIngredient('${id||''}')">حفظ ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
   }
   async function saveIngredient(id){
@@ -5247,7 +5255,6 @@
     if(!unit){ toast('⚠️ اكتب وحدة القياس'); return; }
     const rec={name:document.getElementById('fi_nm').value.trim(),unit,
       unit_cost:parseFloat(document.getElementById('fi_uc').value)||0,
-      stock:parseFloat(document.getElementById('fi_st').value)||0,
       min_stock:parseFloat(document.getElementById('fi_mn').value)||0};
     if(!rec.name){toast('⚠️ الاسم مطلوب');return;}
     const r=id?await db.from('ingredients').update(rec).eq('id',id):await db.from('ingredients').insert(rec);
@@ -6199,42 +6206,64 @@
     }
     closeModal();
     toast(totalVarianceItems>0 ? ('⚠️ الجرد اترسل — '+totalVarianceItems+' مادة فيها فرق') : '✅ الجرد اترسل — كل شي مطابق');
-    // 📦 كشف النواقص تلقائيًا بعد الجرد — لو في مادة تحت الحد الأدنى، نجهّز رسالة واتساب جاهزة
-    // للتوريد فورًا (بكمية الاحتياج الفعلي: الحد الأدنى ناقص الموجود حاليًا)
+    // 📦 كشف النواقص تلقائيًا بعد الجرد — نستخدم الحد الأدنى الخاص بهاد الفرع بالذات (مش رقم عام مشترك)
+    // ولو فرع تاني عنده فائض من نفس المادة، نقترح نقل بضاعة داخلي بدل طلب من المورد
     try{
-      const shortages = results.filter(r=>{
-        const ing = INGR.find(x=>x.id===r.ingredient_id);
-        return ing && (ing.min_stock||0) > 0 && r.actual < ing.min_stock;
-      });
+      const { data: myBranchInv } = await db.from('branch_inventory').select('ingredient_id, min_stock').eq('branch_id', branchId);
+      const myMinMap = {}; (myBranchInv||[]).forEach(x=>myMinMap[x.ingredient_id]=x.min_stock||0);
+      const shortages = results.filter(r=> (myMinMap[r.ingredient_id]||0) > 0 && r.actual < myMinMap[r.ingredient_id]);
       if(shortages.length){
+        // نفحص باقي الفروع — عندهم فائض من نفس المواد؟
+        const { data: otherInv } = await db.from('branch_inventory').select('*, branches(name_ar)').neq('branch_id', branchId).in('ingredient_id', shortages.map(s=>s.ingredient_id));
         const { data: supIngs } = await db.from('supplier_ingredients').select('*');
         const { data: suppliers } = await db.from('suppliers').select('*');
-        let msg = `📦 تقرير نواقص — ${branchName}\nصابر جو سناك — بعد جرد ${new Date().toLocaleDateString('ar-JO')}\n\n`;
+        const transferItems = [], supplierItems = [];
         shortages.forEach(r=>{
           const ing = INGR.find(x=>x.id===r.ingredient_id);
-          const need = Math.max(0, (ing.min_stock||0) - r.actual);
-          const supNames = (supIngs||[]).filter(si=>si.ingredient_id===r.ingredient_id).map(si=>si.supplier);
-          const supLabel = supNames.length ? supNames.join(' / ') : 'بدون مورد محدد';
-          msg += `• ${supLabel} لازم نطلب منه ${need} ${ing.unit} — عنا بس ${r.actual} ${ing.unit}\n`;
-        });
-        msg += `\nمشكورين على التعاون 🙏`;
-        const phone = (SETTINGS.procurement_whatsapp||'').replace(/\D/g,'');
-        if(phone){
-          const url = `https://wa.me/${phone}?text=${encodeURIComponent(msg)}`;
-          // نحاول نفتحها تلقائيًا فورًا (best effort — بعض المتصفحات بتمنع فتح تلقائي)
-          const win = window.open(url, '_blank');
-          if(!win || win.closed){
-            // فشل الفتح التلقائي — نعرض زر واضح بدلها
-            modal(`<h3>📦 في نواقص بعد الجرد</h3>
-              <div style="color:var(--muted);font-weight:700;margin-bottom:10px">${shortages.length} مادة تحت الحد الأدنى — دوس الزر تحت لفتح واتساب وإرسال طلب التوريد</div>
-              <a href="${url}" target="_blank" style="display:block;text-align:center;background:#25D366;color:#fff;border-radius:12px;padding:14px;font-weight:900;text-decoration:none">📱 فتح واتساب وإرسال طلب التوريد</a>
-              <div class="m-act"><button class="cancel" onclick="closeModal()">إغلاق</button></div>`);
+          const need = Math.max(0, (myMinMap[r.ingredient_id]||0) - r.actual);
+          const surplusBranch = (otherInv||[]).find(o=>o.ingredient_id===r.ingredient_id && (o.stock||0) - (o.min_stock||0) >= need*0.5 && (o.stock||0) > (o.min_stock||0));
+          if(surplusBranch){
+            transferItems.push({ ing, need, actual:r.actual, fromBranch:surplusBranch.branches?.name_ar||'—', fromStock:surplusBranch.stock });
+          } else {
+            supplierItems.push({ ing, need, actual:r.actual });
           }
-        } else {
-          modal(`<h3>⚠️ في ${shortages.length} مادة ناقصة بعد الجرد</h3>
-            <div style="color:var(--muted);font-weight:700;margin-bottom:10px">بس ما في رقم واتساب توريدات محدد بالإعدادات — حط الرقم من ⚙️ الإدارة ← إعدادات ← "رقم واتساب توريدات عام" عشان هاي الرسالة تنبعت تلقائيًا المرة الجاية.</div>
-            <div class="m-act"><button class="cancel" onclick="closeModal()">إغلاق</button></div>`);
+        });
+        let modalBody = `<h3>📦 في نواقص بعد الجرد (${shortages.length})</h3>`;
+        if(transferItems.length){
+          let transferMsg = `🔄 طلب نقل بضاعة — من مخزون فرع تاني\nإلى: ${branchName}\n\n`;
+          transferItems.forEach(it=> transferMsg += `• ${it.ing.name}: نحتاج ${it.need} ${it.ing.unit} — متوفرة بـ"${it.fromBranch}" (${it.fromStock} ${it.ing.unit})\n`);
+          modalBody += `<div style="background:#e8f5ff;border-radius:10px;padding:10px 12px;margin-bottom:10px">
+            <div style="font-weight:900;color:var(--maroon);margin-bottom:6px">🔄 ${transferItems.length} مادة متوفرة بفرع تاني — نقل داخلي بدل طلب مورد</div>
+            <ul style="margin:0 0 8px 0;padding-inline-start:20px;font-size:.85rem">
+              ${transferItems.map(it=>`<li>${esc(it.ing.name)}: نحتاج ${it.need} ${esc(it.ing.unit)} — موجودة بـ"${esc(it.fromBranch)}" (${it.fromStock} ${esc(it.ing.unit)})</li>`).join('')}
+            </ul>
+            <button class="mini ok" style="background:var(--maroon)" onclick="closeModal();transferForm()">🔄 روح لشاشة نقل البضاعة</button>
+          </div>`;
         }
+        if(supplierItems.length){
+          let msg = `📦 تقرير نواقص — ${branchName}\nصابر جو سناك — بعد جرد ${new Date().toLocaleDateString('ar-JO')}\n\n`;
+          supplierItems.forEach(it=>{
+            const supNames = (supIngs||[]).filter(si=>si.ingredient_id===it.ing.id).map(si=>si.supplier);
+            const supLabel = supNames.length ? supNames.join(' / ') : 'بدون مورد محدد';
+            msg += `• ${supLabel} لازم نطلب منه ${it.need} ${it.ing.unit} — عنا بس ${it.actual} ${it.ing.unit}\n`;
+          });
+          msg += `\nمشكورين على التعاون 🙏`;
+          const phone = (SETTINGS.procurement_whatsapp||'').replace(/\D/g,'');
+          if(phone){
+            const url = `https://wa.me/${phone}?text=${encodeURIComponent(msg)}`;
+            const win = window.open(url, '_blank');
+            if(!win || win.closed){
+              modalBody += `<div style="margin-bottom:10px">
+                <div style="font-weight:900;color:var(--maroon);margin-bottom:6px">📤 ${supplierItems.length} مادة لازم تنطلب من مورد</div>
+                <a href="${url}" target="_blank" style="display:block;text-align:center;background:#25D366;color:#fff;border-radius:12px;padding:14px;font-weight:900;text-decoration:none">📱 فتح واتساب وإرسال طلب التوريد</a>
+              </div>`;
+            }
+          } else {
+            modalBody += `<div style="color:var(--muted);font-weight:700;margin-bottom:10px">⚠️ ${supplierItems.length} مادة لازم تنطلب من مورد، بس ما في رقم واتساب توريدات محدد بالإعدادات — حطه من ⚙️ الإدارة ← إعدادات.</div>`;
+          }
+        }
+        modalBody += `<div class="m-act"><button class="cancel" onclick="closeModal()">إغلاق</button></div>`;
+        modal(modalBody);
       }
     }catch(e){ console.error('shortage check after audit failed:', e); }
     // 📄 PDF تلقائي للموظف كإثبات إرسال الجرد
@@ -6751,8 +6780,8 @@
       const bal = balRes.data||[];
       const supIngs = siRes.error ? [] : (siRes.data||[]);
       const suppliers = supRes.data||[];
-      // كل مادة تحت الحد الأدنى بأي فرع
-      const low = bal.filter(b=>(b.stock||0) <= (b.ingredients?.min_stock||0) && (b.ingredients?.min_stock||0) > 0);
+      // كل مادة تحت الحد الأدنى الخاص بفرعها (مش رقم عام مشترك — كل فرع له حده الخاص)
+      const low = bal.filter(b=>(b.stock||0) <= (b.min_stock||0) && (b.min_stock||0) > 0);
       if(!low.length){
         document.getElementById('shortageBody').innerHTML = '<div class="empty-note">✅ ما في أي نقص حاليًا — كل المواد فوق الحد الأدنى بالفرعين</div>';
         return;
@@ -6762,7 +6791,7 @@
       const noSupplier = [];
       low.forEach(b=>{
         const matches = supIngs.filter(si=>si.ingredient_id===b.ingredient_id);
-        const item = { name:b.ingredients?.name||'—', unit:b.ingredients?.unit||'', branch:b.branches?.name_ar||'—', stock:b.stock||0, min:b.ingredients?.min_stock||0 };
+        const item = { name:b.ingredients?.name||'—', unit:b.ingredients?.unit||'', branch:b.branches?.name_ar||'—', branchId:b.branch_id, ingredientId:b.ingredient_id, stock:b.stock||0, min:b.min_stock||0 };
         if(!matches.length){ noSupplier.push(item); return; }
         matches.forEach(m=>{
           if(!bySupplier[m.supplier]) bySupplier[m.supplier] = [];
