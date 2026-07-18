@@ -8083,22 +8083,30 @@ window.__lastEmpMealsData = null;
     R.innerHTML = '<div class="empty-note">... جاري الحساب</div>';
     try{
       let q = db.from('orders')
-        .select('id, order_number, created_at, total, subtotal, discount, status, employee_tab_name, order_items(item_name, quantity, unit_price)')
+        .select('id, order_number, created_at, total, subtotal, discount, status, employee_tab_name, employee_meal_id, order_items(item_name, quantity, unit_price)')
         .not('employee_tab_name','is',null)
         .gte('created_at', from+'T00:00:00').lte('created_at', to+'T23:59:59')
         .order('created_at', {ascending:false});
-      if(filterName) q = q.eq('employee_tab_name', filterName);
+      if(filterName) q = q.or(`employee_tab_name.eq."${filterName}",employee_meal_id.eq.${(MEAL_NAMES_DATA.find(n=>n.name===filterName)?.id)||'00000000-0000-0000-0000-000000000000'}`);
       const { data: orders, error } = await q;
       if(error){ R.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message)}</div>`; return; }
       window.__empMealsRaw = orders||[];
       const ok = (orders||[]).filter(o=>o.status!=='cancelled');
+      // 🔧 نجمّع بالمعرف الثابت أولًا (لو موجود). لو الطلب قديم وما فيه معرف، نحاول نلاقي معرف
+      // الموظف الحالي من اسمه بـHR ونستخدمه كمفتاح تجميع — عشان نفس الشخص ما ينقسم لمجموعتين
+      // (وحدة بمعرفه الثابت ووحدة باسمه النصي) حتى لو الاسمين متطابقين شكليًا بالعرض.
       const byPerson = {};
       ok.forEach(o=>{
-        const name = o.employee_tab_name;
-        if(!byPerson[name]) byPerson[name] = { orders:[], total:0, count:0 };
-        byPerson[name].orders.push(o);
-        byPerson[name].total += parseFloat(o.total||0);
-        byPerson[name].count++;
+        const resolvedId = o.employee_meal_id || MEAL_NAMES_DATA.find(n=>n.name===o.employee_tab_name)?.id;
+        const displayName = (resolvedId && MEAL_NAMES_DATA.find(n=>n.id===resolvedId)?.name) || o.employee_tab_name;
+        // 🔧 مهم: التجميع بالاسم النهائي المعروض (بعد التطبيع)، مش بالمعرف — عشان لو طلب قديم
+        // مربوط برقم HR قديم/محذوف (سجل مكرر انحذف)، بيضل ينضم لنفس المجموعة الصحيحة طالما
+        // الاسم المعروض نفسه، بدل ما ينفصل بمجموعة لحاله بنفس الاسم.
+        const key = (displayName||'').trim();
+        if(!byPerson[key]) byPerson[key] = { orders:[], total:0, count:0, name:displayName };
+        byPerson[key].orders.push(o);
+        byPerson[key].total += parseFloat(o.total||0);
+        byPerson[key].count++;
       });
       const people = Object.entries(byPerson).sort((a,b)=>b[1].total-a[1].total);
       const grandTotal = ok.reduce((a,o)=>a+parseFloat(o.total||0),0);
@@ -10505,29 +10513,30 @@ try {
     }catch(e){ console.error(e); body.innerHTML = '<div class="alert-red">⚠️ صار خطأ بالتحميل</div>'; }
   }
 
-  let __empWatchId = null, __lastAutoCheck = 0;
+  let __geoIntervalId = null;
   function startGeofenceWatch(){
-    if(__empWatchId!==null || !navigator.geolocation) return;
-    __empWatchId = navigator.geolocation.watchPosition(async pos=>{
-      const now = Date.now();
-      if(now-__lastAutoCheck < 60000) return; // ما نفحص أكتر من مرة بالدقيقة
-      __lastAutoCheck = now;
-      if(!EMP_OPEN_LOG) return;
-      const fence = await checkGeofence(pos.coords.latitude, pos.coords.longitude, EMP?.id);
-      if(!fence.ok){
-        try{
+    if(__geoIntervalId!==null) return;
+    // 🔧 مهم: watchPosition وحدها ما بتضمن فحص دوري ثابت (بتعتمد على حركة GPS، ولو الموظف واقف
+    // مكانه ممكن ما تطلق أبدًا). بدلها بـsetInterval فحص فعلي كل 10 ثواني بالضبط — أثبت وأدق
+    // لضمان تسجيل خروج تلقائي سريع لحظة ما يطلع الموظف برا نطاق العمل، خصوصًا على كروم موبايل.
+    __geoIntervalId = setInterval(async ()=>{
+      if(!EMP_OPEN_LOG || !EMP) return;
+      try{
+        const geo = await getGeo();
+        const fence = await checkGeofence(geo.lat, geo.lng, EMP.id);
+        if(!fence.ok){
           await db.from('hr_time_logs').update({
-            clock_out: new Date().toISOString(), lat_out: pos.coords.latitude, lng_out: pos.coords.longitude,
+            clock_out: new Date().toISOString(), lat_out: geo.lat, lng_out: geo.lng,
           }).eq('id', EMP_OPEN_LOG.id);
           stopGeofenceWatch();
           alert('⚠️ سُجّل خروجك تلقائيًا لأنك خرجت من نطاق العمل المسموح.');
           loadEmpPortal();
-        }catch(e){ console.error('auto clock-out failed:', e); }
-      }
-    }, err=>console.error('geo watch error:', err), {enableHighAccuracy:false, maximumAge:30000});
+        }
+      }catch(e){ console.error('geofence check failed:', e); }
+    }, 10000);
   }
   function stopGeofenceWatch(){
-    if(__empWatchId!==null){ navigator.geolocation.clearWatch(__empWatchId); __empWatchId=null; }
+    if(__geoIntervalId!==null){ clearInterval(__geoIntervalId); __geoIntervalId=null; }
   }
 
   function getGeo(){
