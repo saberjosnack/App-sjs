@@ -626,6 +626,7 @@
         <button data-a="topcust" onclick="admTab('topcust')">🏆 أفضل العملاء</button>
         <button data-a="waste" onclick="admTab('waste')">🗑️ الإتلاف</button>
         <button data-a="suppliers" onclick="admTab('suppliers')">🚚 الموردين</button>
+        <button data-a="ordersScreen" onclick="admTab('ordersScreen')" style="background:#25D366;color:#fff;border-color:#128C7E">📋 الطلبيات</button>
         <button data-a="devices" onclick="admTab('devices')">🖥️ الأجهزة</button>
         <button data-a="sett" onclick="admTab('sett')">🔧 إعدادات</button>
         <button data-a="shifts" onclick="admTab('shifts')">🔄 شيفتات</button>
@@ -4592,7 +4593,7 @@
   const ADMIN_TAB_PERM = {
     items:'items_manage', cats:'cats_manage', codes:'codes_manage', staff:'staff_manage', roles:'admin_only', branches:'branches_manage', sett:'settings_manage', devices:'devices_manage',
     ingredients:'inventory_view', recipes:'inventory_view',
-    inventory:'inventory_audit', transfers:'inventory_transfer', warehouse:'admin_only', treasury:'admin_only', hr:'admin_only', chats:'admin_only', dailyAudits:'admin_only', hrLocations:'admin_only', dutyHours:'admin_only', hrClosures:'admin_only',
+    inventory:'inventory_audit', transfers:'inventory_transfer', warehouse:'admin_only', treasury:'admin_only', hr:'admin_only', chats:'admin_only', dailyAudits:'admin_only', hrLocations:'admin_only', dutyHours:'admin_only', hrClosures:'admin_only', ordersScreen:'admin_only',
     expenses:'expenses_view', purchases:'purchases_view',
     platforms:'platforms_view', empmeals:'empmeals_view', topcust:'topcust_view', waste:'waste_log', suppliers:'purchases_view',
   };
@@ -4670,6 +4671,7 @@
     if(admView==='hrLocations'){ renderHrLocations(); return; }
     if(admView==='dutyHours'){ renderDutyHours(); return; }
     if(admView==='hrClosures'){ renderHrMonthClosures(); return; }
+    if(admView==='ordersScreen'){ renderOrdersScreen(); return; }
     if(admView==='platforms'){ renderPlatforms(); return; }
     if(admView==='devices'){ renderDevices(); return; }
     if(admView==='empmeals'){ renderEmpMeals(); return; }
@@ -6292,15 +6294,14 @@
           });
           msg += `\nمشكورين على التعاون 🙏`;
           const phone = (SETTINGS.procurement_whatsapp||'').replace(/\D/g,'');
+          // 🔧 مهم: ما نحاول نفتح واتساب تلقائيًا — متصفحات الموبايل بتحظر الفتح التلقائي بصمت
+          // بدون ما تحاول أصلًا فتشتغل بس أحيانًا. زر واضح دايمًا أضمن 100%.
           if(phone){
             const url = `https://wa.me/${phone}?text=${encodeURIComponent(msg)}`;
-            const win = window.open(url, '_blank');
-            if(!win || win.closed){
-              modalBody += `<div style="margin-bottom:10px">
-                <div style="font-weight:900;color:var(--maroon);margin-bottom:6px">📤 ${supplierItems.length} مادة لازم تنطلب من مورد</div>
-                <a href="${url}" target="_blank" style="display:block;text-align:center;background:#25D366;color:#fff;border-radius:12px;padding:14px;font-weight:900;text-decoration:none">📱 فتح واتساب وإرسال طلب التوريد</a>
-              </div>`;
-            }
+            modalBody += `<div style="margin-bottom:10px">
+              <div style="font-weight:900;color:var(--maroon);margin-bottom:6px">📤 ${supplierItems.length} مادة لازم تنطلب من مورد</div>
+              <a href="${url}" target="_blank" style="display:block;text-align:center;background:#25D366;color:#fff;border-radius:12px;padding:14px;font-weight:900;text-decoration:none">📱 فتح واتساب وإرسال طلب التوريد</a>
+            </div>`;
           } else {
             modalBody += `<div style="color:var(--muted);font-weight:700;margin-bottom:10px">⚠️ ${supplierItems.length} مادة لازم تنطلب من مورد، بس ما في رقم واتساب توريدات محدد بالإعدادات — حطه من ⚙️ الإدارة ← إعدادات.</div>`;
           }
@@ -6613,9 +6614,33 @@
           <td>${esc(a.staff_name||'—')}</td>
           <td>${a.items_counted}</td>
           <td>${a.items_with_variance>0?`<b style="color:var(--red)">⚠️ ${a.items_with_variance}</b>`:'<span style="color:var(--ok)">✓ لا شي</span>'}</td>
-          <td><button class="mini edit" onclick="showDaDetail(${idx})">👁️ تفصيل</button> <button class="mini edit" onclick="editDaAudit(${idx})">✏️ تعديل</button> <button class="mini ok" onclick="printOneAuditPDF(${idx})">📄 PDF</button> <button class="mini del" onclick="deleteDaAudit(${idx})">🗑️ حذف</button></td>
+          <td><button class="mini edit" onclick="showDaDetail(${idx})">👁️ تفصيل</button> <button class="mini edit" onclick="editDaAudit(${idx})">✏️ تعديل</button> <button class="mini ok" style="background:#25D366" onclick="sendShortageForAudit(${idx})">📤 نواقص</button> <button class="mini ok" onclick="printOneAuditPDF(${idx})">📄 PDF</button> <button class="mini del" onclick="deleteDaAudit(${idx})">🗑️ حذف</button></td>
         </tr>`).join('')||'<tr><td colspan="6" class="empty-note">ما في عمليات جرد بهاي الفترة</td></tr>'}
       </table></div>`;
+  }
+  async function sendShortageForAudit(idx){
+    const a = (window.__DA_LIST||[])[idx]; if(!a) return;
+    const branchName = a.branches?.name_ar||'—';
+    try{
+      const { data: myBranchInv } = await db.from('branch_inventory').select('ingredient_id, min_stock').eq('branch_id', a.branch_id);
+      const myMinMap = {}; (myBranchInv||[]).forEach(x=>myMinMap[x.ingredient_id]=x.min_stock||0);
+      const shortages = (a.details||[]).filter(r=> (myMinMap[r.ingredient_id]||0) > 0 && r.actual < myMinMap[r.ingredient_id]);
+      if(!shortages.length){ toast('✅ ما في نواقص بهاد الجرد'); return; }
+      const { data: supIngs } = await db.from('supplier_ingredients').select('*');
+      let msg = `📦 تقرير نواقص — ${branchName}\nصابر جو سناك — جرد ${new Date(a.created_at).toLocaleDateString('ar-JO')}\n\n`;
+      shortages.forEach(r=>{
+        const ing = INGR.find(x=>x.id===r.ingredient_id);
+        if(!ing) return;
+        const need = Math.max(0, myMinMap[r.ingredient_id] - r.actual);
+        const supNames = (supIngs||[]).filter(si=>si.ingredient_id===r.ingredient_id).map(si=>si.supplier);
+        const supLabel = supNames.length ? supNames.join(' / ') : 'بدون مورد محدد';
+        msg += `• ${supLabel} لازم نطلب منه ${need} ${ing.unit} — عنا بس ${r.actual} ${ing.unit}\n`;
+      });
+      msg += `\nمشكورين على التعاون 🙏`;
+      const phone = (SETTINGS.procurement_whatsapp||'').replace(/\D/g,'');
+      if(!phone){ toast('⚠️ حط رقم واتساب توريدات بالإعدادات أول'); return; }
+      window.open(`https://wa.me/${phone}?text=${encodeURIComponent(msg)}`, '_blank');
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
   async function deleteDaAudit(idx){
     const a = (window.__DA_LIST||[])[idx]; if(!a) return;
@@ -6859,6 +6884,99 @@
         renderWarehouse();
       }, 5000);
     }
+  }
+  async function renderOrdersScreen(){
+    const C = document.getElementById('admContent');
+    C.innerHTML = '<div class="empty-note">... جاري التحميل</div>';
+    try{
+      const [balRes, siRes, supRes] = await Promise.all([
+        db.from('branch_inventory').select('*, ingredients(name,unit,min_stock), branches(name_ar)'),
+        db.from('supplier_ingredients').select('*'),
+        db.from('suppliers').select('*'),
+      ]);
+      const bal = balRes.data||[];
+      const supIngs = siRes.error ? [] : (siRes.data||[]);
+      const suppliers = supRes.data||[];
+      const low = bal.filter(b=>(b.stock||0) <= (b.min_stock||0) && (b.min_stock||0) > 0);
+      const bySupplier = {};
+      const noSupplier = [];
+      low.forEach(b=>{
+        const matches = supIngs.filter(si=>si.ingredient_id===b.ingredient_id);
+        const item = { name:b.ingredients?.name||'—', unit:b.ingredients?.unit||'', branch:b.branches?.name_ar||'—', stock:b.stock||0, min:b.min_stock||0 };
+        if(!matches.length){ noSupplier.push(item); return; }
+        matches.forEach(m=>{ if(!bySupplier[m.supplier]) bySupplier[m.supplier]=[]; bySupplier[m.supplier].push(item); });
+      });
+      window.__shortageData = { bySupplier, noSupplier, suppliers };
+      C.innerHTML = `
+        <div class="panel" style="margin-bottom:14px">
+          <h3>📋 شاشة الطلبيات</h3>
+          <div style="color:var(--muted);font-size:.82rem;font-weight:600">مركز واحد: النواقص الحالية، أرقام الموردين، وأكتر المواد استهلاكًا — لتخطيط الطلبات بذكاء.</div>
+        </div>
+
+        <div class="panel" style="margin-bottom:14px">
+          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+            <h4 style="color:var(--red);margin:0">🔴 النواقص الحالية (${low.length})</h4>
+            <button class="mini ok" onclick="renderOrdersScreen()">🔄 تحديث</button>
+          </div>
+          <div id="ordersShortageBody" style="margin-top:10px">
+            ${!low.length?'<div class="empty-note">✅ ما في أي نقص حاليًا</div>':`
+            ${Object.entries(bySupplier).map(([supName, items], idx)=>{
+              const sup = suppliers.find(s=>s.name===supName);
+              const hasPhone = sup && (sup.whatsapp || sup.phone);
+              return `<div style="border:1.5px solid var(--warn);border-radius:12px;padding:10px 12px;margin-bottom:10px;background:#fff8e1">
+                <div style="font-weight:900;color:var(--maroon);margin-bottom:6px">🏪 ${esc(supName)} (${items.length} مادة)${hasPhone?'':' — <span style="color:var(--red)">⚠️ ما في رقم، حطه بالموردين</span>'}</div>
+                <ul style="margin:0 0 8px 0;padding-inline-start:20px;font-size:.85rem">
+                  ${items.map(it=>`<li>${esc(it.name)} — ${esc(it.branch)}: المتاح ${fmt(it.stock)} ${esc(it.unit)} (الحد الأدنى ${fmt(it.min)})</li>`).join('')}
+                </ul>
+                <button class="mini ok" style="background:#25D366" onclick="sendShortageWhatsapp(${idx})">📱 إرسال واتساب</button>
+              </div>`;
+            }).join('')}
+            ${noSupplier.length?`<div style="border:1.5px dashed var(--red);border-radius:12px;padding:10px 12px">
+              <div style="font-weight:900;color:var(--red);margin-bottom:6px">⚠️ بدون مورد محدد (${noSupplier.length})</div>
+              <ul style="margin:0;padding-inline-start:20px;font-size:.85rem">${noSupplier.map(it=>`<li>${esc(it.name)} — ${esc(it.branch)}: ${fmt(it.stock)} ${esc(it.unit)}</li>`).join('')}</ul>
+            </div>`:''}`}
+          </div>
+        </div>
+
+        <div class="panel" style="margin-bottom:14px">
+          <h4 style="color:var(--maroon)">📊 أكتر المواد استهلاكًا</h4>
+          <div class="two" style="flex-wrap:wrap;gap:10px;margin:10px 0">
+            <div><label style="font-weight:700;font-size:.82rem">من تاريخ</label><br><input type="date" id="cons_from" value="${new Date(Date.now()-30*86400000).toISOString().split('T')[0]}" class="dfield"></div>
+            <div><label style="font-weight:700;font-size:.82rem">إلى تاريخ</label><br><input type="date" id="cons_to" value="${new Date().toISOString().split('T')[0]}" class="dfield"></div>
+            <button class="mini ok" style="align-self:end" onclick="loadConsumptionReport()">🔍 احسب</button>
+          </div>
+          <div id="consumptionBody" class="empty-note">دوس "احسب" لعرض التقرير</div>
+        </div>
+
+        <div class="panel">
+          <h4 style="color:var(--maroon);margin-bottom:8px">📞 أرقام الموردين السريعة</h4>
+          <div class="tbl-wrap"><table class="tbl">
+            <tr><th>المورد</th><th>واتساب</th><th></th></tr>
+            ${suppliers.map(s=>`<tr><td><b>${esc(s.name)}</b></td><td>${esc(s.whatsapp||s.phone||'—')}</td><td><button class="mini edit" onclick="supplierForm('${s.id}')">تعديل</button></td></tr>`).join('')||'<tr><td colspan="3" class="empty-note">ما في موردين بعد</td></tr>'}
+          </table></div>
+        </div>`;
+    }catch(e){ C.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
+  }
+  async function loadConsumptionReport(){
+    const body = document.getElementById('consumptionBody'); if(!body) return;
+    body.innerHTML = '<div class="empty-note">... جاري الحساب</div>';
+    const from = document.getElementById('cons_from')?.value;
+    const to = document.getElementById('cons_to')?.value;
+    try{
+      const { data, error } = await db.from('inventory_movements').select('ingredient_id, quantity, type')
+        .eq('type','sale').gte('created_at', from+'T00:00:00').lte('created_at', to+'T23:59:59');
+      if(error){ body.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message||'الجدول inventory_movements غير موجود')}</div>`; return; }
+      const byIng = {};
+      (data||[]).forEach(m=>{
+        const qty = Math.abs(parseFloat(m.quantity||0));
+        byIng[m.ingredient_id] = (byIng[m.ingredient_id]||0) + qty;
+      });
+      const rows = Object.entries(byIng).map(([id,qty])=>({ ing: INGR.find(i=>i.id===id), qty })).filter(r=>r.ing).sort((a,b)=>b.qty-a.qty).slice(0,20);
+      body.innerHTML = `<div class="tbl-wrap"><table class="tbl">
+        <tr><th>المادة</th><th>الكمية المستهلكة</th></tr>
+        ${rows.map(r=>`<tr><td><b>${esc(r.ing.name)}</b></td><td><b style="color:var(--red)">${fmt(r.qty)} ${esc(r.ing.unit)}</b></td></tr>`).join('')||'<tr><td colspan="2" class="empty-note">ما في بيانات استهلاك بهاي الفترة</td></tr>'}
+      </table></div>`;
+    }catch(e){ body.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
   }
   async function showShortageReport(){
     modal(`<h3>📤 تقرير النواقص</h3><div id="shortageBody" class="empty-note">... جاري الفحص</div>`);
