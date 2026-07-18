@@ -5231,12 +5231,27 @@
         ${INGR.map(i=>{ const st = realStock[i.id]||0; return `<tr>
           <td><b>${esc(i.name)}</b></td><td>${esc(i.unit)}</td>
           <td>${fmt(i.unit_cost||0)} ${CURRENCY}</td>
-          <td><b style="color:${st<=(i.min_stock||0)?'var(--red)':'var(--ok)'}">${st} ${esc(i.unit)}</b></td>
-          <td>${i.min_stock||0}</td>
+          <td><b style="color:${st<=(i.min_stock||0)?'var(--red)':'var(--ok)'}">${fmt(st)} ${esc(i.unit)}</b></td>
+          <td>${fmt(i.min_stock||0)}</td>
           <td>${(i.min_stock||0)>0 && st<=(i.min_stock||0)?'⚠️ نقص':'✅'}</td>
-          <td><button class="mini edit" onclick="ingredientForm('${i.id}')">تعديل</button></td>
+          <td style="white-space:nowrap"><button class="mini edit" onclick="ingredientForm('${i.id}')">تعديل</button> <button class="mini del" onclick="deleteIngredient('${i.id}','${esc(i.name)}')">حذف</button></td>
         </tr>`; }).join('')||'<tr><td colspan="7" class="empty-note">ما في مكونات — ابدأ بإضافة أول مكون ⬆️</td></tr>'}
       </table></div>`;
+  }
+  async function deleteIngredient(id, name){
+    if(!isAdmin()){ toast('⛔ صلاحية المالك فقط'); return; }
+    if(!confirm('⚠️ حذف مكون "'+name+'" نهائيًا؟\nلو مستخدم بوصفة صنف أو بفاتورة شراء قديمة، الحذف رح يترفض ويطلعلك سبب واضح.\nمتابعة؟')) return;
+    try{
+      // نحذف الروابط الفرعية الآمنة أول (مخزون الفروع وربط الموردين) قبل محاولة حذف المكون نفسه
+      await db.from('branch_inventory').delete().eq('ingredient_id', id);
+      await db.from('supplier_ingredients').delete().eq('ingredient_id', id);
+      const { error } = await db.from('ingredients').delete().eq('id', id);
+      if(error){
+        toast('✗ ما قدرنا نحذفه — '+(error.message.includes('foreign key')?'مستخدم بوصفة صنف أو فاتورة شراء قديمة، لازم تشيله من فيه أول':error.message));
+        console.error(error); return;
+      }
+      toast('✓ انحذف المكون'); renderIngredients();
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
   function ingredientForm(id){
     const it=INGR.find(x=>x.id===id)||{};
@@ -6570,9 +6585,58 @@
           <td>${esc(a.staff_name||'—')}</td>
           <td>${a.items_counted}</td>
           <td>${a.items_with_variance>0?`<b style="color:var(--red)">⚠️ ${a.items_with_variance}</b>`:'<span style="color:var(--ok)">✓ لا شي</span>'}</td>
-          <td><button class="mini edit" onclick="showDaDetail(${idx})">👁️ تفصيل</button> <button class="mini ok" onclick="printOneAuditPDF(${idx})">📄 PDF</button></td>
+          <td><button class="mini edit" onclick="showDaDetail(${idx})">👁️ تفصيل</button> <button class="mini edit" onclick="editDaAudit(${idx})">✏️ تعديل</button> <button class="mini ok" onclick="printOneAuditPDF(${idx})">📄 PDF</button> <button class="mini del" onclick="deleteDaAudit(${idx})">🗑️ حذف</button></td>
         </tr>`).join('')||'<tr><td colspan="6" class="empty-note">ما في عمليات جرد بهاي الفترة</td></tr>'}
       </table></div>`;
+  }
+  async function deleteDaAudit(idx){
+    const a = (window.__DA_LIST||[])[idx]; if(!a) return;
+    if(!isAdmin()){ toast('⛔ صلاحية المالك فقط'); return; }
+    if(!confirm('⚠️ حذف سجل هاد الجرد نهائيًا؟\nملاحظة: هاد بيحذف السجل التاريخي بس — ما بيرجّع أرقام المخزون الحالية لقيمها قبل الجرد (هي أصلًا محدّثة وماشية طبيعي). لو بدك تصحح رقم غلط، استخدم "✏️ تعديل" بدلها.\nمتابعة؟')) return;
+    try{
+      const { error } = await db.from('inventory_audits').delete().eq('id', a.id);
+      if(error){ toast('✗ '+error.message); return; }
+      toast('✓ انحذف السجل'); renderDailyAudits();
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
+  }
+  function editDaAudit(idx){
+    const a = (window.__DA_LIST||[])[idx]; if(!a) return;
+    if(!isAdmin()){ toast('⛔ صلاحية المالك فقط'); return; }
+    const details = a.details||[];
+    modal(`<h3>✏️ تعديل الجرد — ${esc(a.branches?.name_ar||'—')}</h3>
+      <div style="color:var(--muted);font-weight:700;margin-bottom:10px">${new Date(a.created_at).toLocaleString('ar-JO')} — ${esc(a.staff_name||'—')}</div>
+      <div style="color:var(--muted);font-size:.78rem;font-weight:600;margin-bottom:10px">💡 تعديل "الفعلي" هون بيحدّث رصيد المخزون الحالي لهاد الفرع كمان تلقائيًا (مش بس سجل الجرد التاريخي).</div>
+      <div class="tbl-wrap"><table class="tbl">
+        <tr><th>المادة</th><th>المتوقع</th><th>الفعلي</th></tr>
+        ${details.map((d,i)=>`<tr>
+          <td>${esc(ingName(d.ingredient_id))}</td>
+          <td>${fmt(d.expected)}</td>
+          <td><input id="da_edit_${i}" type="number" step="0.01" value="${d.actual}" style="width:100px;border:1.5px solid var(--line);border-radius:8px;padding:6px"></td>
+        </tr>`).join('')||'<tr><td colspan="3" class="empty-note">لا شي</td></tr>'}
+      </table></div>
+      <div class="m-act"><button class="save" onclick="saveDaAuditEdit(${idx})">حفظ ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
+  }
+  async function saveDaAuditEdit(idx){
+    const a = (window.__DA_LIST||[])[idx]; if(!a) return;
+    const details = a.details||[];
+    const newDetails = details.map((d,i)=>{
+      const val = parseFloat(normalizeDigits(document.getElementById('da_edit_'+i)?.value));
+      const actual = isNaN(val) ? d.actual : val;
+      return { ...d, actual, variance: actual - d.expected };
+    });
+    try{
+      // نحدّث رصيد المخزون الفعلي لأي مادة تغيّر رقمها
+      for(let i=0;i<newDetails.length;i++){
+        if(newDetails[i].actual !== details[i].actual){
+          const { data: bi } = await db.from('branch_inventory').select('id').eq('branch_id', a.branch_id).eq('ingredient_id', newDetails[i].ingredient_id).maybeSingle();
+          if(bi) await db.from('branch_inventory').update({ stock: newDetails[i].actual }).eq('id', bi.id);
+        }
+      }
+      const totalVarianceItems = newDetails.filter(d=>Math.abs(d.variance)>0.001).length;
+      const { error } = await db.from('inventory_audits').update({ details: newDetails, items_with_variance: totalVarianceItems }).eq('id', a.id);
+      if(error){ toast('✗ '+error.message); return; }
+      closeModal(); toast('✓ اتعدّل الجرد وتحدّث المخزون'); renderDailyAudits();
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
   function applyDaFilter(){
     DA_FILTER.branch = document.getElementById('da_branch')?.value||'';
