@@ -6255,7 +6255,10 @@
     // ولو فرع تاني عنده فائض من نفس المادة، نقترح نقل بضاعة داخلي بدل طلب من المورد
     try{
       const { data: myBranchInv } = await db.from('branch_inventory').select('ingredient_id, min_stock').eq('branch_id', branchId);
-      const myMinMap = {}; (myBranchInv||[]).forEach(x=>myMinMap[x.ingredient_id]=x.min_stock||0);
+      const myMinMap = {};
+      (myBranchInv||[]).forEach(x=>myMinMap[x.ingredient_id]=x.min_stock||0);
+      // 🔧 لو الفرع ما إله رقم مخصص بعد (صفر)، نرجع للحد الأدنى العام المحطوط بشاشة المكونات
+      INGR.forEach(i=>{ if(!myMinMap[i.id]) myMinMap[i.id] = i.min_stock||0; });
       const shortages = results.filter(r=> (myMinMap[r.ingredient_id]||0) > 0 && r.actual < myMinMap[r.ingredient_id]);
       if(shortages.length){
         // نفحص باقي الفروع — عندهم فائض من نفس المواد؟
@@ -6623,7 +6626,9 @@
     const branchName = a.branches?.name_ar||'—';
     try{
       const { data: myBranchInv } = await db.from('branch_inventory').select('ingredient_id, min_stock').eq('branch_id', a.branch_id);
-      const myMinMap = {}; (myBranchInv||[]).forEach(x=>myMinMap[x.ingredient_id]=x.min_stock||0);
+      const myMinMap = {};
+      (myBranchInv||[]).forEach(x=>myMinMap[x.ingredient_id]=x.min_stock||0);
+      INGR.forEach(i=>{ if(!myMinMap[i.id]) myMinMap[i.id] = i.min_stock||0; });
       const shortages = (a.details||[]).filter(r=> (myMinMap[r.ingredient_id]||0) > 0 && r.actual < myMinMap[r.ingredient_id]);
       if(!shortages.length){ toast('✅ ما في نواقص بهاد الجرد'); return; }
       const { data: supIngs } = await db.from('supplier_ingredients').select('*');
@@ -6897,12 +6902,14 @@
       const bal = balRes.data||[];
       const supIngs = siRes.error ? [] : (siRes.data||[]);
       const suppliers = supRes.data||[];
-      const low = bal.filter(b=>(b.stock||0) <= (b.min_stock||0) && (b.min_stock||0) > 0);
+      // 🔧 الحد الأدنى الفعّال = رقم الفرع المخصص لو موجود، وإلا نرجع للرقم العام بشاشة المكونات
+      const effMin = b => (b.min_stock>0 ? b.min_stock : (b.ingredients?.min_stock||0));
+      const low = bal.filter(b=>(b.stock||0) <= effMin(b) && effMin(b) > 0);
       const bySupplier = {};
       const noSupplier = [];
       low.forEach(b=>{
         const matches = supIngs.filter(si=>si.ingredient_id===b.ingredient_id);
-        const item = { name:b.ingredients?.name||'—', unit:b.ingredients?.unit||'', branch:b.branches?.name_ar||'—', stock:b.stock||0, min:b.min_stock||0 };
+        const item = { name:b.ingredients?.name||'—', unit:b.ingredients?.unit||'', branch:b.branches?.name_ar||'—', stock:b.stock||0, min:effMin(b) };
         if(!matches.length){ noSupplier.push(item); return; }
         matches.forEach(m=>{ if(!bySupplier[m.supplier]) bySupplier[m.supplier]=[]; bySupplier[m.supplier].push(item); });
       });
@@ -6990,8 +6997,9 @@
       const bal = balRes.data||[];
       const supIngs = siRes.error ? [] : (siRes.data||[]);
       const suppliers = supRes.data||[];
-      // كل مادة تحت الحد الأدنى الخاص بفرعها (مش رقم عام مشترك — كل فرع له حده الخاص)
-      const low = bal.filter(b=>(b.stock||0) <= (b.min_stock||0) && (b.min_stock||0) > 0);
+      // 🔧 الحد الأدنى الفعّال = رقم الفرع المخصص لو موجود، وإلا نرجع للرقم العام بشاشة المكونات
+      const effMin = b => (b.min_stock>0 ? b.min_stock : (b.ingredients?.min_stock||0));
+      const low = bal.filter(b=>(b.stock||0) <= effMin(b) && effMin(b) > 0);
       if(!low.length){
         document.getElementById('shortageBody').innerHTML = '<div class="empty-note">✅ ما في أي نقص حاليًا — كل المواد فوق الحد الأدنى بالفرعين</div>';
         return;
@@ -7001,7 +7009,7 @@
       const noSupplier = [];
       low.forEach(b=>{
         const matches = supIngs.filter(si=>si.ingredient_id===b.ingredient_id);
-        const item = { name:b.ingredients?.name||'—', unit:b.ingredients?.unit||'', branch:b.branches?.name_ar||'—', branchId:b.branch_id, ingredientId:b.ingredient_id, stock:b.stock||0, min:b.min_stock||0 };
+        const item = { name:b.ingredients?.name||'—', unit:b.ingredients?.unit||'', branch:b.branches?.name_ar||'—', branchId:b.branch_id, ingredientId:b.ingredient_id, stock:b.stock||0, min:effMin(b) };
         if(!matches.length){ noSupplier.push(item); return; }
         matches.forEach(m=>{
           if(!bySupplier[m.supplier]) bySupplier[m.supplier] = [];
