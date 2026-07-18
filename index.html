@@ -5240,17 +5240,45 @@
   }
   async function deleteIngredient(id, name){
     if(!isAdmin()){ toast('⛔ صلاحية المالك فقط'); return; }
-    if(!confirm('⚠️ حذف مكون "'+name+'" نهائيًا؟\nلو مستخدم بوصفة صنف أو بفاتورة شراء قديمة، الحذف رح يترفض ويطلعلك سبب واضح.\nمتابعة؟')) return;
+    if(!confirm('⚠️ حذف مكون "'+name+'" نهائيًا؟\nلو مستخدم بوصفة صنف أو بفاتورة شراء قديمة، رح نعرضلك خيار تحطله بديل قبل الحذف.\nمتابعة؟')) return;
     try{
       // نحذف الروابط الفرعية الآمنة أول (مخزون الفروع وربط الموردين) قبل محاولة حذف المكون نفسه
       await db.from('branch_inventory').delete().eq('ingredient_id', id);
       await db.from('supplier_ingredients').delete().eq('ingredient_id', id);
       const { error } = await db.from('ingredients').delete().eq('id', id);
       if(error){
-        toast('✗ ما قدرنا نحذفه — '+(error.message.includes('foreign key')?'مستخدم بوصفة صنف أو فاتورة شراء قديمة، لازم تشيله من فيه أول':error.message));
-        console.error(error); return;
+        if(error.message.includes('foreign key') || error.code==='23503'){
+          showIngredientReplaceForm(id, name);
+        } else {
+          toast('✗ '+error.message); console.error(error);
+        }
+        return;
       }
       toast('✓ انحذف المكون'); renderIngredients();
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
+  }
+  function showIngredientReplaceForm(id, name){
+    const others = INGR.filter(i=>i.id!==id);
+    modal(`<h3>🔄 "${esc(name)}" مستخدم بمكان تاني</h3>
+      <div style="color:var(--muted);font-weight:700;margin-bottom:10px">مربوط بوصفة صنف أو فاتورة شراء قديمة، فما ممكن نحذفه لحاله. اختار مادة بديلة تحل محله بكل هالأماكن، وبعدين نحذفه نهائي.</div>
+      <div class="fld"><label>المادة البديلة</label>
+        <select id="ing_replace_sel"><option value="">اختر بديل...</option>${others.map(i=>`<option value="${i.id}">${esc(i.name)} (${esc(i.unit)})</option>`).join('')}</select>
+      </div>
+      <div class="m-act"><button class="save" onclick="confirmIngredientReplace('${id}','${esc(name)}')">🔄 استبدل واحذف</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
+  }
+  async function confirmIngredientReplace(oldId, oldName){
+    const newId = document.getElementById('ing_replace_sel')?.value;
+    if(!newId){ toast('⚠️ اختر مادة بديلة أول'); return; }
+    if(!confirm('⚠️ كل الوصفات وفواتير الشراء القديمة يلي كانت تستخدم "'+oldName+'" رح تصير تستخدم المادة البديلة بدلها، وبعدها رح نحذف "'+oldName+'" نهائيًا. متأكد؟')) return;
+    try{
+      // نبدّل المرجع بكل الجداول يلي ممكن تشير لهاد المكون
+      await db.from('recipes').update({ ingredient_id: newId }).eq('ingredient_id', oldId);
+      await db.from('purchase_items').update({ ingredient_id: newId }).eq('ingredient_id', oldId);
+      await db.from('inventory_movements').update({ ingredient_id: newId }).eq('ingredient_id', oldId).then(()=>{}).catch(()=>{});
+      await db.from('waste_log').update({ ingredient_id: newId }).eq('ingredient_id', oldId).then(()=>{}).catch(()=>{});
+      const { error } = await db.from('ingredients').delete().eq('id', oldId);
+      if(error){ toast('✗ ما زال في مكان ما بدّلناه — '+error.message); console.error(error); return; }
+      closeModal(); toast('✓ اتبدّل واتحذف بنجاح'); renderIngredients();
     }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
   function ingredientForm(id){
