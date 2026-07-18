@@ -4680,6 +4680,7 @@
       C.innerHTML=`<div class="mbox" style="max-width:480px">
         <h3>🔧 إعدادات النظام</h3>
         <div class="fld"><label>📱 رقم واتساب التوصيل</label><input id="f_wanum" inputmode="tel" value="${esc(SETTINGS.delivery_whatsapp||'')}"></div>
+        <div class="fld"><label>📦 رقم واتساب "توريدات" عام (احتياطي لو المورد ماله رقم محدد)</label><input id="f_procWa" inputmode="tel" value="${esc(SETTINGS.procurement_whatsapp||'')}" placeholder="مثال: 962791234567"></div>
         <div class="fld"><label>💬 نص رسالة "جربتوا الأكل؟" الافتراضي (للعملاء)</label>
           <textarea id="f_feedbackMsg" rows="4" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;font-family:inherit;font-size:1rem" placeholder="مرحبا [الاسم]، شو رأيك بطلبك الأخير...">${esc(SETTINGS.feedback_msg_template||'مرحبا، شو رأيك بطلبك الأخير من صابر جو سناك؟ رأيك بهمنا كتير وبساعدنا نتحسن 🙏')}</textarea>
           <div style="color:var(--muted);font-size:.78rem;margin-top:4px">💡 اكتب <b>[الاسم]</b> بأي مكان وبينحط اسم كل عميل تلقائيًا وقت الإرسال — هاد النص هو يلي بيطلع افتراضيًا كل مرة تفتح "رسالة واتساب جماعية"</div>
@@ -5680,12 +5681,17 @@
     modal(`<h3>فاتورة شراء جديدة</h3>
       <div class="fld"><label>التاريخ</label><input type="date" id="fp_dt" value="${today}"></div>
       <div class="fld"><label>المورد</label>
-      <select id="fp_sup" onchange="if(this.value==='__new__'){document.getElementById('fp_sup_new').classList.remove('hidden')}else{document.getElementById('fp_sup_new').classList.add('hidden')}">
+      <select id="fp_sup" onchange="onSupplierChangeInPurchase(this.value)">
         <option value="">اختر مورد...</option>
         ${SUPPLIERS_DATA.map(s=>`<option value="${esc(s.name)}">${esc(s.name)}</option>`).join('')}
         <option value="__new__">+ مورد جديد (اكتب اسمه تحت)</option>
       </select>
       <input id="fp_sup_new" class="hidden" placeholder="اسم المورد الجديد" style="margin-top:6px"></div>
+      <div id="fp_sup_ings" class="hidden fld" style="background:#f0f7ff;border-radius:10px;padding:10px 12px">
+        <div style="font-weight:800;font-size:.82rem;margin-bottom:6px">📦 أصناف هاد المورد المعتادة (دوس لإضافتها بسرعة)</div>
+        <div id="fp_sup_ings_list" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px"></div>
+        <button type="button" class="mini ok" onclick="quickAddIngredientForSupplier()">＋ صنف جديد لهاد المورد</button>
+      </div>
       ${(SETTINGS.ai_invoice_enabled && SETTINGS.ai_api_key)?`
       <div class="fld" style="background:#f0e6ff;border-radius:10px;padding:10px 12px">
         <button type="button" class="mini ok" style="background:#7b2cbf;width:100%" onclick="document.getElementById('fp_ai_file').click()">📷 مسح الفاتورة بالذكاء الاصطناعي</button>
@@ -5713,6 +5719,39 @@
       </div>
       <div class="fld"><label>ملاحظات</label><input id="fp_note" placeholder="اختياري"></div>
       <div class="m-act"><button class="save" onclick="savePurchase()">حفظ ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
+  }
+  async function onSupplierChangeInPurchase(val){
+    document.getElementById('fp_sup_new').classList.toggle('hidden', val!=='__new__');
+    const wrap = document.getElementById('fp_sup_ings');
+    const list = document.getElementById('fp_sup_ings_list');
+    if(!val || val==='__new__'){ wrap.classList.add('hidden'); return; }
+    try{
+      const { data } = await db.from('supplier_ingredients').select('ingredient_id').eq('supplier', val);
+      const ids = new Set((data||[]).map(x=>x.ingredient_id));
+      const items = INGR.filter(i=>ids.has(i.id));
+      window.__curSupplierName = val;
+      if(!items.length){ list.innerHTML = '<span style="color:var(--muted);font-size:.8rem">ما في أصناف محددة لهاد المورد بعد — دوس "صنف جديد" تحت لتحدد أول صنف</span>'; }
+      else list.innerHTML = items.map(i=>`<button type="button" class="mini ok" onclick="quickAddPiRow('${i.id}')">+ ${esc(i.name)}</button>`).join('');
+      wrap.classList.remove('hidden');
+    }catch(e){ console.error('load supplier ingredients failed:', e); wrap.classList.add('hidden'); }
+  }
+  function quickAddPiRow(ingId){
+    const idx = ++piIdx;
+    document.getElementById('pi_list').insertAdjacentHTML('beforeend', piRow(idx));
+    document.querySelector(`#pi_row_${idx} .pi_ing`).value = ingId;
+  }
+  async function quickAddIngredientForSupplier(){
+    const name = prompt('اسم الصنف الجديد:'); if(!name || !name.trim()) return;
+    const unit = prompt('وحدة القياس (مثال: كغ، قطعة، علبة):', 'قطعة'); if(!unit) return;
+    try{
+      const { data, error } = await db.from('ingredients').insert({ name: name.trim(), unit: unit.trim(), unit_cost:0, stock:0, min_stock:0 }).select().single();
+      if(error){ toast('✗ '+error.message); return; }
+      INGR.push(data);
+      if(window.__curSupplierName) await db.from('supplier_ingredients').insert({ supplier: window.__curSupplierName, ingredient_id: data.id });
+      toast('✓ اتضاف الصنف وارتبط بالمورد');
+      onSupplierChangeInPurchase(window.__curSupplierName);
+      quickAddPiRow(data.id);
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
   let piLastEdited = {};
   function piRow(idx, prefill){
@@ -6160,6 +6199,44 @@
     }
     closeModal();
     toast(totalVarianceItems>0 ? ('⚠️ الجرد اترسل — '+totalVarianceItems+' مادة فيها فرق') : '✅ الجرد اترسل — كل شي مطابق');
+    // 📦 كشف النواقص تلقائيًا بعد الجرد — لو في مادة تحت الحد الأدنى، نجهّز رسالة واتساب جاهزة
+    // للتوريد فورًا (بكمية الاحتياج الفعلي: الحد الأدنى ناقص الموجود حاليًا)
+    try{
+      const shortages = results.filter(r=>{
+        const ing = INGR.find(x=>x.id===r.ingredient_id);
+        return ing && (ing.min_stock||0) > 0 && r.actual < ing.min_stock;
+      });
+      if(shortages.length){
+        const { data: supIngs } = await db.from('supplier_ingredients').select('*');
+        const { data: suppliers } = await db.from('suppliers').select('*');
+        let msg = `📦 تقرير نواقص — ${branchName}\nصابر جو سناك — بعد جرد ${new Date().toLocaleDateString('ar-JO')}\n\n`;
+        shortages.forEach(r=>{
+          const ing = INGR.find(x=>x.id===r.ingredient_id);
+          const need = Math.max(0, (ing.min_stock||0) - r.actual);
+          const supNames = (supIngs||[]).filter(si=>si.ingredient_id===r.ingredient_id).map(si=>si.supplier);
+          const supLabel = supNames.length ? supNames.join(' / ') : 'بدون مورد محدد';
+          msg += `• ${supLabel} لازم نطلب منه ${need} ${ing.unit} — عنا بس ${r.actual} ${ing.unit}\n`;
+        });
+        msg += `\nمشكورين على التعاون 🙏`;
+        const phone = (SETTINGS.procurement_whatsapp||'').replace(/\D/g,'');
+        if(phone){
+          const url = `https://wa.me/${phone}?text=${encodeURIComponent(msg)}`;
+          // نحاول نفتحها تلقائيًا فورًا (best effort — بعض المتصفحات بتمنع فتح تلقائي)
+          const win = window.open(url, '_blank');
+          if(!win || win.closed){
+            // فشل الفتح التلقائي — نعرض زر واضح بدلها
+            modal(`<h3>📦 في نواقص بعد الجرد</h3>
+              <div style="color:var(--muted);font-weight:700;margin-bottom:10px">${shortages.length} مادة تحت الحد الأدنى — دوس الزر تحت لفتح واتساب وإرسال طلب التوريد</div>
+              <a href="${url}" target="_blank" style="display:block;text-align:center;background:#25D366;color:#fff;border-radius:12px;padding:14px;font-weight:900;text-decoration:none">📱 فتح واتساب وإرسال طلب التوريد</a>
+              <div class="m-act"><button class="cancel" onclick="closeModal()">إغلاق</button></div>`);
+          }
+        } else {
+          modal(`<h3>⚠️ في ${shortages.length} مادة ناقصة بعد الجرد</h3>
+            <div style="color:var(--muted);font-weight:700;margin-bottom:10px">بس ما في رقم واتساب توريدات محدد بالإعدادات — حط الرقم من ⚙️ الإدارة ← إعدادات ← "رقم واتساب توريدات عام" عشان هاي الرسالة تنبعت تلقائيًا المرة الجاية.</div>
+            <div class="m-act"><button class="cancel" onclick="closeModal()">إغلاق</button></div>`);
+        }
+      }
+    }catch(e){ console.error('shortage check after audit failed:', e); }
     // 📄 PDF تلقائي للموظف كإثبات إرسال الجرد
     try{
       const html = `<html dir="rtl"><head><meta charset="UTF-8">
@@ -6662,6 +6739,72 @@
       }, 5000);
     }
   }
+  async function showShortageReport(){
+    modal(`<h3>📤 تقرير النواقص</h3><div id="shortageBody" class="empty-note">... جاري الفحص</div>`);
+    try{
+      const [balRes, siRes, supRes] = await Promise.all([
+        db.from('branch_inventory').select('*, ingredients(name,unit,min_stock), branches(name_ar)'),
+        db.from('supplier_ingredients').select('*'),
+        db.from('suppliers').select('*'),
+      ]);
+      if(balRes.error){ document.getElementById('shortageBody').innerHTML = `<div class="alert-red">⚠️ ${esc(balRes.error.message)}</div>`; return; }
+      const bal = balRes.data||[];
+      const supIngs = siRes.error ? [] : (siRes.data||[]);
+      const suppliers = supRes.data||[];
+      // كل مادة تحت الحد الأدنى بأي فرع
+      const low = bal.filter(b=>(b.stock||0) <= (b.ingredients?.min_stock||0) && (b.ingredients?.min_stock||0) > 0);
+      if(!low.length){
+        document.getElementById('shortageBody').innerHTML = '<div class="empty-note">✅ ما في أي نقص حاليًا — كل المواد فوق الحد الأدنى بالفرعين</div>';
+        return;
+      }
+      // نجمع حسب المورد
+      const bySupplier = {}; // supplierName -> [{ingredient, branch, stock, min}]
+      const noSupplier = [];
+      low.forEach(b=>{
+        const matches = supIngs.filter(si=>si.ingredient_id===b.ingredient_id);
+        const item = { name:b.ingredients?.name||'—', unit:b.ingredients?.unit||'', branch:b.branches?.name_ar||'—', stock:b.stock||0, min:b.ingredients?.min_stock||0 };
+        if(!matches.length){ noSupplier.push(item); return; }
+        matches.forEach(m=>{
+          if(!bySupplier[m.supplier]) bySupplier[m.supplier] = [];
+          bySupplier[m.supplier].push(item);
+        });
+      });
+      window.__shortageData = { bySupplier, noSupplier, suppliers };
+      document.getElementById('shortageBody').innerHTML = `
+        ${Object.entries(bySupplier).map(([supName, items], idx)=>{
+          const sup = suppliers.find(s=>s.name===supName);
+          const hasPhone = sup && (sup.whatsapp || sup.phone);
+          return `<div style="border:1.5px solid var(--warn);border-radius:12px;padding:10px 12px;margin-bottom:10px;background:#fff8e1">
+            <div style="font-weight:900;color:var(--maroon);margin-bottom:6px">🏪 ${esc(supName)} (${items.length} مادة ناقصة)</div>
+            <ul style="margin:0 0 8px 0;padding-inline-start:20px;font-size:.85rem">
+              ${items.map(it=>`<li>${esc(it.name)} — ${esc(it.branch)}: المتاح ${it.stock} ${esc(it.unit)} (الحد الأدنى ${it.min})</li>`).join('')}
+            </ul>
+            <button class="mini ok" style="background:#25D366" onclick="sendShortageWhatsapp(${idx})">📱 إرسال واتساب${hasPhone?'':' (حدد رقم عام بالإعدادات أو رقم المورد أول)'}</button>
+          </div>`;
+        }).join('')}
+        ${noSupplier.length?`<div style="border:1.5px dashed var(--red);border-radius:12px;padding:10px 12px;margin-bottom:10px">
+          <div style="font-weight:900;color:var(--red);margin-bottom:6px">⚠️ مواد ناقصة بدون مورد محدد (${noSupplier.length})</div>
+          <ul style="margin:0;padding-inline-start:20px;font-size:.85rem">
+            ${noSupplier.map(it=>`<li>${esc(it.name)} — ${esc(it.branch)}: المتاح ${it.stock} ${esc(it.unit)}</li>`).join('')}
+          </ul>
+          <div style="font-size:.78rem;color:var(--muted);margin-top:6px">حدد مورد لهاي المواد من ⚙️ الإدارة ← الموردين ← تعديل المورد</div>
+        </div>`:''}
+        <div class="m-act"><button class="cancel" onclick="closeModal()">إغلاق</button></div>`;
+    }catch(e){ document.getElementById('shortageBody').innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
+  }
+  function sendShortageWhatsapp(idx){
+    const { bySupplier, suppliers } = window.__shortageData||{};
+    const entries = Object.entries(bySupplier||{});
+    const [supName, items] = entries[idx]||[];
+    if(!supName) return;
+    const sup = suppliers.find(s=>s.name===supName);
+    const phone = (sup?.whatsapp || sup?.phone || SETTINGS.procurement_whatsapp || '').replace(/\D/g,'');
+    if(!phone){ toast('⚠️ ما في رقم واتساب — حدده بالمورد أو برقم "توريدات" العام بالإعدادات'); return; }
+    let msg = `📦 طلب توريد — ${supName}\nصابر جو سناك\n\n`;
+    items.forEach(it=>{ msg += `• ${it.name} (${it.branch}) — المتاح ${it.stock} ${it.unit}\n`; });
+    msg += `\nمشكورين على التعاون 🙏`;
+    window.open(`https://wa.me/${phone}?text=${encodeURIComponent(msg)}`, '_blank');
+  }
   async function renderWarehouse(){
     await loadIngredients();
     const C = document.getElementById('admContent');
@@ -6718,6 +6861,14 @@
             🔄 تحديث تلقائي كل 5 ثواني
           </label>
         </div>
+      </div>
+
+      <div class="panel" style="margin-bottom:14px;border:2px solid var(--warn)">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+          <h4 style="color:var(--warn);margin:0">📤 تقرير النواقص — إرسال طلبات توريد للموردين</h4>
+          <button class="mini ok" style="background:var(--maroon)" onclick="showShortageReport()">📋 عرض التقرير</button>
+        </div>
+        <div style="color:var(--muted);font-size:.8rem;font-weight:600;margin-top:6px">بيفحص كل مادة تحت الحد الأدنى بأي فرع، ويجمعها حسب المورد، وبيدّيك زر واتساب جاهز لكل مورد.</div>
       </div>
 
       <div class="panel" style="margin-bottom:14px">
@@ -8558,20 +8709,43 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
     const win = window.open('','_blank');
     win.document.write(html); win.document.close();
   }
-  function supplierForm(id){
+  async function supplierForm(id){
     const s = SUPPLIERS_DATA.find(x=>x.id===id) || {};
+    let ingSection = '';
+    if(id){
+      await loadIngredients();
+      try{
+        const { data: myIngs } = await db.from('supplier_ingredients').select('ingredient_id').eq('supplier', s.name);
+        const myIds = new Set((myIngs||[]).map(x=>x.ingredient_id));
+        ingSection = `<hr style="margin:10px 0"><div style="font-weight:800;color:var(--maroon);margin-bottom:6px">📦 الأصناف يلي بنوخدها من هاد المورد</div>
+          <div style="font-size:.78rem;color:var(--muted);font-weight:600;margin-bottom:6px">هاي بتظهر تلقائيًا وقت عمل فاتورة شراء لهاد المورد، وبتستخدم بتقرير النواقص بعد الجرد.</div>
+          <div id="sup_ingsWrap" style="max-height:220px;overflow-y:auto;border:1.5px solid var(--line);border-radius:10px;padding:8px">
+            ${INGR.map(i=>`<label class="chk" style="display:block;margin-bottom:4px"><input type="checkbox" id="sup_ing_${i.id}" ${myIds.has(i.id)?'checked':''}> ${esc(i.name)} (${esc(i.unit)})</label>`).join('')||'<div class="empty-note">ما في مكونات بعد</div>'}
+          </div>`;
+      }catch(e){ console.error('load supplier ingredients failed (نفّذ SQL):', e); }
+    }
     modal(`<h3>${id?'تعديل مورد':'مورد جديد'}</h3>
       <div class="fld"><label>الاسم</label><input id="sup_name" value="${esc(s.name||'')}"></div>
       <div class="fld"><label>الهاتف</label><input id="sup_phone" inputmode="tel" value="${esc(s.phone||'')}"></div>
+      <div class="fld"><label>واتساب (لو مختلف عن الهاتف — لتقرير النواقص)</label><input id="sup_whatsapp" inputmode="tel" value="${esc(s.whatsapp||'')}" placeholder="مثال: 962791234567"></div>
       <div class="fld"><label>ملاحظات</label><input id="sup_notes" value="${esc(s.notes||'')}"></div>
+      ${ingSection}
       <div class="m-act"><button class="save" onclick="saveSupplier('${id||''}')">حفظ ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
   }
   async function saveSupplier(id){
     const name = document.getElementById('sup_name').value.trim();
     if(!name){ toast('⚠️ اسم المورد مطلوب'); return; }
-    const rec = { name, phone: document.getElementById('sup_phone').value.trim()||null, notes: document.getElementById('sup_notes').value.trim()||null };
-    const r = id ? await db.from('suppliers').update(rec).eq('id',id) : await db.from('suppliers').insert(rec);
+    const rec = { name, phone: document.getElementById('sup_phone').value.trim()||null, whatsapp: document.getElementById('sup_whatsapp')?.value.trim()||null, notes: document.getElementById('sup_notes').value.trim()||null };
+    const r = id ? await db.from('suppliers').update(rec).eq('id',id) : await db.from('suppliers').insert(rec).select().single();
     if(r.error){ toast('✗ '+r.error.message); return; }
+    // 📦 حفظ ربط الأصناف بالمورد
+    if(document.getElementById('sup_ingsWrap')){
+      try{
+        await db.from('supplier_ingredients').delete().eq('supplier', name);
+        const toInsert = INGR.filter(i=>document.getElementById('sup_ing_'+i.id)?.checked).map(i=>({ supplier:name, ingredient_id:i.id }));
+        if(toInsert.length) await db.from('supplier_ingredients').insert(toInsert);
+      }catch(e){ console.error('save supplier ingredients failed:', e); }
+    }
     closeModal(); toast('✓ انحفظ'); renderSuppliers();
   }
   /* ---- كشف حساب مفصّل لمورد بفترة محددة ---- */
@@ -9167,6 +9341,7 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
       hr_portal_show_balance: document.getElementById('f_hrShowBalance')?.checked ?? true,
       delivery_whatsapp: f_wanum ? f_wanum.value.trim() : '',
       feedback_msg_template: document.getElementById('f_feedbackMsg')?.value.trim() || '',
+      procurement_whatsapp: document.getElementById('f_procWa')?.value.trim() || '',
       receipt_template: f_receiptTemplate ? f_receiptTemplate.value : 'modern',
       invoice_extra_info: f_extraInfo ? f_extraInfo.value.trim() : '',
       fin_start_hour: f_finStart ? f_finStart.value : '10',
