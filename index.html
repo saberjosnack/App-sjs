@@ -5272,7 +5272,7 @@
     if(!confirm('⚠️ كل الوصفات وفواتير الشراء القديمة يلي كانت تستخدم "'+oldName+'" رح تصير تستخدم المادة البديلة بدلها، وبعدها رح نحذف "'+oldName+'" نهائيًا. متأكد؟')) return;
     try{
       // نبدّل المرجع بكل الجداول يلي ممكن تشير لهاد المكون
-      await db.from('recipes').update({ ingredient_id: newId }).eq('ingredient_id', oldId);
+      await db.from('recipe_items').update({ ingredient_id: newId }).eq('ingredient_id', oldId);
       await db.from('purchase_items').update({ ingredient_id: newId }).eq('ingredient_id', oldId);
       await db.from('inventory_movements').update({ ingredient_id: newId }).eq('ingredient_id', oldId).then(()=>{}).catch(()=>{});
       await db.from('waste_log').update({ ingredient_id: newId }).eq('ingredient_id', oldId).then(()=>{}).catch(()=>{});
