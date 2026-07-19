@@ -6142,7 +6142,7 @@
       // 🔧 إصلاح مهم: كان يتجاهل فلتر الفرع فوق الشاشة تمامًا ويحسب كل الفروع مع بعض دايمًا —
       // هلأ بيحترم الفرع المحدد (لو محدد "كل الفروع" بيضل يحسب الكل زي الأول)
       const branchFilter = document.getElementById('salesBranch')?.value || '';
-      let ordQ = db.from('orders').select('total,subtotal,discount,delivery_fee,status,employee_tab_name,branch_id,order_items(quantity,item_id,unit_price)').gte('created_at',range.from).lte('created_at',range.to);
+      let ordQ = db.from('orders').select('total,subtotal,discount,delivery_fee,status,employee_tab_name,branch_id,order_items(quantity,menu_item_id,unit_price)').gte('created_at',range.from).lte('created_at',range.to);
       let expQ = db.from('expenses').select('amount,branch_id').gte('expense_date',from).lte('expense_date',to);
       let purQ = db.from('purchases').select('total,branch_id').gte('purchase_date',from).lte('purchase_date',to);
       let wasteQ = db.from('waste_log').select('quantity,ingredient_id,branch_id,ingredients(unit_cost)').gte('created_at',range.from).lte('created_at',range.to);
@@ -6155,6 +6155,13 @@
         db.from('fixed_costs').select('*').eq('is_active',true),
         db.from('hr_locations').select('*'),
       ]);
+      // 🔧 مهم: نفحص أخطاء الاستعلامات صراحة — قبل هيك أي خطأ (زي اسم عمود غلط) كان يخلي الرقم
+      // يطلع صفر بصمت بدون أي تنبيه، وهاد أخطر من ظهور رسالة خطأ واضحة
+      const qErrors = [ord,exp,pur,att,logs,waste,fixedC].map(r=>r.error).filter(Boolean);
+      if(qErrors.length){
+        D.innerHTML = `<div class="alert-red">⚠️ صار خطأ بجلب بيانات الأرباح: ${esc(qErrors.map(e=>e.message).join(' | '))}</div>`;
+        return;
+      }
       const allOk = (ord.data||[]).filter(o=>o.status!=='cancelled');
       const ok = allOk.filter(o=>!o.employee_tab_name); // 🍽️ وجبات الموظفين مستبعدة — مو إيراد حقيقي
       const itemsSales = ok.reduce((a,o)=>a+parseFloat(o.subtotal||0),0);
@@ -6190,7 +6197,7 @@
       let cogs = 0;
       try{
         const soldItemIds = {};
-        ok.forEach(o=>(o.order_items||[]).forEach(oi=>{ soldItemIds[oi.item_id] = (soldItemIds[oi.item_id]||0) + parseFloat(oi.quantity||0); }));
+        ok.forEach(o=>(o.order_items||[]).forEach(oi=>{ soldItemIds[oi.menu_item_id] = (soldItemIds[oi.menu_item_id]||0) + parseFloat(oi.quantity||0); }));
         const itemIds = Object.keys(soldItemIds);
         if(itemIds.length){
           const { data: recipesData } = await db.from('recipes').select('menu_item_id, recipe_items(quantity, ingredients(unit_cost))').in('menu_item_id', itemIds);
