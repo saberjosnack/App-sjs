@@ -666,6 +666,11 @@
 
   let ME = null;
   let BRANCHES = [], CATS = [], ITEMS = [], STAFF = [], CUSTOMERS = [], SETTINGS = {};
+  // 🔒 حماية من النقر المزدوج — لو المستخدم كبس زر حفظ مرتين بسرعة (جرد، مصاريف، سلف...)،
+  // ما بيسمح بتنفيذ نفس العملية مرتين بالتوازي. استخدم: if(!lockSubmit('key')) return; ... finally{ unlockSubmit('key'); }
+  const __submitLocks = new Set();
+  function lockSubmit(key){ if(__submitLocks.has(key)){ toast('⏳ جاري التنفيذ... لحظة'); return false; } __submitLocks.add(key); return true; }
+  function unlockSubmit(key){ __submitLocks.delete(key); }
   // 🔧 جدول settings يخزّن كل القيم كنص (حتى القيم المنطقية) — فلو خزّنّا false مباشرة بترجع نص "false"
   // مش boolean false، والمقارنة "!==false" ما بتلتقطها أبدًا (نص لا يساوي boolean بجافاسكربت).
   // هاي الدالة بتتعامل مع الحالتين مع بعض بأمان — تستخدم بدل أي مقارنة "SETTINGS.x!==false" يدوية.
@@ -1188,6 +1193,8 @@
       </div>`);
   }
   async function saveRole(id, legacyRole){
+    if(!lockSubmit('saveRole')) return;
+    setTimeout(()=>unlockSubmit('saveRole'), 3000);
     const perms = {};
     document.querySelectorAll('.rolePermChk').forEach(c=>{ perms[c.dataset.perm]=c.checked; });
     if(legacyRole){
@@ -1298,8 +1305,34 @@
       id = 'dev-' + (crypto.randomUUID ? crypto.randomUUID() : (Date.now()+'-'+Math.random().toString(36).slice(2)));
       localStorage.setItem('sjs_device_id', id);
     }
+    // 🔧 نخزّن نسخة احتياطية بـIndexedDB كمان — أحيانًا مسح الكاش أو "مسح بيانات الموقع" بيمسح
+    // localStorage بس مش IndexedDB (أو العكس)، فهيك بنقلل احتمال إنه الجهاز "ينسى نفسه" ويصير
+    // النظام يعتبره جهاز جديد بالغلط رغم إنه نفس الجهاز فعليًا
+    try{
+      const req = indexedDB.open('sjs_device_store', 1);
+      req.onupgradeneeded = () => req.result.createObjectStore('kv');
+      req.onsuccess = () => {
+        const tx = req.result.transaction('kv','readwrite');
+        tx.objectStore('kv').put(id, 'device_id');
+      };
+    }catch(e){}
     return id;
   }
+  // 🔧 محاولة استرجاع معرف الجهاز من IndexedDB لو localStorage انمسح بالغلط — نشغّلها مرة وحدة بالإقلاع
+  (function restoreDeviceIdFromIndexedDB(){
+    try{
+      if(localStorage.getItem('sjs_device_id')) return; // موجود أصلًا، ما في داعي نرجع نجيبه
+      const req = indexedDB.open('sjs_device_store', 1);
+      req.onupgradeneeded = () => req.result.createObjectStore('kv');
+      req.onsuccess = () => {
+        try{
+          const tx = req.result.transaction('kv','readonly');
+          const getReq = tx.objectStore('kv').get('device_id');
+          getReq.onsuccess = () => { if(getReq.result) localStorage.setItem('sjs_device_id', getReq.result); };
+        }catch(e){}
+      };
+    }catch(e){}
+  })();
   function getPairingCode(){
     let code = localStorage.getItem('sjs_pairing_code');
     if(!code){
@@ -2041,6 +2074,8 @@
       <div class="m-act"><button class="save" onclick="saveDrawerRequest()">تأكيد السحب ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
   }
   async function saveDrawerRequest(){
+    if(!lockSubmit('saveDrawerRequest')) return;
+    setTimeout(()=>unlockSubmit('saveDrawerRequest'), 3000);
     const amt = parseFloat(document.getElementById('dr_amt').value);
     const reason = document.getElementById('dr_reason').value.trim();
     if(isNaN(amt)||amt<=0){ toast('⚠️ اكتب مبلغ صحيح'); return; }
@@ -3439,6 +3474,8 @@
   }
 
   async function saveOrder(print){
+    if(!lockSubmit('saveOrder')) return;
+    setTimeout(()=>unlockSubmit('saveOrder'), 3000);
     if(!cart.length){ toast('⚠️ السلة فاضية'); return; }
     if(!currentShift && !isAdmin()){ toast('⚠️ يجب فتح شيفت أولاً'); return; }
     if(!perm(orderType==='delivery'?'order_delivery':'order_takeaway')){ toast('⛔ ما عندك صلاحية بيع '+(orderType==='delivery'?'التوصيل':'الاستلام')); return; }
@@ -4141,6 +4178,8 @@
     });
   };
   async function saveCustomerRating(customerId, orderId){
+    if(!lockSubmit('saveCustomerRating')) return;
+    setTimeout(()=>unlockSubmit('saveCustomerRating'), 3000);
     const rating = window.__currentRating || 0;
     if(!rating){ toast('⚠️ اختر نجوم أول'); return; }
     try{
@@ -4233,6 +4272,8 @@
   }
 
   async function saveCust(id){
+    if(!lockSubmit('saveCust')) return;
+    setTimeout(()=>unlockSubmit('saveCust'), 3000);
     const f_wn = document.getElementById('f_wn');
     const f_wp = document.getElementById('f_wp');
     const f_wa = document.getElementById('f_wa');
@@ -5295,6 +5336,8 @@
       <div class="m-act"><button class="save" onclick="saveIngredient('${id||''}')">حفظ ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
   }
   async function saveIngredient(id){
+    if(!lockSubmit('saveIngredient')) return;
+    setTimeout(()=>unlockSubmit('saveIngredient'), 3000);
     const unitSel = document.getElementById('fi_un').value;
     const unit = unitSel==='__custom__' ? (document.getElementById('fi_un_custom')?.value.trim()||'') : unitSel;
     if(!unit){ toast('⚠️ اكتب وحدة القياس'); return; }
@@ -5387,6 +5430,8 @@
   }
   function addRiRow(){document.getElementById('ri_list').insertAdjacentHTML('beforeend',riRow(++riIdx,'',''));}
   async function saveRecipe(id){
+    if(!lockSubmit('saveRecipe')) return;
+    setTimeout(()=>unlockSubmit('saveRecipe'), 3000);
     const itemId=document.getElementById('fr_item').value;
     if(!itemId){toast('⚠️ اختر الصنف');return;}
     const rows=[...document.querySelectorAll('#ri_list .two')];
@@ -5476,6 +5521,8 @@
       <div class="m-act"><button class="save" onclick="saveExpense('${id||''}')">حفظ ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
   }
   async function saveExpense(id){
+    if(!lockSubmit('saveExpense')) return;
+    try{
     const desc = document.getElementById('fe_desc').value.trim();
     const cat = document.getElementById('fe_cat').value;
     const rec={expense_date:document.getElementById('fe_dt').value,
@@ -5497,6 +5544,7 @@
     }
     await logActivity(id?'edit_expense':'add_expense', 'مصروف: '+rec.category+' - '+fmt(rec.amount));
     closeModal();toast('✓ انحفظ');renderExpenses();
+    } finally { unlockSubmit('saveExpense'); }
   }
   async function approveExpense(id, approve){
     const status = approve ? 'approved' : 'rejected';
@@ -5580,6 +5628,8 @@
       <div class="m-act"><button class="save" onclick="confirmSettlePurchase('${id}')">تأكيد الدفع ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
   }
   async function confirmSettlePurchase(id){
+    if(!lockSubmit('confirmSettlePurchase')) return;
+    setTimeout(()=>unlockSubmit('confirmSettlePurchase'), 3000);
     if(!isAdmin()){ toast('⛔ صلاحية المالك فقط — الموظف يقدر يدخل الفاتورة بس، الدفع قرارك إنت'); return; }
     const p = PURCHASES_DATA.find(x=>x.id===id); if(!p) return;
     const acc = document.getElementById('settle_acc')?.value||'cash';
@@ -5611,6 +5661,8 @@
       <div class="m-act"><button class="save" onclick="confirmSupplierGeneralPayment('${esc(supplierName)}')">تأكيد الدفع ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
   }
   async function confirmSupplierGeneralPayment(supplierName){
+    if(!lockSubmit('confirmSupplierGeneralPayment')) return;
+    setTimeout(()=>unlockSubmit('confirmSupplierGeneralPayment'), 3000);
     if(!isAdmin()){ toast('⛔ صلاحية المالك فقط'); return; }
     const acc = document.getElementById('sgp_acc')?.value||'cash';
     const note = document.getElementById('sgp_note')?.value.trim();
@@ -5906,6 +5958,8 @@
     }
   }
   async function savePurchase(){
+    if(!lockSubmit('savePurchase')) return;
+    setTimeout(()=>unlockSubmit('savePurchase'), 3000);
     const dt=document.getElementById('fp_dt').value;
     let sup=document.getElementById('fp_sup').value.trim();
     if(sup==='__new__'){
@@ -6211,6 +6265,8 @@
     else { varDiv.innerHTML = '<span style="color:var(--warn)">🔺 زيادة '+diff.toFixed(2)+'</span>'; }
   }
   async function saveInventoryAudit(branchId, branchName){
+    if(!lockSubmit('saveInventoryAudit')) return;
+    setTimeout(()=>unlockSubmit('saveInventoryAudit'), 3000); // شبكة أمان: يفك القفل لحاله لو صار خطأ غير متوقع
     const qtys=[...document.querySelectorAll('.inv_qty')];
     const results = [];
     let updated=0;
@@ -6330,6 +6386,8 @@
     renderInventory();
   }
   async function saveInventory(branchId, branchName){
+    if(!lockSubmit('saveInventory')) return;
+    setTimeout(()=>unlockSubmit('saveInventory'), 3000);
     const qtys=[...document.querySelectorAll('.inv_qty')];
     const mins=[...document.querySelectorAll('.inv_min')];
     let updated=0;
@@ -6772,6 +6830,8 @@
       </div>`);
   }
   async function saveAdjust(invId, branchId, ingId, oldStock){
+    if(!lockSubmit('saveAdjust')) return;
+    setTimeout(()=>unlockSubmit('saveAdjust'), 3000);
     const stock = parseFloat(document.getElementById('adj_cur').value)||0;
     const min_stock = parseFloat(document.getElementById('adj_min').value)||0;
     const reason = document.getElementById('adj_reason')?.value||'تصحيح خطأ';
@@ -7229,6 +7289,8 @@
       <div class="m-act"><button class="save" onclick="saveHrAdvance('${empId}','${esc(empName)}')">حفظ ✓</button><button class="cancel" onclick="hrAdvancesView('${empId}','${esc(empName)}')">رجوع</button></div>`);
   }
   async function saveHrAdvance(empId, empName){
+    if(!lockSubmit('saveHrAdvance')) return;
+    setTimeout(()=>unlockSubmit('saveHrAdvance'), 3000);
     const amt = parseFloat(document.getElementById('adv_amt')?.value);
     const acc = document.getElementById('adv_acc')?.value||'cash';
     const note = document.getElementById('adv_note')?.value.trim();
@@ -8142,6 +8204,8 @@
       <div class="m-act"><button class="save" onclick="saveTreasuryManual('${dir}')">حفظ ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
   }
   async function saveTreasuryManual(dir){
+    if(!lockSubmit('saveTreasuryManual')) return;
+    setTimeout(()=>unlockSubmit('saveTreasuryManual'), 3000);
     const amt = parseFloat(document.getElementById('tm_amt')?.value);
     const note = document.getElementById('tm_note')?.value.trim();
     if(isNaN(amt)||amt<=0){ toast('⚠️ اكتب مبلغ صحيح'); return; }
@@ -8294,6 +8358,8 @@
       <div class="m-act"><button class="save" onclick="saveDeviceInfo('${id||''}')">${id?'حفظ التعديل':'إضافة الجهاز'} ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
   }
   async function saveDeviceInfo(id){
+    if(!lockSubmit('saveDeviceInfo')) return;
+    setTimeout(()=>unlockSubmit('saveDeviceInfo'), 3000);
     const name = document.getElementById('dv_name').value.trim();
     if(!name){ toast('⚠️ اسم الجهاز مطلوب'); return; }
     const rec = {
@@ -8444,6 +8510,8 @@
     }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
   async function saveMealName(id){
+    if(!lockSubmit('saveMealName')) return;
+    setTimeout(()=>unlockSubmit('saveMealName'), 3000);
     const name = document.getElementById('mn_name').value.trim();
     const disc = parseFloat(document.getElementById('mn_disc').value);
     const wage = parseFloat(document.getElementById('mn_wage')?.value)||0;
@@ -8637,6 +8705,8 @@ window.__lastEmpMealsData = null;
       <div class="m-act"><button class="save" onclick="confirmSendVip('${custId}')">📱 حفظ الخصم وإرسال</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
   }
   async function confirmSendVip(custId){
+    if(!lockSubmit('confirmSendVip')) return;
+    setTimeout(()=>unlockSubmit('confirmSendVip'), 3000);
     const pct = parseFloat(document.getElementById('vip_disc_pct')?.value);
     if(isNaN(pct)||pct<0||pct>100){ toast('⚠️ نسبة الخصم يجب تكون بين 0 و100'); return; }
     try{
@@ -8747,6 +8817,8 @@ window.__lastEmpMealsData = null;
       <div class="m-act"><button class="save" onclick="saveWaste()">تسجيل ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
   }
   async function saveWaste(){
+    if(!lockSubmit('saveWaste')) return;
+    setTimeout(()=>unlockSubmit('saveWaste'), 3000);
     const ingId = document.getElementById('wf_ing').value;
     const qty = parseFloat(document.getElementById('wf_qty').value);
     const branchId = document.getElementById('wf_branch').value;
@@ -8980,6 +9052,8 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
       <div class="m-act"><button class="save" onclick="saveSupplier('${id||''}')">حفظ ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
   }
   async function saveSupplier(id){
+    if(!lockSubmit('saveSupplier')) return;
+    setTimeout(()=>unlockSubmit('saveSupplier'), 3000);
     const name = document.getElementById('sup_name').value.trim();
     if(!name){ toast('⚠️ اسم المورد مطلوب'); return; }
     const rec = { name, phone: document.getElementById('sup_phone').value.trim()||null, whatsapp: document.getElementById('sup_whatsapp')?.value.trim()||null, notes: document.getElementById('sup_notes').value.trim()||null };
@@ -9307,6 +9381,8 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
       <div class="m-act"><button class="save" onclick="savePlatform('${id||''}')">حفظ ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
   }
   async function savePlatform(id){
+    if(!lockSubmit('savePlatform')) return;
+    setTimeout(()=>unlockSubmit('savePlatform'), 3000);
     const name = document.getElementById('pf_name').value.trim();
     const commission = parseFloat(document.getElementById('pf_comm').value);
     if(!name){ toast('⚠️ اسم المنصة مطلوب'); return; }
@@ -9379,6 +9455,8 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
     document.getElementById('tr_items_list').insertAdjacentHTML('beforeend', trItemRow(trItemCount));
   }
   async function saveTransfer(){
+    if(!lockSubmit('saveTransfer')) return;
+    setTimeout(()=>unlockSubmit('saveTransfer'), 3000);
     const fromId = document.getElementById('tr_from').value;
     const toId = document.getElementById('tr_to').value;
     const fee = parseFloat(document.getElementById('tr_fee').value)||0;
@@ -9557,6 +9635,8 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
 
 
   async function saveSettings(){
+    if(!lockSubmit('saveSettings')) return;
+    setTimeout(()=>unlockSubmit('saveSettings'), 3000);
     const f_wanum = document.getElementById('f_wanum');
     const f_receiptTemplate = document.getElementById('f_receiptTemplate');
     const f_printMethod = document.getElementById('f_printMethod');
@@ -9659,6 +9739,8 @@ try {
   }
   function codeForm(id){ const list=window.__CODES||[]; const c=list.find(x=>x.id===id)||{}; modal(`<h3>${id?'تعديل كود':'كود جديد'}</h3><div class="fld"><label>الكود</label><input id="f_cc" value="${esc(c.code||'')}" style="text-transform:uppercase"></div><div class="fld"><label>النوع</label><select id="f_ck"><option value="percent" ${c.kind!=='fixed'?'selected':''}>نسبة %</option><option value="fixed" ${c.kind==='fixed'?'selected':''}>مبلغ ثابت</option></select></div><div class="fld"><label>القيمة</label><input id="f_cv" inputmode="decimal" value="${c.value??''}"></div><div class="m-act"><button class="save" onclick="saveCode('${id||''}')">حفظ</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`); }
   async function saveCode(id){
+    if(!lockSubmit('saveCode')) return;
+    setTimeout(()=>unlockSubmit('saveCode'), 3000);
     const f_cc = document.getElementById('f_cc');
     const f_ck = document.getElementById('f_ck');
     const f_cv = document.getElementById('f_cv');
@@ -9700,6 +9782,8 @@ try {
     img.src = URL.createObjectURL(f);
   };
   async function saveItem(id){
+    if(!lockSubmit('saveItem')) return;
+    setTimeout(()=>unlockSubmit('saveItem'), 3000);
     const f_nm = document.getElementById('f_nm');
     const f_pr = document.getElementById('f_pr');
     const f_cat = document.getElementById('f_cat');
@@ -9872,6 +9956,8 @@ try {
   }
   function catForm(id){ const list=window.__ALLCATS||CATS; const c=list.find(x=>x.id===id)||{}; modal(`<h3>${id?'تعديل تصنيف':'تصنيف جديد'}</h3><div class="fld"><label>اسم التصنيف</label><input id="f_cn" value="${esc(c.name_ar||'')}"></div><div class="fld"><label>الترتيب</label><input id="f_cs" inputmode="numeric" value="${c.sort_order??0}"></div><div class="m-act"><button class="save" onclick="saveCat('${id||''}')">حفظ</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`); }
   async function saveCat(id){
+    if(!lockSubmit('saveCat')) return;
+    setTimeout(()=>unlockSubmit('saveCat'), 3000);
     const f_cn = document.getElementById('f_cn');
     const f_cs = document.getElementById('f_cs');
     const rec={name_ar: f_cn ? f_cn.value.trim() : '', sort_order: f_cs ? parseInt(f_cs.value)||0 : 0};
@@ -10032,6 +10118,8 @@ try {
   };
 
   async function saveStaff(id){
+    if(!lockSubmit('saveStaff')) return;
+    setTimeout(()=>unlockSubmit('saveStaff'), 3000);
     const f_sn = document.getElementById('f_sn');
     const f_su = document.getElementById('f_su');
     const f_sp = document.getElementById('f_sp');
@@ -10067,6 +10155,8 @@ try {
   async function toggleStaff(id,v){ try { const r=await db.from('staff').update({is_active:v}).eq('id',id); if(r.error){toast('✗ '+r.error.message);console.error(r.error);return;} toast(v?'✓ مفعّل':'✓ معطّل'); renderAdmin(); } catch(e) { toast('✗ '+e.message); console.error(e); } }
   function branchForm(id){ const list=window.__ALLBR||BRANCHES; const b=list.find(x=>x.id===id)||{}; modal(`<h3>${id?'تعديل فرع':'فرع جديد'}</h3><div class="fld"><label>الاسم (عربي)</label><input id="f_bn" value="${esc(b.name_ar||'')}"></div><div class="fld"><label>العنوان</label><input id="f_be" value="${esc(b.address||'')}"></div><div class="m-act"><button class="save" onclick="saveBranch('${id||''}')">حفظ</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`); }
   async function saveBranch(id){
+    if(!lockSubmit('saveBranch')) return;
+    setTimeout(()=>unlockSubmit('saveBranch'), 3000);
     const f_bn = document.getElementById('f_bn');
     const f_be = document.getElementById('f_be');
     const rec={name_ar: f_bn ? f_bn.value.trim() : '', address: f_be ? f_be.value.trim()||null : null};
@@ -10802,6 +10892,14 @@ try {
         const { data: existingReq } = await db.from('hr_device_requests').select('id').eq('employee_id', data.id).eq('new_device_id', myDeviceId).eq('status','pending').maybeSingle();
         if(!existingReq){
           await db.from('hr_device_requests').insert({ employee_id: data.id, employee_name: data.name, old_device_id: data.device_id, new_device_id: myDeviceId, status:'pending' });
+          // 🔔 تنبيه فوري لكل حسابات المدير — عشان الموافقة تصير بأسرع وقت وما يضل الموظف واقف
+          try{
+            const { data: admins } = await db.from('staff').select('id, full_name').eq('role','admin');
+            for(const adm of (admins||[])){
+              await db.from('staff_messages').insert({ from_id: null, from_name: 'النظام', to_id: adm.id, to_name: adm.full_name,
+                body: '📱 '+data.name+' حاول يسجل دخول من جهاز جديد — بانتظار موافقتك بشاشة HR' });
+            }
+          }catch(e){ console.error('device request notify failed:', e); }
         }
         errEl.innerHTML = '⛔ هاد جهاز جديد مش معتمد لهاد الحساب.<br>لازم موافقة المدير أول — تم إرسال طلب، جرب تاني بعد ما يوافق.';
         return;
@@ -11083,6 +11181,8 @@ try {
     }catch(e){ console.error(e); }
   }
   async function empSubmitAdvanceRequest(){
+    if(!lockSubmit('empSubmitAdvanceRequest')) return;
+    setTimeout(()=>unlockSubmit('empSubmitAdvanceRequest'), 3000);
     const amt = parseFloat(normalizeDigits(document.getElementById('epa_amt')?.value));
     const note = document.getElementById('epa_note')?.value.trim();
     if(isNaN(amt)||amt<=0){ toast('⚠️ اكتب مبلغ صحيح'); return; }
