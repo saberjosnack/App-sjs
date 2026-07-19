@@ -6076,7 +6076,7 @@
         <tr><th>👷 تكلفة العمالة (ساعات × سعر الساعة)</th><td>${fmt(d.laborCost)} ${CURRENCY}</td></tr>
         <tr><th>🗑️ تكلفة الهدر/الإتلاف</th><td>${fmt(d.wasteCost)} ${CURRENCY}</td></tr>
         <tr><th>💸 المصاريف التشغيلية</th><td>${fmt(d.expT)} ${CURRENCY}</td></tr>
-        <tr><th>🛒 المشتريات</th><td>${fmt(d.purT)} ${CURRENCY}</td></tr>
+        <tr><th>🛒 المشتريات (مرجعي — مش مخصوم من الربح)</th><td>${fmt(d.purT)} ${CURRENCY}</td></tr>
         <tr><th>🏢 التكاليف الثابتة (نصيب الفترة من ${fmt(d.totalFixed)}/شهر)</th><td>${fmt(d.fixedProrated)} ${CURRENCY}</td></tr>
         <tr><th>💹 صافي الربح</th><td class="tot">${fmt(d.net)} ${CURRENCY}</td></tr>
         <tr><th>نسبة الربح</th><td class="tot">${d.margin}%</td></tr>
@@ -6139,14 +6139,21 @@
   if(mode==='profit'){
       const range = getRepRange(); // 🔧 إصلاح: كان يقرأ التاريخ مباشرة بدون احترام فلتر "هذا الشهر" السريع
       const from = range.from.split('T')[0], to = range.to.split('T')[0];
-      const [ord, exp, pur, att, logs, waste, fixedC] = await Promise.all([
-        db.from('orders').select('total,subtotal,discount,delivery_fee,status,employee_tab_name,order_items(quantity,item_id,unit_price)').gte('created_at',range.from).lte('created_at',range.to),
-        db.from('expenses').select('amount').gte('expense_date',from).lte('expense_date',to),
-        db.from('purchases').select('total').gte('purchase_date',from).lte('purchase_date',to),
+      // 🔧 إصلاح مهم: كان يتجاهل فلتر الفرع فوق الشاشة تمامًا ويحسب كل الفروع مع بعض دايمًا —
+      // هلأ بيحترم الفرع المحدد (لو محدد "كل الفروع" بيضل يحسب الكل زي الأول)
+      const branchFilter = document.getElementById('salesBranch')?.value || '';
+      let ordQ = db.from('orders').select('total,subtotal,discount,delivery_fee,status,employee_tab_name,branch_id,order_items(quantity,item_id,unit_price)').gte('created_at',range.from).lte('created_at',range.to);
+      let expQ = db.from('expenses').select('amount,branch_id').gte('expense_date',from).lte('expense_date',to);
+      let purQ = db.from('purchases').select('total,branch_id').gte('purchase_date',from).lte('purchase_date',to);
+      let wasteQ = db.from('waste_log').select('quantity,ingredient_id,branch_id,ingredients(unit_cost)').gte('created_at',range.from).lte('created_at',range.to);
+      if(branchFilter){ ordQ=ordQ.eq('branch_id',branchFilter); expQ=expQ.eq('branch_id',branchFilter); purQ=purQ.eq('branch_id',branchFilter); wasteQ=wasteQ.eq('branch_id',branchFilter); }
+      const [ord, exp, pur, att, logs, waste, fixedC, hrLocs] = await Promise.all([
+        ordQ, expQ, purQ,
         db.from('hr_attendance').select('employee_id,hours').gte('work_date',from).lte('work_date',to),
-        db.from('hr_time_logs').select('employee_id,clock_in,clock_out').not('clock_out','is',null).gte('clock_in',range.from).lte('clock_in',range.to),
-        db.from('waste_log').select('quantity,ingredient_id,ingredients(unit_cost)').gte('created_at',range.from).lte('created_at',range.to),
+        db.from('hr_time_logs').select('employee_id,clock_in,clock_out,lat_in,lng_in').not('clock_out','is',null).gte('clock_in',range.from).lte('clock_in',range.to),
+        wasteQ,
         db.from('fixed_costs').select('*').eq('is_active',true),
+        db.from('hr_locations').select('*'),
       ]);
       const allOk = (ord.data||[]).filter(o=>o.status!=='cancelled');
       const ok = allOk.filter(o=>!o.employee_tab_name); // 🍽️ وجبات الموظفين مستبعدة — مو إيراد حقيقي
@@ -6156,11 +6163,20 @@
       const expT=(exp.data||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
       const purT=(pur.data||[]).reduce((a,x)=>a+parseFloat(x.total||0),0);
 
-      // 👷 تكلفة العمالة = ساعات العمل (يدوي + ذاتي) × سعر الساعة لكل موظف
+      // 👷 تكلفة العمالة — لو محدد فرع معيّن، نحدد فرع كل جلسة دخول ذاتي (GPS) عن طريق مطابقتها
+      // مع مواقع الجيوفنس المرتبطة بهاد الفرع بالذات؛ الساعات اليدوية (بدون GPS) بتضل تنحسب
+      // بكل الفروع لأنه مالها معلومة موقع أصلًا
       const empMap = {}; MEAL_NAMES_DATA.forEach(e=>empMap[e.id]=e.hourly_wage||0);
-      let laborCost = 0;
-      (att.data||[]).forEach(a=>{ laborCost += parseFloat(a.hours||0) * (empMap[a.employee_id]||0); });
-      (logs.data||[]).forEach(l=>{ const hrs=(new Date(l.clock_out)-new Date(l.clock_in))/3600000; if(hrs>0&&hrs<=16) laborCost += hrs * (empMap[l.employee_id]||0); });
+      const branchLocs = (hrLocs.data||[]).filter(l=>!branchFilter || l.branch_id===branchFilter);
+      let laborCost = 0, laborManualUnattributed = 0;
+      (att.data||[]).forEach(a=>{ laborCost += parseFloat(a.hours||0) * (empMap[a.employee_id]||0); if(branchFilter) laborManualUnattributed += parseFloat(a.hours||0) * (empMap[a.employee_id]||0); });
+      (logs.data||[]).forEach(l=>{
+        const hrs=(new Date(l.clock_out)-new Date(l.clock_in))/3600000; if(!(hrs>0&&hrs<=16)) return;
+        if(!branchFilter){ laborCost += hrs * (empMap[l.employee_id]||0); return; }
+        // فلترة بفرع محدد: نتأكد إنه سجّل دخوله من موقع تابع لهاد الفرع بالذات
+        const matched = l.lat_in!=null && branchLocs.some(loc=>distMeters(l.lat_in,l.lng_in,loc.lat,loc.lng) <= (loc.radius_m||200));
+        if(matched) laborCost += hrs * (empMap[l.employee_id]||0);
+      });
 
       // 🗑️ تكلفة الهدر/الإتلاف
       const wasteCost = (waste.data||[]).reduce((a,w)=>a+parseFloat(w.quantity||0)*parseFloat(w.ingredients?.unit_cost||0),0);
@@ -6186,7 +6202,10 @@
         }
       }catch(e){ console.error('COGS calc failed:', e); }
 
-      const net = sales - expT - purT - laborCost - wasteCost - fixedProrated;
+      // 🔧 مهم: المشتريات (purT) ما بتنخصم من صافي الربح — هي بس رقم مرجعي (تدفق نقدي/كم صرفنا كاش)
+      // الخصم الحقيقي من الربح بيصير من تكلفة البضاعة المستهلكة فعليًا (COGS) بس، لأنها الأدق:
+      // بتحسب تكلفة اللي فعلًا انباع وولّد الإيراد، مش كل شي اشتريناه (يلي جزء منه لسا بالمخزن كرصيد)
+      const net = sales - cogs - expT - laborCost - wasteCost - fixedProrated;
       const margin = sales>0 ? Math.round(net/sales*100) : 0;
       window.__profitDetail = { from, to, sales, expT, purT, laborCost, wasteCost, fixedProrated, cogs, net, margin, totalFixed, daysInRange };
       D.innerHTML=`<div class="day-head" style="flex-wrap:wrap;margin-bottom:10px">
@@ -6195,7 +6214,7 @@
         <div class="stat">👷 تكلفة العمالة<b style="color:var(--red)">${fmt(laborCost)} ${CURRENCY}</b></div>
         <div class="stat">🗑️ تكلفة الهدر<b style="color:var(--red)">${fmt(wasteCost)} ${CURRENCY}</b></div>
         <div class="stat">💸 مصاريف تشغيلية<b style="color:var(--red)">${fmt(expT)} ${CURRENCY}</b></div>
-        <div class="stat">🛒 مشتريات<b style="color:var(--red)">${fmt(purT)} ${CURRENCY}</b></div>
+        <div class="stat">🛒 مشتريات (مرجعي — تدفق نقدي، مش مخصوم من الربح)<b style="color:var(--muted)">${fmt(purT)} ${CURRENCY}</b></div>
         <div class="stat">🏢 تكاليف ثابتة (${daysInRange} يوم من ${fmt(totalFixed)}/شهر)<b style="color:var(--red)">${fmt(fixedProrated)} ${CURRENCY}</b></div>
         <div class="stat">💹 صافي الربح<b style="color:${net>=0?'var(--ok)':'var(--red)'}; font-size:1.4rem">${fmt(net)} ${CURRENCY}</b></div>
         <div class="stat">نسبة الربح<b style="color:${margin>=20?'var(--ok)':margin>=10?'var(--warn)':'var(--red)'}">${margin}%</b></div>
@@ -6204,7 +6223,8 @@
         <button class="mini ok" style="background:var(--maroon)" onclick="renderFixedCosts()">🏢 إدارة التكاليف الثابتة</button>
         <button class="mini ok" onclick="printProfitDetailPDF()">📄 طباعة تقرير مفصل</button>
       </div>
-      <div style="color:var(--muted);font-size:.78rem;font-weight:600">💡 سلسلة الحساب: صافي المبيعات − تكلفة البضاعة المستهلكة − تكلفة العمالة − الهدر − المصاريف − المشتريات − نصيب الفترة من التكاليف الثابتة = صافي الربح</div>`;
+      <div style="color:var(--muted);font-size:.78rem;font-weight:600">💡 سلسلة الحساب: صافي المبيعات − تكلفة البضاعة المستهلكة (COGS) − تكلفة العمالة − الهدر − المصاريف − نصيب الفترة من التكاليف الثابتة = صافي الربح. (المشتريات معروضة للمرجعية بس — ما بتنخصم لحالها عشان ما نكرر خصم نفس التكلفة مرتين؛ COGS هي يلي بتحسب فعليًا شو انباع)</div>
+      ${branchFilter?'<div style="color:var(--warn);font-size:.78rem;font-weight:700;margin-top:4px">💡 تكلفة العمالة صارت تعتمد على موقع دخول الموظف الفعلي (GPS) لتحديد فرعه — بس هاد بينطبق بس على الساعات المسجّلة ذاتيًا من بوابته. الساعات اليدوية (يلي الأدمن يدخلها بدون GPS) بتضل تنحسب بكل الفروع لأنه ما في معلومة موقع إلها أصلًا. تأكد من ربط كل موقع دخول بفرعه من شاشة "📍 مواقع الدخول" عشان الدقة تكون كاملة.</div>':''}`;
     }
     if(mode==='financial'){
       const range=getRepRange();
@@ -10826,18 +10846,26 @@ try {
           <h3>📍 مواقع الدخول المسموحة</h3>
           <div style="color:var(--muted);font-weight:700;font-size:.82rem;margin-bottom:10px">أي موظف بيسجل دخول من بوابته الخاصة، لازم يكون بنطاق أحد هالمواقع وإلا بيترفض تلقائيًا. لو ما ضفت أي موقع، ما في قيود (مسموح من أي مكان).</div>
           <div class="tbl-wrap" style="margin-bottom:10px"><table class="tbl">
-            <tr><th>الاسم</th><th>الإحداثيات</th><th>نطاق السماح (متر)</th><th></th></tr>
+            <tr><th>الاسم</th><th>الفرع</th><th>الإحداثيات</th><th>نطاق السماح (متر)</th><th></th></tr>
             ${locs.map(l=>`<tr>
               <td><b>${esc(l.name)}</b></td>
+              <td>
+                <select onchange="setHrLocationBranch('${l.id}', this.value)" style="font-size:.82rem;padding:4px">
+                  <option value="">— بدون —</option>
+                  ${BRANCHES.map(b=>`<option value="${b.id}" ${l.branch_id===b.id?'selected':''}>${esc(b.name_ar)}</option>`).join('')}
+                </select>
+              </td>
               <td style="font-size:.78rem;color:var(--muted)">${l.lat.toFixed(5)}, ${l.lng.toFixed(5)}</td>
               <td>${l.radius_m}</td>
               <td><button class="mini del" onclick="deleteHrLocation('${l.id}')">حذف</button></td>
-            </tr>`).join('')||'<tr><td colspan="4" class="empty-note">ما في مواقع محددة بعد</td></tr>'}
+            </tr>`).join('')||'<tr><td colspan="5" class="empty-note">ما في مواقع محددة بعد</td></tr>'}
           </table></div>
+          <div style="color:var(--muted);font-size:.78rem;font-weight:600;margin-bottom:10px">💡 ربط كل موقع بفرعه بيخلي تكلفة العمالة بتقرير "💰 الأرباح" تنقسم صح حسب الفرع — معتمدة على وين فعليًا سجّل الموظف دخوله (GPS)، مش تخمين.</div>
           <div style="border-top:1.5px dashed var(--line);padding-top:10px">
             <div style="font-weight:800;margin-bottom:6px">➕ إضافة موقع جديد — دوس على الخريطة أو اسحب الدبوس لتحديد المكان (مش لازم توقف فيه فعليًا)</div>
             <div id="hlMap" style="height:320px;border-radius:12px;overflow:hidden;margin-bottom:10px;border:1.5px solid var(--line)"></div>
             <div class="fld"><label>اسم الموقع</label><input id="hl_name" placeholder="مثال: فرع الجامعة"></div>
+            <div class="fld"><label>الفرع المرتبط (لحساب تكلفة العمالة بدقة)</label><select id="hl_branch"><option value="">— بدون —</option>${BRANCHES.map(b=>`<option value="${b.id}">${esc(b.name_ar)}</option>`).join('')}</select></div>
             <div class="two" style="gap:8px">
               <div class="fld" style="flex:1"><label>Lat</label><input id="hl_lat" inputmode="decimal" readonly style="background:#f5f0e8"></div>
               <div class="fld" style="flex:1"><label>Lng</label><input id="hl_lng" inputmode="decimal" readonly style="background:#f5f0e8"></div>
@@ -10849,6 +10877,13 @@ try {
         </div>`;
       setTimeout(()=>initHlMap(locs), 50);
     }catch(e){ C.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
+  }
+  async function setHrLocationBranch(locId, branchId){
+    try{
+      const { error } = await db.from('hr_locations').update({ branch_id: branchId||null }).eq('id', locId);
+      if(error){ toast('✗ '+error.message); return; }
+      toast('✓ اترّبط الموقع بالفرع');
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
   let __hlMap=null, __hlMarker=null, __hlCircle=null;
   function initHlMap(existingLocs){
@@ -10895,9 +10930,10 @@ try {
     const lat = parseFloat(document.getElementById('hl_lat')?.value);
     const lng = parseFloat(document.getElementById('hl_lng')?.value);
     const radius_m = parseFloat(document.getElementById('hl_radius')?.value)||200;
+    const branch_id = document.getElementById('hl_branch')?.value || null;
     if(!name){ toast('⚠️ اكتب اسم الموقع'); return; }
     if(isNaN(lat)||isNaN(lng)){ toast('⚠️ دوس "استخدم موقعي الحالي" وانت واقف بمكان العمل'); return; }
-    const { error } = await db.from('hr_locations').insert({ name, lat, lng, radius_m });
+    const { error } = await db.from('hr_locations').insert({ name, lat, lng, radius_m, branch_id });
     if(error){ toast('✗ '+error.message); return; }
     toast('✓ اتضاف الموقع'); renderHrLocations();
   }
