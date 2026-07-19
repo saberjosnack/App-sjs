@@ -6018,6 +6018,73 @@
   }
 
   /* ---- تقارير موسعة ---- */
+  async function renderFixedCosts(){
+    const { data, error } = await db.from('fixed_costs').select('*, branches(name_ar)').order('created_at',{ascending:false});
+    if(error){ modal(`<h3>🏢 التكاليف الثابتة</h3><div class="alert-red">⚠️ ${esc(error.message||'الجدول fixed_costs غير موجود — نفّذ SQL أولاً')}</div><div class="m-act"><button class="cancel" onclick="closeModal()">إغلاق</button></div>`); return; }
+    const list = data||[];
+    const total = list.filter(f=>f.is_active).reduce((a,f)=>a+parseFloat(f.amount||0),0);
+    modal(`<h3>🏢 التكاليف الثابتة الشهرية</h3>
+      <div style="color:var(--muted);font-weight:700;font-size:.82rem;margin-bottom:10px">زي الإيجار، الإنترنت، الاشتراكات، إلخ — بتترصد شهريًا وبتنحسب تلقائيًا (نصيب الفترة) بتقرير الأرباح.</div>
+      <div style="background:#fff8e1;border-radius:10px;padding:8px 12px;margin-bottom:10px;font-weight:800">إجمالي شهري: <span style="color:var(--red)">${fmt(total)} ${CURRENCY}</span></div>
+      <div class="tbl-wrap" style="margin-bottom:10px"><table class="tbl">
+        <tr><th>البند</th><th>المبلغ الشهري</th><th>الفرع</th><th>فعّال</th><th></th></tr>
+        ${list.map(f=>`<tr>
+          <td><b>${esc(f.name)}</b></td>
+          <td>${fmt(f.amount)} ${CURRENCY}</td>
+          <td>${esc(f.branches?.name_ar||'عام (كل المطعم)')}</td>
+          <td>${f.is_active?'✅':'🚫'}</td>
+          <td><button class="mini del" onclick="deleteFixedCost('${f.id}')">حذف</button></td>
+        </tr>`).join('')||'<tr><td colspan="5" class="empty-note">ما في تكاليف ثابتة مضافة بعد</td></tr>'}
+      </table></div>
+      <div style="font-weight:800;color:var(--maroon);margin-bottom:6px">➕ إضافة بند جديد</div>
+      <div class="fld"><label>اسم البند</label><input id="fc_name" placeholder="مثال: إيجار فرع الجامعة"></div>
+      <div class="fld"><label>المبلغ الشهري (${CURRENCY})</label><input id="fc_amt" type="number" step="0.01" min="0"></div>
+      <div class="fld"><label>الفرع (اختياري)</label><select id="fc_branch"><option value="">عام (كل المطعم)</option>${BRANCHES.map(b=>`<option value="${b.id}">${esc(b.name_ar)}</option>`).join('')}</select></div>
+      <div class="m-act"><button class="save" onclick="addFixedCost()">➕ إضافة</button><button class="cancel" onclick="closeModal()">إغلاق</button></div>`);
+  }
+  async function addFixedCost(){
+    const name = document.getElementById('fc_name')?.value.trim();
+    const amt = parseFloat(normalizeDigits(document.getElementById('fc_amt')?.value));
+    const branchId = document.getElementById('fc_branch')?.value || null;
+    if(!name){ toast('⚠️ اكتب اسم البند'); return; }
+    if(isNaN(amt)||amt<=0){ toast('⚠️ اكتب مبلغ صحيح'); return; }
+    try{
+      const { error } = await db.from('fixed_costs').insert({ name, amount: amt, branch_id: branchId });
+      if(error){ toast('✗ '+error.message); return; }
+      toast('✓ اتضاف'); renderFixedCosts();
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
+  }
+  async function deleteFixedCost(id){
+    if(!confirm('⚠️ حذف هالبند نهائيًا؟')) return;
+    try{
+      const { error } = await db.from('fixed_costs').delete().eq('id', id);
+      if(error){ toast('✗ '+error.message); return; }
+      toast('✓ انحذف'); renderFixedCosts();
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
+  }
+  function printProfitDetailPDF(){
+    const d = window.__profitDetail; if(!d) return;
+    const html = `<html dir="rtl"><head><meta charset="UTF-8">
+      <style>body{font-family:Cairo,Arial;padding:28px}h1{color:#4a1010}table{width:100%;border-collapse:collapse;margin-top:14px}td,th{padding:8px 10px;border:1px solid #eadfd4;text-align:right;font-size:.9rem}th{background:#FFF8EE;width:50%}.tot{font-weight:900;color:#F60100}@media print{.no-print{display:none}}</style>
+      </head><body>
+      <button class="no-print" onclick="window.print()" style="margin-bottom:16px;background:#4a1010;color:#FDE507;border:none;border-radius:10px;padding:10px 20px;font-weight:800;cursor:pointer">🖨️ طباعة / حفظ PDF</button>
+      <h1>💹 تقرير الربح والخسارة المفصل</h1>
+      <div>Saber Jo Snack — الفترة: ${d.from} → ${d.to} (${d.daysInRange} يوم)</div>
+      <table>
+        <tr><th>صافي المبيعات (بدون توصيل ووجبات موظفين)</th><td>${fmt(d.sales)} ${CURRENCY}</td></tr>
+        <tr><th>تكلفة البضاعة المستهلكة (COGS)</th><td>${fmt(d.cogs)} ${CURRENCY}</td></tr>
+        <tr><th>👷 تكلفة العمالة (ساعات × سعر الساعة)</th><td>${fmt(d.laborCost)} ${CURRENCY}</td></tr>
+        <tr><th>🗑️ تكلفة الهدر/الإتلاف</th><td>${fmt(d.wasteCost)} ${CURRENCY}</td></tr>
+        <tr><th>💸 المصاريف التشغيلية</th><td>${fmt(d.expT)} ${CURRENCY}</td></tr>
+        <tr><th>🛒 المشتريات</th><td>${fmt(d.purT)} ${CURRENCY}</td></tr>
+        <tr><th>🏢 التكاليف الثابتة (نصيب الفترة من ${fmt(d.totalFixed)}/شهر)</th><td>${fmt(d.fixedProrated)} ${CURRENCY}</td></tr>
+        <tr><th>💹 صافي الربح</th><td class="tot">${fmt(d.net)} ${CURRENCY}</td></tr>
+        <tr><th>نسبة الربح</th><td class="tot">${d.margin}%</td></tr>
+      </table>
+      </body></html>`;
+    const win = window.open('','_blank');
+    win.document.write(html); win.document.close();
+  }
   async function loadRepExtra(mode){
     const D=document.getElementById('salesDetails');
     if(mode==='daily'){
@@ -6069,26 +6136,75 @@
           <td>${(p.purchase_items||[]).map(i=>i.quantity+'×'+esc(i.ingredients?.name||'—')).join('، ')}</td>
           <td><b>${fmt(p.total)}</b></td></tr>`));
     }
-    if(mode==='profit'){
-      const from=document.getElementById('salesFrom')?.value,to=document.getElementById('salesTo')?.value;
-      const [ord,exp,pur]=await Promise.all([
-        db.from('orders').select('total,status').gte('created_at',(from||'2000-01-01')+'T00:00:00').lte('created_at',(to||'2099-12-31')+'T23:59:59'),
-        db.from('expenses').select('amount').gte('expense_date',from||'2000-01-01').lte('expense_date',to||'2099-12-31'),
-        db.from('purchases').select('total').gte('purchase_date',from||'2000-01-01').lte('purchase_date',to||'2099-12-31'),
+  if(mode==='profit'){
+      const range = getRepRange(); // 🔧 إصلاح: كان يقرأ التاريخ مباشرة بدون احترام فلتر "هذا الشهر" السريع
+      const from = range.from.split('T')[0], to = range.to.split('T')[0];
+      const [ord, exp, pur, att, logs, waste, fixedC] = await Promise.all([
+        db.from('orders').select('total,subtotal,discount,delivery_fee,status,employee_tab_name,order_items(quantity,item_id,unit_price)').gte('created_at',range.from).lte('created_at',range.to),
+        db.from('expenses').select('amount').gte('expense_date',from).lte('expense_date',to),
+        db.from('purchases').select('total').gte('purchase_date',from).lte('purchase_date',to),
+        db.from('hr_attendance').select('employee_id,hours').gte('work_date',from).lte('work_date',to),
+        db.from('hr_time_logs').select('employee_id,clock_in,clock_out').not('clock_out','is',null).gte('clock_in',range.from).lte('clock_in',range.to),
+        db.from('waste_log').select('quantity,ingredient_id,ingredients(unit_cost)').gte('created_at',range.from).lte('created_at',range.to),
+        db.from('fixed_costs').select('*').eq('is_active',true),
       ]);
-      const ok=(ord.data||[]).filter(o=>o.status!=='cancelled');
-      const sales=ok.reduce((a,o)=>a+parseFloat(o.total||0),0);
+      const allOk = (ord.data||[]).filter(o=>o.status!=='cancelled');
+      const ok = allOk.filter(o=>!o.employee_tab_name); // 🍽️ وجبات الموظفين مستبعدة — مو إيراد حقيقي
+      const itemsSales = ok.reduce((a,o)=>a+parseFloat(o.subtotal||0),0);
+      const discounts = ok.reduce((a,o)=>a+parseFloat(o.discount||0),0);
+      const sales = itemsSales - discounts; // صافي المبيعات — بدون توصيل وبدون وجبات موظفين
       const expT=(exp.data||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
       const purT=(pur.data||[]).reduce((a,x)=>a+parseFloat(x.total||0),0);
-      const net=sales-expT-purT;
-      const margin=sales>0?Math.round(net/sales*100):0;
-      D.innerHTML=`<div class="day-head" style="flex-wrap:wrap">
-        <div class="stat">المبيعات<b>${fmt(sales)} ${CURRENCY}</b></div>
-        <div class="stat">المصاريف<b style="color:var(--red)">${fmt(expT)} ${CURRENCY}</b></div>
-        <div class="stat">المشتريات<b style="color:var(--red)">${fmt(purT)} ${CURRENCY}</b></div>
-        <div class="stat">صافي الربح<b style="color:${net>=0?'var(--ok)':'var(--red)'}; font-size:1.4rem">${fmt(net)} ${CURRENCY}</b></div>
+
+      // 👷 تكلفة العمالة = ساعات العمل (يدوي + ذاتي) × سعر الساعة لكل موظف
+      const empMap = {}; MEAL_NAMES_DATA.forEach(e=>empMap[e.id]=e.hourly_wage||0);
+      let laborCost = 0;
+      (att.data||[]).forEach(a=>{ laborCost += parseFloat(a.hours||0) * (empMap[a.employee_id]||0); });
+      (logs.data||[]).forEach(l=>{ const hrs=(new Date(l.clock_out)-new Date(l.clock_in))/3600000; if(hrs>0&&hrs<=16) laborCost += hrs * (empMap[l.employee_id]||0); });
+
+      // 🗑️ تكلفة الهدر/الإتلاف
+      const wasteCost = (waste.data||[]).reduce((a,w)=>a+parseFloat(w.quantity||0)*parseFloat(w.ingredients?.unit_cost||0),0);
+
+      // 🏢 التكاليف الثابتة — بتترصد شهريًا، فبنحسب نصيب الفترة المحددة منها (نسبة الأيام من 30)
+      const daysInRange = Math.max(1, Math.round((new Date(to)-new Date(from))/86400000)+1);
+      const totalFixed = (fixedC.data||[]).reduce((a,f)=>a+parseFloat(f.amount||0),0);
+      const fixedProrated = totalFixed * (daysInRange/30);
+
+      // 📦 تكلفة البضاعة المستهلكة (COGS) — من تكلفة وصفة كل صنف مبيع × الكمية
+      let cogs = 0;
+      try{
+        const soldItemIds = {};
+        ok.forEach(o=>(o.order_items||[]).forEach(oi=>{ soldItemIds[oi.item_id] = (soldItemIds[oi.item_id]||0) + parseFloat(oi.quantity||0); }));
+        const itemIds = Object.keys(soldItemIds);
+        if(itemIds.length){
+          const { data: recipesData } = await db.from('recipes').select('menu_item_id, recipe_items(quantity, ingredients(unit_cost))').in('menu_item_id', itemIds);
+          (recipesData||[]).forEach(r=>{
+            const qtySold = soldItemIds[r.menu_item_id]||0;
+            const costPerUnit = (r.recipe_items||[]).reduce((a,ri)=>a+parseFloat(ri.quantity||0)*parseFloat(ri.ingredients?.unit_cost||0),0);
+            cogs += costPerUnit * qtySold;
+          });
+        }
+      }catch(e){ console.error('COGS calc failed:', e); }
+
+      const net = sales - expT - purT - laborCost - wasteCost - fixedProrated;
+      const margin = sales>0 ? Math.round(net/sales*100) : 0;
+      window.__profitDetail = { from, to, sales, expT, purT, laborCost, wasteCost, fixedProrated, cogs, net, margin, totalFixed, daysInRange };
+      D.innerHTML=`<div class="day-head" style="flex-wrap:wrap;margin-bottom:10px">
+        <div class="stat">صافي المبيعات<b>${fmt(sales)} ${CURRENCY}</b></div>
+        <div class="stat">تكلفة البضاعة المستهلكة (COGS)<b style="color:var(--warn)">${fmt(cogs)} ${CURRENCY}</b></div>
+        <div class="stat">👷 تكلفة العمالة<b style="color:var(--red)">${fmt(laborCost)} ${CURRENCY}</b></div>
+        <div class="stat">🗑️ تكلفة الهدر<b style="color:var(--red)">${fmt(wasteCost)} ${CURRENCY}</b></div>
+        <div class="stat">💸 مصاريف تشغيلية<b style="color:var(--red)">${fmt(expT)} ${CURRENCY}</b></div>
+        <div class="stat">🛒 مشتريات<b style="color:var(--red)">${fmt(purT)} ${CURRENCY}</b></div>
+        <div class="stat">🏢 تكاليف ثابتة (${daysInRange} يوم من ${fmt(totalFixed)}/شهر)<b style="color:var(--red)">${fmt(fixedProrated)} ${CURRENCY}</b></div>
+        <div class="stat">💹 صافي الربح<b style="color:${net>=0?'var(--ok)':'var(--red)'}; font-size:1.4rem">${fmt(net)} ${CURRENCY}</b></div>
         <div class="stat">نسبة الربح<b style="color:${margin>=20?'var(--ok)':margin>=10?'var(--warn)':'var(--red)'}">${margin}%</b></div>
-      </div>`;
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+        <button class="mini ok" style="background:var(--maroon)" onclick="renderFixedCosts()">🏢 إدارة التكاليف الثابتة</button>
+        <button class="mini ok" onclick="printProfitDetailPDF()">📄 طباعة تقرير مفصل</button>
+      </div>
+      <div style="color:var(--muted);font-size:.78rem;font-weight:600">💡 سلسلة الحساب: صافي المبيعات − تكلفة البضاعة المستهلكة − تكلفة العمالة − الهدر − المصاريف − المشتريات − نصيب الفترة من التكاليف الثابتة = صافي الربح</div>`;
     }
     if(mode==='financial'){
       const range=getRepRange();
