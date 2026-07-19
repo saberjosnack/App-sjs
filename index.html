@@ -6171,7 +6171,7 @@
   function printProfitDetailPDF(){
     const d = window.__profitDetail; if(!d) return;
     const html = `<html dir="rtl"><head><meta charset="UTF-8">
-      <style>body{font-family:Cairo,Arial;padding:28px}h1{color:#4a1010}table{width:100%;border-collapse:collapse;margin-top:14px}td,th{padding:8px 10px;border:1px solid #eadfd4;text-align:right;font-size:.9rem}th{background:#FFF8EE;width:50%}.tot{font-weight:900;color:#F60100}@media print{.no-print{display:none}}</style>
+      <style>body{font-family:Cairo,Arial;padding:28px}h1{color:#4a1010}h2{color:#4a1010;font-size:1.1rem;margin-top:22px}table{width:100%;border-collapse:collapse;margin-top:14px}td,th{padding:8px 10px;border:1px solid #eadfd4;text-align:right;font-size:.9rem}th{background:#FFF8EE;width:50%}.tot{font-weight:900;color:#F60100}.g{color:#1E8F55;font-weight:800}@media print{.no-print{display:none}}</style>
       </head><body>
       <button class="no-print" onclick="window.print()" style="margin-bottom:16px;background:#4a1010;color:#FDE507;border:none;border-radius:10px;padding:10px 20px;font-weight:800;cursor:pointer">🖨️ طباعة / حفظ PDF</button>
       <h1>💹 تقرير الربح والخسارة المفصل</h1>
@@ -6187,6 +6187,22 @@
         <tr><th>💹 صافي الربح</th><td class="tot">${fmt(d.net)} ${CURRENCY}</td></tr>
         <tr><th>نسبة الربح</th><td class="tot">${d.margin}%</td></tr>
       </table>
+      <h2>📐 مقاييس صناعة المطاعم القياسية</h2>
+      <table>
+        <tr><th>Food Cost % (المعيار الصحي: 28-35%)</th><td>${d.foodCostPct}%</td></tr>
+        <tr><th>Labor Cost % (المعيار الصحي: 25-35%)</th><td>${d.laborCostPct}%</td></tr>
+        <tr><th>Prime Cost % — الاثنين مع بعض (المعيار الصحي: تحت 65%)</th><td class="tot">${d.primeCostPct}%</td></tr>
+      </table>
+      <h2>🏆 الأصناف الأكثر ربحًا</h2>
+      <table>
+        <tr><th>الصنف</th><th>الكمية</th><th>الإيراد</th><th>التكلفة</th><th>الربح</th><th>الهامش</th></tr>
+        ${(d.topProfitable||[]).map(it=>`<tr><td>${esc(it.name)}</td><td>${it.qty}</td><td>${fmt(it.revenue)}</td><td>${fmt(it.cost)}</td><td class="g">${fmt(it.profit)}</td><td>${it.margin}%</td></tr>`).join('')}
+      </table>
+      ${(d.leastProfitable||[]).length?`<h2 style="color:#F60100">⚠️ الأصناف الأضعف ربحًا</h2>
+      <table>
+        <tr><th>الصنف</th><th>الكمية</th><th>الربح</th><th>الهامش</th></tr>
+        ${d.leastProfitable.map(it=>`<tr><td>${esc(it.name)}</td><td>${it.qty}</td><td>${fmt(it.profit)}</td><td>${it.margin}%</td></tr>`).join('')}
+      </table>`:''}
       </body></html>`;
     const win = window.open('','_blank');
     win.document.write(html); win.document.close();
@@ -6295,36 +6311,67 @@
       const wasteCost = (waste.data||[]).reduce((a,w)=>a+parseFloat(w.quantity||0)*parseFloat(w.ingredients?.unit_cost||0),0);
 
       // 🏢 التكاليف الثابتة — بتترصد شهريًا، فبنحسب نصيب الفترة المحددة منها (نسبة الأيام من 30)
+      // 🔧 إصلاح: لو محدد فرع معيّن، نحسب بس البنود العامة (بدون فرع محدد) + بنود هاد الفرع بالذات —
+      // مش بنود الفرع التاني يلي ما اختاره أصلًا
       const daysInRange = Math.max(1, Math.round((new Date(to)-new Date(from))/86400000)+1);
-      const totalFixed = (fixedC.data||[]).reduce((a,f)=>a+parseFloat(f.amount||0),0);
+      const relevantFixed = (fixedC.data||[]).filter(f=>!branchFilter || !f.branch_id || f.branch_id===branchFilter);
+      const totalFixed = relevantFixed.reduce((a,f)=>a+parseFloat(f.amount||0),0);
       const fixedProrated = totalFixed * (daysInRange/30);
 
       // 📦 تكلفة البضاعة المستهلكة (COGS) — من تكلفة وصفة كل صنف مبيع × الكمية
+      // وبنفس الوقت بنبني تحليل ربحية كل صنف لحاله (إيراد − تكلفة = ربح، وهامش الربح %)
       let cogs = 0;
+      let itemProfitList = [];
       try{
-        const soldItemIds = {};
-        ok.forEach(o=>(o.order_items||[]).forEach(oi=>{ soldItemIds[oi.menu_item_id] = (soldItemIds[oi.menu_item_id]||0) + parseFloat(oi.quantity||0); }));
+        const soldItemIds = {}, soldItemRevenue = {};
+        ok.forEach(o=>(o.order_items||[]).forEach(oi=>{
+          soldItemIds[oi.menu_item_id] = (soldItemIds[oi.menu_item_id]||0) + parseFloat(oi.quantity||0);
+          soldItemRevenue[oi.menu_item_id] = (soldItemRevenue[oi.menu_item_id]||0) + parseFloat(oi.quantity||0)*parseFloat(oi.unit_price||0);
+        }));
         const itemIds = Object.keys(soldItemIds);
         if(itemIds.length){
-          const { data: recipesData } = await db.from('recipes').select('menu_item_id, recipe_items(quantity, ingredients(unit_cost))').in('menu_item_id', itemIds);
+          const [{ data: recipesData }, { data: itemsData }] = await Promise.all([
+            db.from('recipes').select('menu_item_id, recipe_items(quantity, ingredients(unit_cost))').in('menu_item_id', itemIds),
+            db.from('menu_items').select('id, name_ar').in('id', itemIds),
+          ]);
+          const nameMap = {}; (itemsData||[]).forEach(i=>nameMap[i.id]=i.name_ar);
+          const costMap = {};
           (recipesData||[]).forEach(r=>{
-            const qtySold = soldItemIds[r.menu_item_id]||0;
             const costPerUnit = (r.recipe_items||[]).reduce((a,ri)=>a+parseFloat(ri.quantity||0)*parseFloat(ri.ingredients?.unit_cost||0),0);
-            cogs += costPerUnit * qtySold;
+            costMap[r.menu_item_id] = costPerUnit;
+          });
+          itemIds.forEach(id=>{
+            const qty = soldItemIds[id]||0;
+            const revenue = soldItemRevenue[id]||0;
+            const unitCost = costMap[id]||0;
+            const itemCogs = unitCost * qty;
+            cogs += itemCogs;
+            itemProfitList.push({ name: nameMap[id]||'—', qty, revenue, cost: itemCogs, profit: revenue-itemCogs, margin: revenue>0?Math.round((revenue-itemCogs)/revenue*100):0, hasRecipe: costMap[id]!==undefined });
           });
         }
       }catch(e){ console.error('COGS calc failed:', e); }
+      itemProfitList.sort((a,b)=>b.profit-a.profit);
+      const topProfitable = itemProfitList.slice(0,8);
+      const leastProfitable = [...itemProfitList].sort((a,b)=>a.profit-b.profit).slice(0,5);
 
       // 🔧 مهم: المشتريات (purT) ما بتنخصم من صافي الربح — هي بس رقم مرجعي (تدفق نقدي/كم صرفنا كاش)
       // الخصم الحقيقي من الربح بيصير من تكلفة البضاعة المستهلكة فعليًا (COGS) بس، لأنها الأدق:
       // بتحسب تكلفة اللي فعلًا انباع وولّد الإيراد، مش كل شي اشتريناه (يلي جزء منه لسا بالمخزن كرصيد)
       const net = sales - cogs - expT - laborCost - wasteCost - fixedProrated;
       const margin = sales>0 ? Math.round(net/sales*100) : 0;
-      window.__profitDetail = { from, to, sales, expT, purT, laborCost, wasteCost, fixedProrated, cogs, net, margin, totalFixed, daysInRange };
+      // 📐 مقاييس صناعة المطاعم القياسية (يتابعها كل مطعم محترف):
+      // Food Cost % و Labor Cost % و Prime Cost % (الاثنين مع بعض) — المعيار الصحي عمومًا: Prime Cost تحت 60-65%
+      const foodCostPct = sales>0 ? Math.round(cogs/sales*100) : 0;
+      const laborCostPct = sales>0 ? Math.round(laborCost/sales*100) : 0;
+      const primeCostPct = foodCostPct + laborCostPct;
+      window.__profitDetail = { from, to, sales, expT, purT, laborCost, wasteCost, fixedProrated, cogs, net, margin, totalFixed, daysInRange, foodCostPct, laborCostPct, primeCostPct, topProfitable, leastProfitable };
       D.innerHTML=`<div class="day-head" style="flex-wrap:wrap;margin-bottom:10px">
         <div class="stat">صافي المبيعات<b>${fmt(sales)} ${CURRENCY}</b></div>
         <div class="stat">تكلفة البضاعة المستهلكة (COGS)<b style="color:var(--warn)">${fmt(cogs)} ${CURRENCY}</b></div>
         <div class="stat">👷 تكلفة العمالة<b style="color:var(--red)">${fmt(laborCost)} ${CURRENCY}</b></div>
+        <div class="stat">📐 Food Cost %<b style="color:${foodCostPct<=35?'var(--ok)':'var(--red)'}">${foodCostPct}%</b></div>
+        <div class="stat">📐 Labor Cost %<b style="color:${laborCostPct<=35?'var(--ok)':'var(--red)'}">${laborCostPct}%</b></div>
+        <div class="stat">📐 Prime Cost % (المعيار الصحي &lt;65%)<b style="color:${primeCostPct<=65?'var(--ok)':'var(--red)'}">${primeCostPct}%</b></div>
         <div class="stat">🗑️ تكلفة الهدر<b style="color:var(--red)">${fmt(wasteCost)} ${CURRENCY}</b></div>
         <div class="stat">💸 مصاريف تشغيلية<b style="color:var(--red)">${fmt(expT)} ${CURRENCY}</b></div>
         <div class="stat">🛒 مشتريات (مرجعي — تدفق نقدي، مش مخصوم من الربح)<b style="color:var(--muted)">${fmt(purT)} ${CURRENCY}</b></div>
@@ -6337,7 +6384,31 @@
         <button class="mini ok" onclick="printProfitDetailPDF()">📄 طباعة تقرير مفصل</button>
       </div>
       <div style="color:var(--muted);font-size:.78rem;font-weight:600">💡 سلسلة الحساب: صافي المبيعات − تكلفة البضاعة المستهلكة (COGS) − تكلفة العمالة − الهدر − المصاريف − نصيب الفترة من التكاليف الثابتة = صافي الربح. (المشتريات معروضة للمرجعية بس — ما بتنخصم لحالها عشان ما نكرر خصم نفس التكلفة مرتين؛ COGS هي يلي بتحسب فعليًا شو انباع)</div>
-      ${branchFilter?'<div style="color:var(--warn);font-size:.78rem;font-weight:700;margin-top:4px">💡 تكلفة العمالة صارت تعتمد على موقع دخول الموظف الفعلي (GPS) لتحديد فرعه — بس هاد بينطبق بس على الساعات المسجّلة ذاتيًا من بوابته. الساعات اليدوية (يلي الأدمن يدخلها بدون GPS) بتضل تنحسب بكل الفروع لأنه ما في معلومة موقع إلها أصلًا. تأكد من ربط كل موقع دخول بفرعه من شاشة "📍 مواقع الدخول" عشان الدقة تكون كاملة.</div>':''}`;
+      ${branchFilter?'<div style="color:var(--warn);font-size:.78rem;font-weight:700;margin-top:4px">💡 تكلفة العمالة صارت تعتمد على موقع دخول الموظف الفعلي (GPS) لتحديد فرعه — بس هاد بينطبق بس على الساعات المسجّلة ذاتيًا من بوابته. الساعات اليدوية (يلي الأدمن يدخلها بدون GPS) بتضل تنحسب بكل الفروع لأنه ما في معلومة موقع إلها أصلًا. تأكد من ربط كل موقع دخول بفرعه من شاشة "📍 مواقع الدخول" عشان الدقة تكون كاملة.</div>':''}
+      <div class="panel" style="margin-top:16px">
+        <h4 style="color:var(--ok);margin-bottom:8px">🏆 الأصناف الأكثر ربحًا (مش بالضرورة الأكثر مبيعًا)</h4>
+        <div class="tbl-wrap"><table class="tbl">
+          <tr><th>الصنف</th><th>الكمية</th><th>الإيراد</th><th>التكلفة</th><th>الربح</th><th>هامش الربح</th></tr>
+          ${topProfitable.map(it=>`<tr>
+            <td><b>${esc(it.name)}</b>${!it.hasRecipe?' <span style="color:var(--warn);font-size:.75rem">⚠️ بدون وصفة</span>':''}</td>
+            <td>${it.qty}</td><td>${fmt(it.revenue)}</td><td>${fmt(it.cost)}</td>
+            <td><b style="color:var(--ok)">${fmt(it.profit)}</b></td>
+            <td><b style="color:${it.margin>=60?'var(--ok)':it.margin>=35?'var(--warn)':'var(--red)'}">${it.margin}%</b></td>
+          </tr>`).join('')||'<tr><td colspan="6" class="empty-note">ما في مبيعات بهاي الفترة</td></tr>'}
+        </table></div>
+      </div>
+      ${leastProfitable.length?`<div class="panel" style="margin-top:14px;border:1.5px solid var(--red)">
+        <h4 style="color:var(--red);margin-bottom:8px">⚠️ الأصناف الأضعف ربحًا — راجعها (سعر منخفض أو تكلفة وصفة عالية)</h4>
+        <div class="tbl-wrap"><table class="tbl">
+          <tr><th>الصنف</th><th>الكمية</th><th>الربح</th><th>هامش الربح</th></tr>
+          ${leastProfitable.map(it=>`<tr>
+            <td><b>${esc(it.name)}</b>${!it.hasRecipe?' <span style="color:var(--warn);font-size:.75rem">⚠️ بدون وصفة</span>':''}</td>
+            <td>${it.qty}</td>
+            <td><b style="color:${it.profit<0?'var(--red)':'var(--ink)'}">${fmt(it.profit)}</b></td>
+            <td><b style="color:${it.margin<0?'var(--red)':'var(--warn)'}">${it.margin}%</b></td>
+          </tr>`).join('')}
+        </table></div>
+      </div>`:''}`;
     }
     if(mode==='financial'){
       const range=getRepRange();
