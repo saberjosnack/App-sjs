@@ -6272,7 +6272,7 @@
       // 🔧 إصلاح مهم: كان يتجاهل فلتر الفرع فوق الشاشة تمامًا ويحسب كل الفروع مع بعض دايمًا —
       // هلأ بيحترم الفرع المحدد (لو محدد "كل الفروع" بيضل يحسب الكل زي الأول)
       const branchFilter = document.getElementById('salesBranch')?.value || '';
-      let ordQ = db.from('orders').select('total,subtotal,discount,delivery_fee,status,employee_tab_name,branch_id,order_items(quantity,menu_item_id,unit_price)').gte('created_at',range.from).lte('created_at',range.to);
+      let ordQ = db.from('orders').select('total,subtotal,discount,delivery_fee,status,employee_tab_name,branch_id,order_items(quantity,menu_item_id,unit_price,composition)').gte('created_at',range.from).lte('created_at',range.to);
       let expQ = db.from('expenses').select('amount,branch_id').gte('expense_date',from).lte('expense_date',to);
       let purQ = db.from('purchases').select('total,branch_id').gte('purchase_date',from).lte('purchase_date',to);
       let wasteQ = db.from('waste_log').select('quantity,ingredient_id,branch_id,ingredients(unit_cost)').gte('created_at',range.from).lte('created_at',range.to);
@@ -6328,33 +6328,62 @@
 
       // 📦 تكلفة البضاعة المستهلكة (COGS) — من تكلفة وصفة كل صنف مبيع × الكمية
       // وبنفس الوقت بنبني تحليل ربحية كل صنف لحاله (إيراد − تكلفة = ربح، وهامش الربح %)
+      // 🔧 مهم: الوجبات المركّبة (🧩) ما إلها وصفة مباشرة — بتترّكب من مكونات ثابتة + مكونات
+      // مختارة فعليًا بكل طلب (وممكن تختلف من طلب لطلب). لازم نوسّعها لمكوناتها الحقيقية المحفوظة
+      // مع كل طلب (composition) بدل ما نتجاهل تكلفتها بالكامل.
       let cogs = 0;
       let itemProfitList = [];
       try{
         const soldItemIds = {}, soldItemRevenue = {};
+        const compositeOrderLines = []; // {menuItemId, qty, composition}
         ok.forEach(o=>(o.order_items||[]).forEach(oi=>{
           soldItemIds[oi.menu_item_id] = (soldItemIds[oi.menu_item_id]||0) + parseFloat(oi.quantity||0);
           soldItemRevenue[oi.menu_item_id] = (soldItemRevenue[oi.menu_item_id]||0) + parseFloat(oi.quantity||0)*parseFloat(oi.unit_price||0);
+          const isComposite = ITEMS.find(i=>i.id===oi.menu_item_id)?.item_type==='composite';
+          if(isComposite) compositeOrderLines.push({ menuItemId: oi.menu_item_id, qty: parseFloat(oi.quantity||0), composition: oi.composition||[] });
         }));
         const itemIds = Object.keys(soldItemIds);
         if(itemIds.length){
-          const [{ data: recipesData }, { data: itemsData }] = await Promise.all([
+          const compositeIds = [...new Set(compositeOrderLines.map(l=>l.menuItemId))];
+          const [{ data: recipesData }, { data: itemsData }, fixedRes] = await Promise.all([
             db.from('recipes').select('menu_item_id, recipe_items(quantity, ingredients(unit_cost))').in('menu_item_id', itemIds),
             db.from('menu_items').select('id, name_ar').in('id', itemIds),
+            compositeIds.length ? db.from('composite_fixed').select('menu_item_id, component_item_id, qty').in('menu_item_id', compositeIds) : Promise.resolve({data:[]}),
           ]);
           const nameMap = {}; (itemsData||[]).forEach(i=>nameMap[i.id]=i.name_ar);
-          const costMap = {};
+          const recipeCostMap = {}; // menu_item_id -> تكلفة الوحدة من وصفته المباشرة (للأصناف العادية والمكونات الفرعية)
           (recipesData||[]).forEach(r=>{
             const costPerUnit = (r.recipe_items||[]).reduce((a,ri)=>a+parseFloat(ri.quantity||0)*parseFloat(ri.ingredients?.unit_cost||0),0);
-            costMap[r.menu_item_id] = costPerUnit;
+            recipeCostMap[r.menu_item_id] = costPerUnit;
+          });
+          // لو مكونات الوجبة المركبة (ثابتة أو مختارة) هي نفسها أصناف مالها وصفة مباشرة، نجيب وصفاتها كمان
+          const componentIds = [...new Set([
+            ...(fixedRes.data||[]).map(f=>f.component_item_id),
+            ...compositeOrderLines.flatMap(l=>(l.composition||[]).map(c=>c.component_item_id)),
+          ])].filter(id=>id && !(id in recipeCostMap));
+          if(componentIds.length){
+            const { data: compRecipes } = await db.from('recipes').select('menu_item_id, recipe_items(quantity, ingredients(unit_cost))').in('menu_item_id', componentIds);
+            (compRecipes||[]).forEach(r=>{
+              recipeCostMap[r.menu_item_id] = (r.recipe_items||[]).reduce((a,ri)=>a+parseFloat(ri.quantity||0)*parseFloat(ri.ingredients?.unit_cost||0),0);
+            });
+          }
+          // تكلفة كل وحدة وجبة مركّبة = مجموع تكلفة مكوناتها الثابتة + مكوناتها المختارة فعليًا (بمتوسط الطلبات)
+          const compositeCostTotal = {}, compositeCostCount = {};
+          compositeOrderLines.forEach(l=>{
+            let unitCost = 0;
+            (fixedRes.data||[]).filter(f=>f.menu_item_id===l.menuItemId).forEach(f=>{ unitCost += (f.qty||0) * (recipeCostMap[f.component_item_id]||0); });
+            (l.composition||[]).forEach(c=>{ unitCost += (c.qty||0) * (recipeCostMap[c.component_item_id]||0); });
+            compositeCostTotal[l.menuItemId] = (compositeCostTotal[l.menuItemId]||0) + unitCost*l.qty;
+            compositeCostCount[l.menuItemId] = (compositeCostCount[l.menuItemId]||0) + l.qty;
           });
           itemIds.forEach(id=>{
             const qty = soldItemIds[id]||0;
             const revenue = soldItemRevenue[id]||0;
-            const unitCost = costMap[id]||0;
-            const itemCogs = unitCost * qty;
+            const isComposite = id in compositeCostTotal;
+            const itemCogs = isComposite ? compositeCostTotal[id] : (recipeCostMap[id]!==undefined ? recipeCostMap[id]*qty : 0);
+            const hasRecipe = isComposite || recipeCostMap[id]!==undefined;
             cogs += itemCogs;
-            itemProfitList.push({ name: nameMap[id]||'—', qty, revenue, cost: itemCogs, profit: revenue-itemCogs, margin: revenue>0?Math.round((revenue-itemCogs)/revenue*100):0, hasRecipe: costMap[id]!==undefined });
+            itemProfitList.push({ name: nameMap[id]||'—', qty, revenue, cost: itemCogs, profit: revenue-itemCogs, margin: revenue>0?Math.round((revenue-itemCogs)/revenue*100):0, hasRecipe });
           });
         }
       }catch(e){ console.error('COGS calc failed:', e); }
@@ -6673,11 +6702,18 @@
           </div>`;
         }
         if(supplierItems.length){
-          let msg = `📦 تقرير نواقص — ${branchName}\nصابر جو سناك — بعد جرد ${new Date().toLocaleDateString('ar-JO')}\n\n`;
+          // نجمع حسب المورد لتنسيق أوضح (بدل سطر مبعثر لكل مادة)
+          const bySup = {};
           supplierItems.forEach(it=>{
             const supNames = (supIngs||[]).filter(si=>si.ingredient_id===it.ing.id).map(si=>si.supplier);
             const supLabel = supNames.length ? supNames.join(' / ') : 'بدون مورد محدد';
-            msg += `• ${supLabel} لازم نطلب منه ${it.need} ${it.ing.unit} — عنا بس ${it.actual} ${it.ing.unit}\n`;
+            if(!bySup[supLabel]) bySup[supLabel] = [];
+            bySup[supLabel].push(it);
+          });
+          let msg = `📦 تقرير نواقص — ${branchName}\nصابر جو سناك — بعد جرد ${new Date().toLocaleDateString('ar-JO')}\n`;
+          Object.entries(bySup).forEach(([supLabel, items])=>{
+            msg += `\n📍 المورد: ${supLabel}\n`;
+            items.forEach(it=> msg += `🔴 ${it.ing.name} — المتوفر ${it.actual} ${it.ing.unit} — المطلوب ${it.need} ${it.ing.unit}\n`);
           });
           msg += `\nمشكورين على التعاون 🙏`;
           const phone = (SETTINGS.procurement_whatsapp||'').replace(/\D/g,'');
@@ -7018,14 +7054,20 @@
       const shortages = (a.details||[]).filter(r=> (myMinMap[r.ingredient_id]||0) > 0 && r.actual < myMinMap[r.ingredient_id]);
       if(!shortages.length){ toast('✅ ما في نواقص بهاد الجرد'); return; }
       const { data: supIngs } = await db.from('supplier_ingredients').select('*');
-      let msg = `📦 تقرير نواقص — ${branchName}\nصابر جو سناك — جرد ${new Date(a.created_at).toLocaleDateString('ar-JO')}\n\n`;
+      const bySup = {};
       shortages.forEach(r=>{
         const ing = INGR.find(x=>x.id===r.ingredient_id);
         if(!ing) return;
         const need = Math.max(0, myMinMap[r.ingredient_id] - r.actual);
         const supNames = (supIngs||[]).filter(si=>si.ingredient_id===r.ingredient_id).map(si=>si.supplier);
         const supLabel = supNames.length ? supNames.join(' / ') : 'بدون مورد محدد';
-        msg += `• ${supLabel} لازم نطلب منه ${need} ${ing.unit} — عنا بس ${r.actual} ${ing.unit}\n`;
+        if(!bySup[supLabel]) bySup[supLabel] = [];
+        bySup[supLabel].push({ ing, need, actual: r.actual });
+      });
+      let msg = `📦 تقرير نواقص — ${branchName}\nصابر جو سناك — جرد ${new Date(a.created_at).toLocaleDateString('ar-JO')}\n`;
+      Object.entries(bySup).forEach(([supLabel, items])=>{
+        msg += `\n📍 المورد: ${supLabel}\n`;
+        items.forEach(it=> msg += `🔴 ${it.ing.name} — المتوفر ${it.actual} ${it.ing.unit} — المطلوب ${it.need} ${it.ing.unit}\n`);
       });
       msg += `\nمشكورين على التعاون 🙏`;
       const phone = (SETTINGS.procurement_whatsapp||'').replace(/\D/g,'');
@@ -7157,6 +7199,31 @@
         <button class="cancel" onclick="closeModal()">إلغاء</button>
       </div>`);
   }
+  // 📤 دالة مشتركة: تفحص مادة واحدة وترسل تنبيه واتساب لو صارت تحت الحد الأدنى — تستخدم من
+  // الجرد الرسمي (لكل المواد) ومن التعديل اليدوي المباشر (لمادة وحدة) مع بعض
+  async function checkAndNotifyShortageForOne(branchId, branchName, ingId, actualStock, minStock){
+    try{
+      const ing = INGR.find(x=>x.id===ingId); if(!ing) return;
+      const effMin = minStock>0 ? minStock : (ing.min_stock||0);
+      if(!(effMin>0) || actualStock>=effMin) return; // مافي نقص
+      const need = Math.max(0, effMin - actualStock);
+      const { data: supIngs } = await db.from('supplier_ingredients').select('*').eq('ingredient_id', ingId);
+      const supNames = (supIngs||[]).map(si=>si.supplier);
+      const supLabel = supNames.length ? supNames.join(' / ') : 'بدون مورد محدد';
+      const msg = `📦 تنبيه نقص — ${branchName}\nصابر جو سناك — ${new Date().toLocaleDateString('ar-JO')}\n\n`
+        + `🔴 المادة: ${ing.name}\n📍 المورد: ${supLabel}\n📉 المتوفر حاليًا: ${actualStock} ${ing.unit}\n📦 الكمية المطلوب طلبها: ${need} ${ing.unit}\n\nمشكورين على التعاون 🙏`;
+      const phone = (SETTINGS.procurement_whatsapp||'').replace(/\D/g,'');
+      if(!phone){
+        modal(`<h3>⚠️ مادة ناقصة</h3><div style="color:var(--muted);font-weight:700;margin-bottom:10px">${esc(ing.name)} تحت الحد الأدنى، بس ما في رقم واتساب توريدات محدد بالإعدادات.</div><div class="m-act"><button class="cancel" onclick="closeModal()">إغلاق</button></div>`);
+        return;
+      }
+      const url = `https://wa.me/${phone}?text=${encodeURIComponent(msg)}`;
+      modal(`<h3>📦 ${esc(ing.name)} تحت الحد الأدنى</h3>
+        <div style="color:var(--muted);font-weight:700;margin-bottom:10px">المتوفر ${actualStock} ${esc(ing.unit)} — المطلوب طلب ${need} ${esc(ing.unit)}</div>
+        <a href="${url}" target="_blank" style="display:block;text-align:center;background:#25D366;color:#fff;border-radius:12px;padding:14px;font-weight:900;text-decoration:none">📱 فتح واتساب وإرسال طلب التوريد</a>
+        <div class="m-act"><button class="cancel" onclick="closeModal()">إغلاق</button></div>`);
+    }catch(e){ console.error('shortage notify (single) failed:', e); }
+  }
   async function saveAdjust(invId, branchId, ingId, oldStock){
     if(!lockSubmit('saveAdjust')) return;
     setTimeout(()=>unlockSubmit('saveAdjust'), 3000);
@@ -7166,7 +7233,10 @@
     await db.from('branch_inventory').update({stock, min_stock}).eq('id',invId);
     const diff = stock - (parseFloat(oldStock)||0);
     if(Math.abs(diff)>0.001) logMovement(branchId, ingId, diff, 'manual', 'تعديل يدوي — '+reason);
-    closeModal(); toast('✓ اتحدث المخزون'); renderInventory();
+    toast('✓ اتحدث المخزون'); renderInventory();
+    const branchName = BRANCHES.find(b=>b.id===branchId)?.name_ar||'—';
+    await checkAndNotifyShortageForOne(branchId, branchName, ingId, stock, min_stock);
+    closeModal();
   }
 
   /* ---- تهيئة مخزون الفروع (أول مرة) ---- */
