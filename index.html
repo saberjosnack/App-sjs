@@ -6124,60 +6124,6 @@
   }
 
   /* ---- تقارير موسعة ---- */
-  async function diagnoseCompositeCost(){
-    const compositeItems = ITEMS.filter(i=>i.item_type==='composite');
-    modal(`<h3>🔍 تشخيص تكلفة صنف مركّب</h3>
-      <div class="fld"><label>اختر الصنف</label>
-        <select id="dcc_sel">${compositeItems.map(i=>`<option value="${i.id}">${esc(i.name_ar)}</option>`).join('')}</select>
-      </div>
-      <div class="m-act"><button class="save" onclick="runDiagnoseCompositeCost()">🔍 افحص</button><button class="cancel" onclick="closeModal()">إغلاق</button></div>
-      <div id="dcc_result" style="margin-top:14px"></div>`);
-  }
-  async function runDiagnoseCompositeCost(){
-    const itemId = document.getElementById('dcc_sel')?.value; if(!itemId) return;
-    const result = document.getElementById('dcc_result');
-    result.innerHTML = '... جاري الفحص';
-    try{
-      const [fixedRes, groupsRes] = await Promise.all([
-        db.from('composite_fixed').select('*').eq('menu_item_id', itemId),
-        db.from('composite_groups').select('*, composite_options(*)').eq('menu_item_id', itemId),
-      ]);
-      const fixed = fixedRes.data||[];
-      const groups = groupsRes.data||[];
-      const allComponentIds = [...new Set([
-        ...fixed.map(f=>f.component_item_id),
-        ...groups.flatMap(g=>(g.composite_options||[]).map(o=>o.component_item_id)),
-      ])].filter(Boolean);
-      const { data: recipesData } = await db.from('recipes').select('menu_item_id, recipe_items(quantity, ingredients(name, unit_cost))').in('menu_item_id', allComponentIds.length?allComponentIds:['00000000-0000-0000-0000-000000000000']);
-      const nameOf = id => ITEMS.find(i=>i.id===id)?.name_ar || '—';
-      let html = `<div style="font-weight:900;color:var(--maroon);margin-bottom:8px">🔒 المكونات الثابتة (composite_fixed) — دايمًا موجودة بكل طلب</div>`;
-      if(!fixed.length) html += `<div class="empty-note">ما في مكونات ثابتة مسجّلة لهاد الصنف!</div>`;
-      let totalFixedCost = 0;
-      fixed.forEach(f=>{
-        const r = recipesData?.find(rd=>rd.menu_item_id===f.component_item_id);
-        const unitCost = r ? (r.recipe_items||[]).reduce((a,ri)=>a+parseFloat(ri.quantity||0)*parseFloat(ri.ingredients?.unit_cost||0),0) : null;
-        const lineCost = (unitCost||0)*(f.qty||0);
-        totalFixedCost += lineCost;
-        html += `<div style="background:#fff;border-radius:8px;padding:8px 12px;margin-bottom:6px;font-size:.85rem">
-          <b>${esc(nameOf(f.component_item_id))}</b> — الكمية بالوجبة: ${f.qty}
-          ${unitCost===null?' — <span style="color:var(--red)">⚠️ ما لقيتلها وصفة (recipes) إطلاقًا، تكلفتها بتنحسب صفر!</span>' : ` — تكلفة الوحدة: ${fmt(unitCost)} — الإجمالي: <b style="color:var(--red)">${fmt(lineCost)}</b>`}
-        </div>`;
-      });
-      html += `<div style="font-weight:900;color:var(--maroon);margin:14px 0 8px">🔀 المجموعات القابلة للاختيار (composite_groups)</div>`;
-      if(!groups.length) html += `<div class="empty-note">ما في مجموعات اختيار لهاد الصنف — يبقى كل التكلفة من الثابت بس فوق</div>`;
-      groups.forEach(g=>{
-        html += `<div style="background:#fff8e1;border-radius:8px;padding:8px 12px;margin-bottom:6px;font-size:.85rem">
-          <b>${esc(g.name||'مجموعة')}</b> — الحد الأقصى للاختيار: ${g.max_select ?? '—'}<br>
-          الخيارات المتاحة: ${(g.composite_options||[]).map(o=>esc(nameOf(o.component_item_id))).join('، ')||'—'}
-        </div>`;
-      });
-      html += `<div style="background:#e8f5ff;border-radius:10px;padding:10px 12px;margin-top:10px;font-weight:800">
-        💡 مجموع تكلفة الثابت لحاله: ${fmt(totalFixedCost)} ${CURRENCY}<br>
-        <span style="font-weight:600;font-size:.8rem;color:var(--muted)">تكلفة المجموعات القابلة للاختيار بتتحدد فعليًا حسب شو العميل اختار بكل طلب — مش رقم ثابت، فبتختلف من طلب لطلب حسب الاختيار.</span>
-      </div>`;
-      result.innerHTML = html;
-    }catch(e){ result.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
-  }
   async function renderFixedCosts(){
     const { data, error } = await db.from('fixed_costs').select('*, branches(name_ar)').order('created_at',{ascending:false});
     if(error){ modal(`<h3>🏢 التكاليف الثابتة</h3><div class="alert-red">⚠️ ${esc(error.message||'الجدول fixed_costs غير موجود — نفّذ SQL أولاً')}</div><div class="m-act"><button class="cancel" onclick="closeModal()">إغلاق</button></div>`); return; }
@@ -6421,21 +6367,38 @@
               recipeCostMap[r.menu_item_id] = (r.recipe_items||[]).reduce((a,ri)=>a+parseFloat(ri.quantity||0)*parseFloat(ri.ingredients?.unit_cost||0),0);
             });
           }
+          // 🔧 إصلاح: أي صنف (عادي أو مكوّن داخل وجبة مركّبة) ما إله وصفة أبدًا بجدول recipes —
+          // بدل ما نعتبر تكلفته صفر بصمت، نرجع لحقل "التكلفة" اليدوي المسجّل على الصنف نفسه (menu_items.cost) كبديل
+          const stillMissing = [...new Set([...itemIds, ...componentIds])].filter(id=>!(id in recipeCostMap));
+          if(stillMissing.length){
+            const { data: manualCostItems } = await db.from('menu_items').select('id, cost').in('id', stillMissing);
+            (manualCostItems||[]).forEach(m=>{ if(m.cost!=null && parseFloat(m.cost)>0) recipeCostMap[m.id] = parseFloat(m.cost); });
+          }
           // تكلفة كل وحدة وجبة مركّبة = مجموع تكلفة مكوناتها الثابتة + مكوناتها المختارة فعليًا (بمتوسط الطلبات)
-          const compositeCostTotal = {}, compositeCostCount = {};
+          // وبنفس الوقت نتتبع لو أي مكوّن فيها لسا تكلفته مجهولة تمامًا (لا وصفة ولا تكلفة يدوية) للتحذير عنه
+          const compositeCostTotal = {}, compositeCostCount = {}, compositeMissingData = {};
           compositeOrderLines.forEach(l=>{
-            let unitCost = 0;
-            (fixedRes.data||[]).filter(f=>f.menu_item_id===l.menuItemId).forEach(f=>{ unitCost += (f.qty||0) * (recipeCostMap[f.component_item_id]||0); });
-            (l.composition||[]).forEach(c=>{ unitCost += (c.qty||0) * (recipeCostMap[c.component_item_id]||0); });
+            let unitCost = 0, missing = false;
+            (fixedRes.data||[]).filter(f=>f.menu_item_id===l.menuItemId).forEach(f=>{
+              if(!(f.component_item_id in recipeCostMap)) missing = true;
+              unitCost += (f.qty||0) * (recipeCostMap[f.component_item_id]||0);
+            });
+            (l.composition||[]).forEach(c=>{
+              if(!(c.component_item_id in recipeCostMap)) missing = true;
+              unitCost += (c.qty||0) * (recipeCostMap[c.component_item_id]||0);
+            });
             compositeCostTotal[l.menuItemId] = (compositeCostTotal[l.menuItemId]||0) + unitCost*l.qty;
             compositeCostCount[l.menuItemId] = (compositeCostCount[l.menuItemId]||0) + l.qty;
+            if(missing) compositeMissingData[l.menuItemId] = true;
           });
           itemIds.forEach(id=>{
             const qty = soldItemIds[id]||0;
             const revenue = soldItemRevenue[id]||0;
             const isComposite = id in compositeCostTotal;
             const itemCogs = isComposite ? compositeCostTotal[id] : (recipeCostMap[id]!==undefined ? recipeCostMap[id]*qty : 0);
-            const hasRecipe = isComposite || recipeCostMap[id]!==undefined;
+            // 🔧 إصلاح: الوجبة المركّبة ما عادت تُعتبر "عندها وصفة كاملة" تلقائيًا —
+            // لازم كل مكوناتها (ثابتة + مختارة) تكون معروفة التكلفة فعلًا حتى تختفي علامة التحذير
+            const hasRecipe = isComposite ? !compositeMissingData[id] : recipeCostMap[id]!==undefined;
             cogs += itemCogs;
             itemProfitList.push({ name: nameMap[id]||'—', qty, revenue, cost: itemCogs, profit: revenue-itemCogs, margin: revenue>0?Math.round((revenue-itemCogs)/revenue*100):0, hasRecipe });
           });
@@ -6472,7 +6435,6 @@
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
         <button class="mini ok" style="background:var(--maroon)" onclick="renderFixedCosts()">🏢 إدارة التكاليف الثابتة</button>
-        <button class="mini edit" onclick="diagnoseCompositeCost()">🔍 تشخيص تكلفة صنف مركّب</button>
         <button class="mini ok" onclick="printProfitDetailPDF()">📄 طباعة تقرير مفصل</button>
       </div>
       <div style="color:var(--muted);font-size:.78rem;font-weight:600">💡 سلسلة الحساب: صافي المبيعات − تكلفة البضاعة المستهلكة (COGS) − تكلفة العمالة − الهدر − المصاريف − نصيب الفترة من التكاليف الثابتة = صافي الربح. (المشتريات معروضة للمرجعية بس — ما بتنخصم لحالها عشان ما نكرر خصم نفس التكلفة مرتين؛ COGS هي يلي بتحسب فعليًا شو انباع)</div>
