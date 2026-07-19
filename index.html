@@ -5976,7 +5976,7 @@
     if(!dt||!sup){toast('⚠️ التاريخ والمورد مطلوبين');return;}
     if(!window.__purchaseBranchId){toast('⚠️ اختر الفرع المستلم');return;}
     const isAllBranches = window.__purchaseBranchId === '__all__';
-    const rows=[...document.querySelectorAll('#pi_list .two')];
+    const rows=[...document.querySelectorAll('#pi_list > div')];
     const items=rows.map(row=>({
       ingredient_id:row.querySelector('.pi_ing').value,
       quantity:parseFloat(row.querySelector('.pi_qty').value)||0,
