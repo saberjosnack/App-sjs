@@ -8718,12 +8718,15 @@
     // 🆕 لو في عمليات محدّدة (تشيك بوكس) بالجدول، نطبع هاي بس — غير هيك نطبع كل الجدول المفلتر متل ما كان
     const sel = window.__trSelected;
     if(sel && sel.size) filtered = filtered.filter(t=>sel.has(t.id));
+    // 🔧 إصلاح: التقرير كان ناقص عمود "ملاحظة" بالكامل — وهو يلي فيه التفاصيل الحقيقية
+    // لعملية النقل (زي "الكل: 60 قطعة سكلوب، 100 قطعة برجر..."), فكان يطلع ملخص سطر وحد
+    // بس (اسم المادة الرئيسية + الكمية) بدل التفصيل الكامل المطلوب.
     const text = 'تقرير نقل البضاعة\n— Saber Jo Snack —\n════════════════\n'+
-      filtered.map(t=>new Date(t.created_at).toLocaleString('ar-JO')+' — '+(t.ingredients?.name||'—')+' × '+t.quantity+' — من '+t.from_branch_name+' إلى '+t.to_branch_name+' — بواسطة '+(t.created_by||'—')).join('\n')+'\n';
+      filtered.map(t=>new Date(t.created_at).toLocaleString('ar-JO')+' — '+(t.ingredients?.name||'—')+' × '+t.quantity+' — من '+t.from_branch_name+' إلى '+t.to_branch_name+' — بواسطة '+(t.created_by||'—')+(t.notes?('\n  📝 '+t.notes):'')+(t.status==='done'?'  [✅ مكتمل]':'  [⏳ معلق]')).join('\n')+'\n';
     const html = `<html dir="rtl"><head><meta charset="UTF-8"><style>body{font-family:Cairo,Arial;padding:16px}table{width:100%;border-collapse:collapse}td,th{padding:6px;border:1px solid #ccc;text-align:right;font-size:.85rem}</style></head><body>
       <h2>تقرير نقل البضاعة</h2>
-      <table><tr><th>التاريخ</th><th>المادة</th><th>الكمية</th><th>من</th><th>إلى</th><th>الموظف</th></tr>
-      ${filtered.map(t=>`<tr><td>${new Date(t.created_at).toLocaleString('ar-JO')}</td><td>${esc(t.ingredients?.name||'—')}</td><td>${t.quantity}</td><td>${esc(t.from_branch_name)}</td><td>${esc(t.to_branch_name)}</td><td>${esc(t.created_by||'—')}</td></tr>`).join('')}
+      <table><tr><th>التاريخ</th><th>المادة</th><th>الكمية</th><th>من</th><th>إلى</th><th>الموظف</th><th>الحالة</th><th>ملاحظة (التفصيل الكامل)</th></tr>
+      ${filtered.map(t=>`<tr><td>${new Date(t.created_at).toLocaleString('ar-JO')}</td><td>${esc(t.ingredients?.name||'—')}</td><td>${t.quantity}</td><td>${esc(t.from_branch_name)}</td><td>${esc(t.to_branch_name)}</td><td>${esc(t.created_by||'—')}</td><td>${t.status==='done'?'✅ مكتمل':'⏳ معلق'}</td><td>${esc(t.notes||'—')}</td></tr>`).join('')}
       </table></body></html>`;
     printRaw(text, html);
   }
