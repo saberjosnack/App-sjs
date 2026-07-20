@@ -7847,6 +7847,32 @@
       toast('✓ اتسجلت السلفة'); hrAdvancesView(empId, empName);
     }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
+  // 🆕 جدول موحّد لكل السلف الموافقة/المعطاة وبعدها لسا مش مسددة (status='open') — عبر كل
+  // الموظفين مو فترة الفلتر فقط، عشان ما تنسى ولا سلفة قديمة وما تظل عالقة
+  async function renderHrUnpaidAdvances(){
+    const box = document.getElementById('hrUnpaidAdvBox'); if(!box) return;
+    try{
+      const { data, error } = await db.from('hr_advances').select('*').eq('status','open').order('created_at',{ascending:true});
+      if(error){ box.innerHTML=''; return; }
+      const list = data||[];
+      const total = list.reduce((a,x)=>a+parseFloat(x.amount||0),0);
+      if(!list.length){ box.innerHTML=''; return; }
+      box.innerHTML = `<div class="panel" style="margin-bottom:14px;border:2px solid var(--red)">
+        <h4 style="color:var(--red);margin-bottom:8px">💸 سلف موافقة وغير مسددة بعد (${list.length}) — إجمالي ${fmt(total)} ${CURRENCY}</h4>
+        <div class="tbl-wrap"><table class="tbl">
+          <tr><th>الموظف</th><th>التاريخ</th><th>المبلغ</th><th>الحساب</th><th>ملاحظة</th><th></th></tr>
+          ${list.map(a=>`<tr>
+            <td><b>${esc(a.employee_name)}</b></td>
+            <td>${new Date(a.created_at).toLocaleDateString('ar-JO')}</td>
+            <td><b style="color:var(--red)">${fmt(a.amount)} ${CURRENCY}</b></td>
+            <td>${esc(a.account==='cash'?'💵 كاش':a.account||'—')}</td>
+            <td style="font-size:.8rem;color:var(--muted)">${esc(a.note||'—')}</td>
+            <td><button class="mini ok" onclick="repayHrAdvance('${a.id}','${a.employee_id}','${esc(a.employee_name)}').then(renderHrUnpaidAdvances)">✅ تسديد</button></td>
+          </tr>`).join('')}
+        </table></div>
+      </div>`;
+    }catch(e){ console.error(e); }
+  }
   async function repayHrAdvance(advId, empId, empName){
     if(!confirm('تأكيد تسديد السلفة؟')) return;
     try{
@@ -7972,6 +7998,7 @@
         </table></div>
       </div>`:''}
       <div id="hrAdvReqBox"></div>
+      <div id="hrUnpaidAdvBox"></div>
       <div id="hrDeviceReqBox"></div>
       <div class="panel" style="margin-bottom:14px">
         <h3>🧑‍💼 HR — الرواتب والدوام والوجبات والسلف</h3>
@@ -7993,6 +8020,7 @@
       </div>`;
     renderHrTable();
     renderHrAdvanceRequests();
+    renderHrUnpaidAdvances();
     renderHrDeviceRequests();
   }
   function renderHrTable(){
