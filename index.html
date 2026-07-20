@@ -6662,6 +6662,20 @@
   /* ---- عرض مخزون الفروع ---- */
   async function doInventory(branchId, branchName){
     await loadIngredients();
+    // 🆕 حماية استباقية من تكرار الجرد: قبل ما نفتح شاشة العدّ، نتأكد ما في جرد سبق وسُجّل
+    // لنفس الفرع باليوم المالي الحالي — عشان نمنع المشكلة قبل ما تصير (موظفين اتنين يجردوا
+    // بالغلط) بدل ما نصلّحها بعدين وقت الحذف
+    try{
+      const fd = getFinancialDay();
+      const { data: existingAudits } = await db.from('inventory_audits').select('staff_name, created_at')
+        .eq('branch_id', branchId).gte('created_at', fd.from).lte('created_at', fd.to)
+        .order('created_at', {ascending:false}).limit(1);
+      if(existingAudits && existingAudits.length){
+        const prev = existingAudits[0];
+        const proceed = confirm(`⚠️ تنبيه: في جرد سبق وتسجّل لفرع "${branchName}" اليوم (بواسطة ${prev.staff_name||'—'}، الساعة ${new Date(prev.created_at).toLocaleTimeString('ar-JO')}).\n\nعمل جرد ثاني بنفس اليوم بيلخبط أرقام المخزون إذا مش مقصود (موظفين جردوا مرتين بالغلط).\n\nمتأكد إنك بدك تكمل وتعمل جرد جديد؟`);
+        if(!proceed) return;
+      }
+    }catch(e){ console.error('duplicate audit check failed:', e); }
     const {data:inv}=await db.from('branch_inventory').select('*, ingredients(name,unit)').eq('branch_id',branchId);
     const rows=(inv||[]).map(i=>({
       id:i.id, ingId:i.ingredient_id, name:i.ingredients?.name||'—',
@@ -8035,15 +8049,33 @@
       </div>`;
     }catch(e){ console.error(e); }
   }
-  async function approveHrAdvanceRequest(reqId, empId, empName, amount){
-    if(!confirm('تأكيد الموافقة على سلفة '+fmt(amount)+' '+CURRENCY+' لـ'+empName+'؟')) return;
+  // 🆕 إصلاح: قبل كانت الموافقة بتاخد المبلغ المطلوب زي ما هو بدون تعديل — هلأ فيك تعدّل
+  // المبلغ الموافق عليه قبل التأكيد (مثلاً طلب 50، توافق على 20 بس)
+  function approveHrAdvanceRequest(reqId, empId, empName, amount){
+    modal(`<h3>✅ موافقة على سلفة — ${esc(empName)}</h3>
+      <div style="margin-bottom:12px;color:var(--muted);font-size:.9rem">المبلغ يلي طلبه الموظف: <b style="color:var(--maroon)">${fmt(amount)} ${CURRENCY}</b></div>
+      <div class="fld"><label>المبلغ الموافق عليه (فيك تعدّله قبل التأكيد)</label>
+        <input id="advApproveAmt" type="number" step="0.01" value="${amount}" style="border:1.5px solid var(--line);border-radius:10px;padding:10px;width:100%;font-weight:900;font-size:1.1rem">
+      </div>
+      <div class="m-act">
+        <button class="save" onclick="confirmApproveHrAdvance('${reqId}','${empId}','${esc(empName)}',${amount})">تأكيد الموافقة ✓</button>
+        <button class="cancel" onclick="closeModal()">إلغاء</button>
+      </div>`);
+  }
+  async function confirmApproveHrAdvance(reqId, empId, empName, requestedAmount){
+    const approvedAmt = parseFloat(document.getElementById('advApproveAmt').value);
+    if(isNaN(approvedAmt) || approvedAmt<=0){ toast('⚠️ أدخل مبلغ صحيح أكبر من صفر'); return; }
+    const diffNote = Math.abs(approvedAmt-requestedAmount)>0.001;
+    if(!confirm('تأكيد الموافقة على سلفة '+fmt(approvedAmt)+' '+CURRENCY+' لـ'+empName+(diffNote?(' (بدل المبلغ المطلوب '+fmt(requestedAmount)+' '+CURRENCY+')'):'')+'؟')) return;
     try{
+      const noteTxt = diffNote ? ('طلب ذاتي من بوابة الموظف — طلب '+fmt(requestedAmount)+' '+CURRENCY+'، تمت الموافقة على '+fmt(approvedAmt)+' '+CURRENCY) : 'طلب ذاتي من بوابة الموظف';
       const { data: adv, error } = await db.from('hr_advances').insert({
-        employee_id: empId, employee_name: empName, amount, account:'cash', note:'طلب ذاتي من بوابة الموظف', status:'open', created_by: ME.full_name
+        employee_id: empId, employee_name: empName, amount: approvedAmt, account:'cash', note: noteTxt, status:'open', created_by: ME.full_name
       }).select().single();
       if(error){ toast('✗ '+error.message); return; }
-      await addCapitalTx(-amount, 'advance', adv.id, 'سلفة موظف (طلب ذاتي) — '+empName);
+      await addCapitalTx(-approvedAmt, 'advance', adv.id, 'سلفة موظف (طلب ذاتي) — '+empName);
       await db.from('hr_advance_requests').update({ status:'approved', approved_by: ME.full_name, approved_at: new Date().toISOString() }).eq('id', reqId);
+      closeModal();
       toast('✓ اتوافق على السلفة'); renderHR();
     }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
