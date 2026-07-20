@@ -5253,8 +5253,11 @@
       SH_LIST = data||[];
       // مبيعات كل شيفت
       for(const sh of SH_LIST){
-        const { data: os } = await db.from('orders').select('total, discount, status').eq('shift_id', sh.id);
-        sh.__sales = (os||[]).filter(o=>o.status!=='cancelled').reduce((a,o)=>a+parseFloat(o.total||0),0);
+        const { data: os } = await db.from('orders').select('total, discount, status, order_type, delivery_fee').eq('shift_id', sh.id);
+        // 🔧 إصلاح: كان يحسب مبيعات الموظف = total الطلب شامل رسوم التوصيل، فبيطلع رقم أعلى
+        // من "صافي المبيعات" بتقرير الأرباح (يلي صح — رسوم التوصيل مش إيراد أصناف حقيقي).
+        // هلأ استثنينا رسوم التوصيل هون كمان عشان الرقمين يتطابقوا بكل الشاشات.
+        sh.__sales = (os||[]).filter(o=>o.status!=='cancelled').reduce((a,o)=>a+parseFloat(o.total||0)-(o.order_type==='delivery'?parseFloat(o.delivery_fee||0):0),0);
         sh.__orders = (os||[]).filter(o=>o.status!=='cancelled').length;
         sh.__discount = (os||[]).filter(o=>o.status!=='cancelled').reduce((a,o)=>a+parseFloat(o.discount||0),0);
       }
