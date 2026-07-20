@@ -6388,21 +6388,32 @@
       let itemProfitList = [];
       try{
         const soldItemIds = {}, soldItemRevenue = {};
-        const compositeOrderLines = []; // {menuItemId, qty, composition}
+        // 🔧 إصلاح: قبل كنا نحدد "هل هاد الصنف مركّب؟" بالاعتماد على قائمة ITEMS المحفوظة
+        // بالذاكرة (item_type==='composite') — لو هاي القائمة قديمة (مثلاً الصنف انعدّل/انضاف
+        // بنفس الجلسة بدون تحديث الصفحة)، الكود كان "ينسى" إنه مركّب ويتجاهل تكلفته بالكامل
+        // (تكلفة = صفر). هلأ منحدد الأصناف المركبة مباشرة من قاعدة البيانات (composite_fixed +
+        // وجود composition فعلي بالطلب نفسه) — مش من نسخة محفوظة بالذاكرة ممكن تكون قديمة.
+        const rawOrderLines = []; // {menuItemId, qty, composition}
         ok.forEach(o=>(o.order_items||[]).forEach(oi=>{
           soldItemIds[oi.menu_item_id] = (soldItemIds[oi.menu_item_id]||0) + parseFloat(oi.quantity||0);
           soldItemRevenue[oi.menu_item_id] = (soldItemRevenue[oi.menu_item_id]||0) + parseFloat(oi.quantity||0)*parseFloat(oi.unit_price||0);
-          const isComposite = ITEMS.find(i=>i.id===oi.menu_item_id)?.item_type==='composite';
-          if(isComposite) compositeOrderLines.push({ menuItemId: oi.menu_item_id, qty: parseFloat(oi.quantity||0), composition: oi.composition||[] });
+          rawOrderLines.push({ menuItemId: oi.menu_item_id, qty: parseFloat(oi.quantity||0), composition: oi.composition||[] });
         }));
         const itemIds = Object.keys(soldItemIds);
         if(itemIds.length){
-          const compositeIds = [...new Set(compositeOrderLines.map(l=>l.menuItemId))];
           const [{ data: recipesData }, { data: itemsData }, fixedRes] = await Promise.all([
             db.from('recipes').select('menu_item_id, recipe_items(quantity, ingredients(unit_cost))').in('menu_item_id', itemIds),
             db.from('menu_items').select('id, name_ar').in('id', itemIds),
-            compositeIds.length ? db.from('composite_fixed').select('menu_item_id, component_item_id, qty').in('menu_item_id', compositeIds) : Promise.resolve({data:[]}),
+            db.from('composite_fixed').select('menu_item_id, component_item_id, qty').in('menu_item_id', itemIds),
           ]);
+          // ⚠️ لو صار خطأ بجلب مكونات الوجبات المركبة، لازم نعرف — قبل كان بيختفي بصمت وتطلع التكلفة صفر بالغلط
+          if(fixedRes.error) console.warn('⚠️ composite_fixed fetch error:', fixedRes.error.message);
+          // صنف يُعتبر "مركّب" إذا: عنده مكونات ثابتة مسجّلة بقاعدة البيانات، أو أي طلب فعلي إله بيانات composition
+          const compositeIdSet = new Set([
+            ...(fixedRes.data||[]).map(f=>f.menu_item_id),
+            ...rawOrderLines.filter(l=>l.composition && l.composition.length).map(l=>l.menuItemId),
+          ]);
+          const compositeOrderLines = rawOrderLines.filter(l=>compositeIdSet.has(l.menuItemId));
           const nameMap = {}; (itemsData||[]).forEach(i=>nameMap[i.id]=i.name_ar);
           const recipeCostMap = {}; // menu_item_id -> تكلفة الوحدة من وصفته المباشرة (للأصناف العادية والمكونات الفرعية)
           (recipesData||[]).forEach(r=>{
@@ -6415,7 +6426,8 @@
             ...compositeOrderLines.flatMap(l=>(l.composition||[]).map(c=>c.component_item_id)),
           ])].filter(id=>id && !(id in recipeCostMap));
           if(componentIds.length){
-            const { data: compRecipes } = await db.from('recipes').select('menu_item_id, recipe_items(quantity, ingredients(unit_cost))').in('menu_item_id', componentIds);
+            const { data: compRecipes, error: compRecipesErr } = await db.from('recipes').select('menu_item_id, recipe_items(quantity, ingredients(unit_cost))').in('menu_item_id', componentIds);
+            if(compRecipesErr) console.warn('⚠️ component recipes fetch error:', compRecipesErr.message);
             (compRecipes||[]).forEach(r=>{
               recipeCostMap[r.menu_item_id] = (r.recipe_items||[]).reduce((a,ri)=>a+parseFloat(ri.quantity||0)*parseFloat(ri.ingredients?.unit_cost||0),0);
             });
