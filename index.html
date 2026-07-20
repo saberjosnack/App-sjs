@@ -654,6 +654,34 @@
   const db = supabase.createClient(SB_URL, SB_KEY);
 
   let ME = null;
+  // 🆕 دور "مشاهد فقط" (viewer) — يشوف كل شاشات وتقارير النظام متل المدير بالضبط،
+  // بس أي عملية كتابة (إضافة/تعديل/حذف) بأي جدول بتنحظر تلقائيًا من هون — مكان واحد
+  // موحّد بدل ما نعتمد على كل شاشة بالتطبيق تتأكد بنفسها (احتمال ينسى مكان وتصير ثغرة).
+  function makeBlockedQuery(){
+    const result = { data: null, error: { message: 'حساب مشاهدة فقط — التعديل غير مسموح' } };
+    const handler = {
+      get(target, prop){
+        if(prop === 'then') return (resolve) => resolve(result);
+        if(prop === 'catch' || prop === 'finally') return () => proxy;
+        return () => proxy; // أي استدعاء تسلسلي (select/eq/single...) بيرجع نفس الكائن الفارغ
+      }
+    };
+    const proxy = new Proxy(function(){}, handler);
+    return proxy;
+  }
+  const _dbFrom = db.from.bind(db);
+  db.from = function(table){
+    const builder = _dbFrom(table);
+    if(!(ME && ME.role==='viewer')) return builder;
+    ['insert','update','upsert','delete'].forEach(m=>{
+      builder[m] = function(...args){
+        console.warn('🔒 blocked write attempt (viewer role):', table, m);
+        toast('🔒 حساب مشاهدة فقط — ما فيك تعمل أي تعديل');
+        return makeBlockedQuery();
+      };
+    });
+    return builder;
+  };
   let BRANCHES = [], CATS = [], ITEMS = [], STAFF = [], CUSTOMERS = [], SETTINGS = {};
   // 🔒 حماية من النقر المزدوج — لو المستخدم كبس زر حفظ مرتين بسرعة (جرد، مصاريف، سلف...)،
   // ما بيسمح بتنفيذ نفس العملية مرتين بالتوازي. استخدم: if(!lockSubmit('key')) return; ... finally{ unlockSubmit('key'); }
@@ -714,7 +742,7 @@
   const toast = m => { const t=$('toast'); t.textContent=m; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),2400); };
   const TYPE_AR = { takeaway:'استلام', delivery:'توصيل', dine_in:'صالة' };
   const PAY_AR = { cash:'كاش', card:'كرت', cliq:'كليك' };
-  const ROLE_AR = { admin:'مدير', cashier:'كاشير', callcenter:'كول سنتر', kitchen:'مطبخ' };
+  const ROLE_AR = { admin:'مدير', cashier:'كاشير', callcenter:'كول سنتر', kitchen:'مطبخ', viewer:'🕶️ مشاهد فقط' };
   PAY_AR['platform'] = 'ذمم (تطبيق)';
   PAY_AR['employee_tab'] = 'ذمم موظف';
   PAY_AR['split'] = 'حساب مقطوع';
@@ -1145,6 +1173,7 @@
       <div class="tbl-wrap"><table class="tbl">
         <tr><th>الدور</th><th>عدد الصلاحيات</th><th>النوع</th><th></th></tr>
         <tr><td><b>👑 مالك</b></td><td>الكل (${allPermKeys.length})</td><td>أساسي — ثابت</td><td>—</td></tr>
+        <tr><td><b>🕶️ مشاهد فقط</b></td><td>يشوف كل شي — كل الشاشات والتقارير</td><td>أساسي — ثابت (بدون أي تعديل مهما كانت الصلاحيات)</td><td>—</td></tr>
         <tr><td><b>🧾 كاشير</b></td><td>${(ROLE_DEFAULT_PERMS.cashier||[]).length}</td><td>أساسي</td>
           <td><button class="mini edit" onclick="roleForm(null,'cashier')">تعديل الصلاحيات</button></td></tr>
         <tr><td><b>📞 كول سنتر</b></td><td>${(ROLE_DEFAULT_PERMS.callcenter||[]).length}</td><td>أساسي</td>
@@ -1212,6 +1241,9 @@
   function perm(key){
     if(!ME) return false;
     if(ME.role==='admin') return true;                       // المالك: كل شي دائمًا
+    // 🆕 دور "مشاهد فقط": نعامله متل المدير من ناحية العرض/الرؤية بس — يشوف كل الشاشات
+    // والأزرار، بس أي عملية كتابة فعلية بتنحظر مركزيًا من db.from() (فوق بأول الملف)
+    if(ME.role==='viewer') return true;
     const p = ME.permissions;
     if(p && typeof p === 'object' && key in p) return !!p[key];  // مخصص لهاد الموظف تحديدًا
     if(ME.role==='custom' && ME.role_id){
@@ -1686,7 +1718,7 @@
   };
   async function doStartShift(openingValue, openingCard, openingCliq){
     const _bsel = document.getElementById('branchSel')?.value;
-    const isBranchFree = ME.role==='admin' || ME.role==='callcenter';
+    const isBranchFree = ME.role==='admin' || ME.role==='callcenter' || ME.role==='viewer';
     const branch_id = isBranchFree ? (_bsel || null) : (ME.branch_id || _bsel || null);
 
     try {
@@ -2381,7 +2413,7 @@
     const orderNote = document.getElementById('orderNote')?.value.trim()||'';
     // 🔒 مهم: الإدارة والسنتر ما بيتقيّدوا بفرعهم المسجّل بحسابهم إطلاقًا (حتى لو محدد بالغلط) —
     // دايمًا بيعتمدوا على القائمة يلي يختاروها يدويًا، عشان يقدروا يطلبوا لأي فرع بيدهم
-    const isBranchFree = ME.role==='admin' || ME.role==='callcenter';
+    const isBranchFree = ME.role==='admin' || ME.role==='callcenter' || ME.role==='viewer';
     const branchId = isBranchFree ? (document.getElementById('branchSel')?.value || BRANCHES[0]?.id) : (ME.branch_id || document.getElementById('branchSel')?.value || BRANCHES[0]?.id);
     const ticketData = {
       cart: cart.map(l=>({ itemId:l.item.id, name:l.item.name_ar, price:l.item.price, qty:l.qty, note:l.note||'', noteBy:l.noteBy||null })),
@@ -4763,7 +4795,7 @@
     platforms:'platforms_view', empmeals:'empmeals_view', topcust:'topcust_view', waste:'waste_log', suppliers:'purchases_view',
   };
   function canAccessAdminTab(tabKey){
-    if(isAdmin()) return true;
+    if(isAdmin() || (ME && ME.role==='viewer')) return true;
     const req = ADMIN_TAB_PERM[tabKey];
     if(req==='admin_only' || !req) return false;
     return perm(req);
@@ -10553,6 +10585,7 @@ try {
       <div class="fld"><label>الدور</label><select id="f_sr" onchange="resetPermsToRole(this.value)">
         <option value="cashier" ${st.role==='cashier'?'selected':''}>كاشير</option>
         <option value="callcenter" ${st.role==='callcenter'?'selected':''}>كول سنتر</option>
+        <option value="viewer" ${st.role==='viewer'?'selected':''}>🕶️ مشاهد فقط (يشوف كل شي، ما بيقدر يعدّل)</option>
         <option value="admin" ${st.role==='admin'?'selected':''}>مدير (كل الصلاحيات)</option>
         ${CUSTOM_ROLES.map(r=>`<option value="custom:${r.id}" ${st.role==='custom'&&st.role_id===r.id?'selected':''}>${esc(r.name)}</option>`).join('')}
         </select></div>
@@ -10573,7 +10606,7 @@ try {
         <div style="background:#fff;border:1.5px solid var(--line);border-radius:12px;padding:10px 14px;max-height:280px;overflow-y:auto">${permHtml}</div>
       </div>
       <div class="m-act"><button class="save" onclick="saveStaff('${id||''}')">حفظ ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
-    document.getElementById('permsBox').style.display = (st.role==='admin') ? 'none' : '';
+    document.getElementById('permsBox').style.display = (st.role==='admin'||st.role==='viewer') ? 'none' : '';
     if(st.role==='custom') setPermsBoxMode('custom');
   }
   function setPermsBoxMode(mode){
@@ -10590,7 +10623,7 @@ try {
     }
   }
   window.resetPermsToRole = function(role){
-    document.getElementById('permsBox').style.display = (role==='admin') ? 'none' : '';
+    document.getElementById('permsBox').style.display = (role==='admin'||role==='viewer') ? 'none' : '';
     if(role.startsWith('custom:')){
       const rid = role.split(':')[1];
       const cr = CUSTOM_ROLES.find(r=>r.id===rid);
