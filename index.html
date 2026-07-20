@@ -4387,8 +4387,12 @@
     const p = __drPicker;
     if(!p.start){ toast('⚠️ اختر تاريخ أول'); return; }
     const start = p.start, end = p.end||p.start;
-    const fromIso = new Date(start.getFullYear(),start.getMonth(),start.getDate(),0,0,0).toISOString();
-    const toIso = new Date(end.getFullYear(),end.getMonth(),end.getDate(),23,59,59).toISOString();
+    // 🔧 إصلاح: كان يقتطع اليوم من منتصف الليل لمنتصف الليل (00:00 → 23:59)، بدل ما يحترم
+    // "اليوم المالي" الفعلي للمطعم (10 صباحًا → 3 فجرًا اليوم التالي) — يلي بيخلي مبيعات الفترة
+    // المتأخرة (بعد نص الليل لغاية 3ص) تنحسب على اليوم الغلط.
+    const fromIso = new Date(start.getFullYear(),start.getMonth(),start.getDate(),FIN_START_H,0,0).toISOString();
+    const endNext = new Date(end.getFullYear(),end.getMonth(),end.getDate()+1);
+    const toIso = new Date(endNext.getFullYear(),endNext.getMonth(),endNext.getDate(),FIN_END_H,0,0).toISOString();
     const label = start.toDateString()===end.toDateString() ? fmtDrDate(start) : (fmtDrDate(start)+' → '+fmtDrDate(end));
     if(p.scope==='sales'){
       _curFrom=fromIso; _curTo=toIso;
@@ -7095,11 +7099,39 @@
   async function deleteDaAudit(idx){
     const a = (window.__DA_LIST||[])[idx]; if(!a) return;
     if(!isAdmin()){ toast('⛔ صلاحية المالك فقط'); return; }
-    if(!confirm('⚠️ حذف سجل هاد الجرد نهائيًا؟\nملاحظة: هاد بيحذف السجل التاريخي بس — ما بيرجّع أرقام المخزون الحالية لقيمها قبل الجرد (هي أصلًا محدّثة وماشية طبيعي). لو بدك تصحح رقم غلط، استخدم "✏️ تعديل" بدلها.\nمتابعة؟')) return;
+    // 🔧 إصلاح: قبل كان الحذف يمسح السجل بس وبيسيب رقم المخزون متل ما هو — يلي بيعمل فرق
+    // حقيقي بالحالة الشائعة: موظفين جردوا نفس الفرع مرتين بالغلط، والمالك بده يحذف
+    // العملية المكررة الغلط ويرجّع المخزون للرقم الصحيح.
+    // منتأكد أول: هل هاد آخر جرد مسجّل لهاد الفرع؟ (نتأكد من قاعدة البيانات مباشرة، مش من القائمة المفلترة بالشاشة)
+    const { data: newerAudits } = await db.from('inventory_audits').select('id')
+      .eq('branch_id', a.branch_id).gt('created_at', a.created_at).limit(1);
+    const isLatestForBranch = !(newerAudits && newerAudits.length);
+    let revertStock = false, fallbackAudit = null;
+    if(isLatestForBranch){
+      const { data: olderAudits } = await db.from('inventory_audits').select('*')
+        .eq('branch_id', a.branch_id).lt('created_at', a.created_at)
+        .order('created_at',{ascending:false}).limit(1);
+      fallbackAudit = (olderAudits && olderAudits[0]) || null;
+      revertStock = confirm(`⚠️ حذف سجل هاد الجرد نهائيًا؟\n\nهاد آخر جرد مسجّل لهاد الفرع — لو صار بالغلط (مثلاً جرد الفرع مرتين بدل مرة)، فيني أرجّع أرقام المخزون الحالية تلقائيًا معه ${fallbackAudit?'لقيم الجرد يلي قبله ('+new Date(fallbackAudit.created_at).toLocaleString('ar-JO')+')':'لقيمها قبل هاد الجرد'}.\n\nاضغط "موافق" للحذف + تصحيح المخزون، أو "إلغاء" للتراجع.`);
+      if(!revertStock) return;
+    } else {
+      if(!confirm('⚠️ حذف سجل هاد الجرد نهائيًا؟\nملاحظة: هاد مش آخر جرد لهاد الفرع — حذفه بيمسح السجل التاريخي بس، وما بيرجّع أرقام المخزون الحالية (هي أصلًا اتغيرت بجرود وحركات لاحقة). لو بدك تصحح رقم غلط، استخدم "✏️ تعديل" بدلها.\nمتابعة؟')) return;
+    }
     try{
+      if(revertStock){
+        const details = a.details||[];
+        for(const d of details){
+          const fallbackDetail = fallbackAudit ? (fallbackAudit.details||[]).find(x=>x.ingredient_id===d.ingredient_id) : null;
+          const restoreVal = fallbackDetail ? fallbackDetail.actual : d.expected;
+          if(restoreVal==null) continue;
+          const { data: bi } = await db.from('branch_inventory').select('id').eq('branch_id', a.branch_id).eq('ingredient_id', d.ingredient_id).maybeSingle();
+          if(bi) await db.from('branch_inventory').update({ stock: restoreVal }).eq('id', bi.id);
+          else await db.from('branch_inventory').insert({ branch_id: a.branch_id, ingredient_id: d.ingredient_id, stock: restoreVal, min_stock:0 });
+        }
+      }
       const { error } = await db.from('inventory_audits').delete().eq('id', a.id);
       if(error){ toast('✗ '+error.message); return; }
-      toast('✓ انحذف السجل'); renderDailyAudits();
+      toast(revertStock ? '✓ انحذف السجل وتصحّح المخزون' : '✓ انحذف السجل'); renderDailyAudits();
     }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
   function editDaAudit(idx){
@@ -7295,6 +7327,10 @@
     const filterStaff = window.__trFilterStaff||'';
     let filtered = TRANSFERS_DATA;
     if(filterStaff) filtered = filtered.filter(t=>t.created_by===filterStaff);
+    // 🆕 تحديد صفوف معيّنة (تشيك بوكس) — عشان تقدر تطبع تقرير لعمليات نقل محدّدة بس بدل كل الجدول
+    if(!window.__trSelected) window.__trSelected = new Set();
+    const sel = window.__trSelected;
+    const allChecked = filtered.length>0 && filtered.every(t=>sel.has(t.id));
     C.innerHTML = `
       <button class="add-btn" onclick="transferForm()">🔄 طلب نقل بضاعة</button>
       <div class="two" style="margin-bottom:10px">
@@ -7302,11 +7338,13 @@
           <option value="">كل الموظفين</option>
           ${staffNames.map(n=>`<option value="${esc(n)}" ${filterStaff===n?'selected':''}>${esc(n)}</option>`).join('')}
         </select>
-        <button class="mini edit" onclick="printTransfersReport()">🖨️ طباعة تقرير النقل</button>
+        <button class="mini edit" onclick="printTransfersReport()">🖨️ طباعة تقرير النقل${sel.size?' ('+sel.size+' محدّد)':''}</button>
+        ${sel.size?`<button class="mini tog" onclick="window.__trSelected=new Set();renderTransfers()">✖️ إلغاء التحديد</button>`:''}
       </div>
       <div class="tbl-wrap"><table class="tbl">
-        <tr><th>التاريخ والساعة</th><th>المادة</th><th>الكمية</th><th>من</th><th>إلى</th><th>الموظف</th><th>الحالة</th><th>ملاحظة</th><th></th></tr>
+        <tr><th><input type="checkbox" ${allChecked?'checked':''} onchange="toggleAllTransferSelect(this.checked)"></th><th>التاريخ والساعة</th><th>المادة</th><th>الكمية</th><th>من</th><th>إلى</th><th>الموظف</th><th>الحالة</th><th>ملاحظة</th><th></th></tr>
         ${filtered.map((t,idx)=>`<tr>
+          <td><input type="checkbox" ${sel.has(t.id)?'checked':''} onchange="toggleTransferSelect('${t.id}',this.checked)"></td>
           <td>${new Date(t.created_at).toLocaleString('ar-JO')}</td>
           <td><b>${esc(t.ingredients?.name||'—')}</b> <small style="color:var(--muted)">(${esc(t.ingredients?.unit||'')})</small></td>
           <td><b>${t.quantity}</b></td>
@@ -7321,6 +7359,20 @@
           </td>
         </tr>`).join('')||'<tr><td colspan="9" class="empty-note">ما في نقل بضاعة مسجل</td></tr>'}
       </table></div>`;
+  }
+  function toggleTransferSelect(id, checked){
+    if(!window.__trSelected) window.__trSelected = new Set();
+    if(checked) window.__trSelected.add(id); else window.__trSelected.delete(id);
+    renderTransfers();
+  }
+  function toggleAllTransferSelect(checked){
+    if(!window.__trSelected) window.__trSelected = new Set();
+    const filterStaff = window.__trFilterStaff||'';
+    let filtered = TRANSFERS_DATA;
+    if(filterStaff) filtered = filtered.filter(t=>t.created_by===filterStaff);
+    if(checked) filtered.forEach(t=>window.__trSelected.add(t.id));
+    else filtered.forEach(t=>window.__trSelected.delete(t.id));
+    renderTransfers();
   }
   async function deleteTransferRecord(id){
     if(!isAdmin()){ toast('⛔ صلاحية المالك فقط'); return; }
@@ -8663,6 +8715,9 @@
     const filterStaff = window.__trFilterStaff||'';
     let filtered = TRANSFERS_DATA;
     if(filterStaff) filtered = filtered.filter(t=>t.created_by===filterStaff);
+    // 🆕 لو في عمليات محدّدة (تشيك بوكس) بالجدول، نطبع هاي بس — غير هيك نطبع كل الجدول المفلتر متل ما كان
+    const sel = window.__trSelected;
+    if(sel && sel.size) filtered = filtered.filter(t=>sel.has(t.id));
     const text = 'تقرير نقل البضاعة\n— Saber Jo Snack —\n════════════════\n'+
       filtered.map(t=>new Date(t.created_at).toLocaleString('ar-JO')+' — '+(t.ingredients?.name||'—')+' × '+t.quantity+' — من '+t.from_branch_name+' إلى '+t.to_branch_name+' — بواسطة '+(t.created_by||'—')).join('\n')+'\n';
     const html = `<html dir="rtl"><head><meta charset="UTF-8"><style>body{font-family:Cairo,Arial;padding:16px}table{width:100%;border-collapse:collapse}td,th{padding:6px;border:1px solid #ccc;text-align:right;font-size:.85rem}</style></head><body>
