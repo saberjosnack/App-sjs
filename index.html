@@ -1288,12 +1288,23 @@
   }
 
   const APP_VERSION = 'SJS-POS 1.0';
+  // 🔧 طبقة حفظ ثالثة بالكوكيز (عمر طويل) — أحيانًا أداة تنظيف المتصفح أو Safari بتمسح
+  // localStorage و/أو IndexedDB بس مش الكوكيز، فهاي بتزيد فرصة استرجاع نفس معرّف الجهاز
+  function getCookie(name){
+    const m = document.cookie.match('(^|;)\\s*'+name+'\\s*=\\s*([^;]+)');
+    return m ? decodeURIComponent(m.pop()) : null;
+  }
+  function setCookie(name, value){
+    const d = new Date(); d.setFullYear(d.getFullYear()+5);
+    document.cookie = name+'='+encodeURIComponent(value)+';expires='+d.toUTCString()+';path=/;SameSite=Lax';
+  }
   function getDeviceId(){
-    let id = localStorage.getItem('sjs_device_id');
+    let id = localStorage.getItem('sjs_device_id') || getCookie('sjs_device_id');
     if(!id){
       id = 'dev-' + (crypto.randomUUID ? crypto.randomUUID() : (Date.now()+'-'+Math.random().toString(36).slice(2)));
-      localStorage.setItem('sjs_device_id', id);
     }
+    localStorage.setItem('sjs_device_id', id);
+    setCookie('sjs_device_id', id);
     // 🔧 نخزّن نسخة احتياطية بـIndexedDB كمان — أحيانًا مسح الكاش أو "مسح بيانات الموقع" بيمسح
     // localStorage بس مش IndexedDB (أو العكس)، فهيك بنقلل احتمال إنه الجهاز "ينسى نفسه" ويصير
     // النظام يعتبره جهاز جديد بالغلط رغم إنه نفس الجهاز فعليًا
@@ -1310,14 +1321,17 @@
   // 🔧 محاولة استرجاع معرف الجهاز من IndexedDB لو localStorage انمسح بالغلط — نشغّلها مرة وحدة بالإقلاع
   (function restoreDeviceIdFromIndexedDB(){
     try{
-      if(localStorage.getItem('sjs_device_id')) return; // موجود أصلًا، ما في داعي نرجع نجيبه
+      // لو موجود بالكوكيز بس مش بـlocalStorage (مسحوا الكاش بس مش الكوكيز)، نرجّعه فورًا
+      const cookieId = getCookie('sjs_device_id');
+      if(cookieId && !localStorage.getItem('sjs_device_id')){ localStorage.setItem('sjs_device_id', cookieId); }
+      if(localStorage.getItem('sjs_device_id')) return; // موجود أصلًا بمكان تاني، ما في داعي نرجع نجيبه
       const req = indexedDB.open('sjs_device_store', 1);
       req.onupgradeneeded = () => req.result.createObjectStore('kv');
       req.onsuccess = () => {
         try{
           const tx = req.result.transaction('kv','readonly');
           const getReq = tx.objectStore('kv').get('device_id');
-          getReq.onsuccess = () => { if(getReq.result) localStorage.setItem('sjs_device_id', getReq.result); };
+          getReq.onsuccess = () => { if(getReq.result){ localStorage.setItem('sjs_device_id', getReq.result); setCookie('sjs_device_id', getReq.result); } };
         }catch(e){}
       };
     }catch(e){}
