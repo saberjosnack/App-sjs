@@ -6160,7 +6160,14 @@
       await addTreasuryTx(payStatus, -total, 'purchase', pur.id, 'فاتورة شراء — '+sup, isAllBranches ? null : window.__purchaseBranchId);
       await db.from('supplier_payments').insert({ supplier:sup, amount:total, account:payStatus, purchase_id:pur.id, branch_id: isAllBranches?null:window.__purchaseBranchId, note:'دفع كامل وقت الفاتورة', created_by: ME.full_name });
     }
-    await db.from('purchase_items').insert(items.map(x=>({...x,purchase_id:pur.id})));
+    // 🔧 إصلاح: كان الكود يحفظ بنود الفاتورة (المواد) بدون ما يتأكد من نجاح العملية —
+    // لو صار خطأ (اتصال، صلاحيات...)، الفاتورة الأساسية كانت تنحفظ بمجموعها الصحيح، بس
+    // بنود المواد تضيع بصمت بدون أي رسالة خطأ — وهاد سبب ظهور فواتير بمجموع صحيح وجدول مواد فاضي.
+    const { error: itemsErr } = await db.from('purchase_items').insert(items.map(x=>({...x,purchase_id:pur.id})));
+    if(itemsErr){
+      toast('⚠️ الفاتورة اتسجلت بس بنود المواد ما اتسجلت! السبب: '+itemsErr.message);
+      console.error('purchase_items insert failed:', itemsErr);
+    }
     for(const it of items){
       const {data:ing}=await db.from('ingredients').select('stock').eq('id',it.ingredient_id).single();
       await db.from('ingredients').update({stock:(parseFloat(ing?.stock||0)+it.quantity),unit_cost:it.unit_cost}).eq('id',it.ingredient_id);
@@ -9901,11 +9908,18 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
     if(!from || !to){ toast('⚠️ حدد الفترة'); return; }
     R.innerHTML = '<div class="empty-note">... جاري الحساب</div>';
     try{
-      const { data: orders, error } = await db.from('orders')
-        .select('order_number, created_at, total, status, branches(name_ar), order_items(item_name, quantity, unit_price)')
-        .eq('platform_id', platformId)
-        .gte('created_at', from+'T00:00:00').lte('created_at', to+'T23:59:59')
-        .order('created_at', {ascending:false});
+      // 🆕 نجيب platform_paid كمان عشان نعرف مين مسدد ومين لسا "دين" (ذمم) — وبنفس الوقت
+      // نجيب كل الطلبات الغير مسددة لهاد المنصة (كل الوقت، مش بس الفترة المفلترة) عشان الدين
+      // المستحق يكون شامل، زي بالضبط منطق كشف حساب المورد
+      const [{ data: orders, error }, { data: allUnpaid }] = await Promise.all([
+        db.from('orders')
+          .select('id, order_number, created_at, total, status, platform_paid, branches(name_ar), order_items(item_name, quantity, unit_price)')
+          .eq('platform_id', platformId)
+          .gte('created_at', from+'T00:00:00').lte('created_at', to+'T23:59:59')
+          .order('created_at', {ascending:false}),
+        db.from('orders').select('id, total')
+          .eq('platform_id', platformId).eq('platform_paid', false).neq('status','cancelled'),
+      ]);
       if(error){ R.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message)}</div>`; return; }
       const platform = PLATFORMS_DATA.find(p=>p.id===platformId);
       const commissionPct = parseFloat(platform?.commission_percent||0);
@@ -9913,30 +9927,75 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
       const gross = ok.reduce((a,o)=>a+parseFloat(o.total||0),0);
       const commission = gross * commissionPct/100;
       const net = gross - commission;
+      const debtGross = (allUnpaid||[]).reduce((a,o)=>a+parseFloat(o.total||0),0);
+      const debtNet = debtGross - (debtGross*commissionPct/100);
       window.__lastStatementData = { platformName, from, to, orders: ok, gross, commission, net, commissionPct };
+      if(!window.__platformSelected) window.__platformSelected = new Set();
+      const sel = window.__platformSelected;
       R.innerHTML = `
         <div class="day-head" style="margin:10px 0">
           <div class="stat">عدد الطلبات<b>${ok.length}</b></div>
           <div class="stat">إجمالي المبيعات<b>${fmt(gross)} ${CURRENCY}</b></div>
           <div class="stat">العمولة (${commissionPct}%)<b style="color:var(--red)">${fmt(commission)} ${CURRENCY}</b></div>
-          <div class="stat">الصافي المستحق لك<b style="color:var(--ok)">${fmt(net)} ${CURRENCY}</b></div>
+          <div class="stat">الصافي (الفترة)<b style="color:var(--ok)">${fmt(net)} ${CURRENCY}</b></div>
+        </div>
+        <div class="panel" style="border:2px solid var(--red);margin-bottom:12px">
+          <div style="font-weight:900;color:var(--red)">💸 الدين المستحق حاليًا (غير مسدد — كل الوقت): ${fmt(debtNet)} ${CURRENCY}</div>
+          <div style="font-size:.8rem;color:var(--muted);margin-top:2px">حدد الطلبات يلي المنصة دفعتلك ياها فعليًا من الجدول تحت، وبعدين اضغط "تسديد المحدد" — بينزل الصافي على رأس المال تلقائيًا.</div>
+        </div>
+        <div style="display:flex;gap:8px;margin-bottom:10px">
+          <button class="mini ok" onclick="settleSelectedPlatformOrders('${platformId}','${esc(platformName)}',${commissionPct})">✅ تسديد المحدد (${sel.size})</button>
+          ${sel.size?`<button class="mini tog" onclick="window.__platformSelected=new Set();runPlatformStatement('${platformId}','${esc(platformName)}')">✖️ إلغاء التحديد</button>`:''}
         </div>
         <div class="tbl-wrap"><table class="tbl">
-          <tr><th>#</th><th>التاريخ</th><th>الفرع</th><th>الأصناف</th><th>الإجمالي</th><th>العمولة</th><th>الصافي</th></tr>
+          <tr><th></th><th>#</th><th>التاريخ</th><th>الفرع</th><th>الأصناف</th><th>الإجمالي</th><th>العمولة</th><th>الصافي</th><th>الحالة</th></tr>
           ${ok.map(o=>{
             const oComm = parseFloat(o.total||0)*commissionPct/100;
             const oNet = parseFloat(o.total||0)-oComm;
             const itemsStr = (o.order_items||[]).map(i=>i.quantity+'×'+i.item_name+' ('+fmt(i.unit_price*i.quantity)+')').join('، ');
-            return `<tr><td><b>${o.order_number}</b></td><td>${new Date(o.created_at).toLocaleString('ar-JO')}</td><td>${esc(o.branches?.name_ar||'—')}</td>
+            return `<tr>
+              <td>${o.platform_paid?'':`<input type="checkbox" ${sel.has(o.id)?'checked':''} onchange="togglePlatformOrderSelect('${o.id}',this.checked)">`}</td>
+              <td><b>${o.order_number}</b></td><td>${new Date(o.created_at).toLocaleString('ar-JO')}</td><td>${esc(o.branches?.name_ar||'—')}</td>
               <td style="font-size:.82rem;color:var(--muted)">${esc(itemsStr)||'—'}</td>
               <td><b>${fmt(o.total)}</b></td>
               <td style="color:var(--red)">${fmt(oComm)}</td>
               <td style="color:var(--ok)"><b>${fmt(oNet)}</b></td>
+              <td>${o.platform_paid?'<b style="color:var(--ok)">✅ مسدد</b>':'<b style="color:var(--red)">🔴 غير مسدد</b>'}</td>
             </tr>`;
-          }).join('')||'<tr><td colspan="7" class="empty-note">ما في طلبات بهاي الفترة</td></tr>'}
+          }).join('')||'<tr><td colspan="9" class="empty-note">ما في طلبات بهاي الفترة</td></tr>'}
         </table></div>
         <button class="mini edit" style="margin-top:10px;width:100%" onclick="printPlatformStatement()">🖨️ طباعة كشف الحساب</button>`;
     }catch(e){ R.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
+  }
+  function togglePlatformOrderSelect(orderId, checked){
+    if(!window.__platformSelected) window.__platformSelected = new Set();
+    if(checked) window.__platformSelected.add(orderId); else window.__platformSelected.delete(orderId);
+    // بس نحدّث زر التسديد وعدّاده بدون ما نعيد بناء الجدول كامل (يفقد التحديد الحالي)
+    const btn = document.querySelector('[onclick^="settleSelectedPlatformOrders"]');
+    if(btn) btn.textContent = `✅ تسديد المحدد (${window.__platformSelected.size})`;
+  }
+  // 🆕 تسديد الطلبات المحددة من منصة توصيل: يعلّمهم "مسدد" ويحط الصافي (بعد خصم العمولة)
+  // على رأس المال دفعة وحدة — بالضبط زي طلب المستخدم
+  async function settleSelectedPlatformOrders(platformId, platformName, commissionPct){
+    const sel = window.__platformSelected;
+    if(!sel || !sel.size){ toast('⚠️ حدد طلب واحد على الأقل من الجدول'); return; }
+    if(!lockSubmit('settlePlatform')) return;
+    setTimeout(()=>unlockSubmit('settlePlatform'), 4000);
+    try{
+      const ids = [...sel];
+      const { data: os, error } = await db.from('orders').select('id, total').in('id', ids);
+      if(error){ toast('✗ '+error.message); return; }
+      const gross = (os||[]).reduce((a,o)=>a+parseFloat(o.total||0),0);
+      const commission = gross * (parseFloat(commissionPct)||0)/100;
+      const net = gross - commission;
+      if(!confirm(`تأكيد تسديد ${ids.length} طلب من "${platformName}"؟\n\nالإجمالي: ${fmt(gross)} ${CURRENCY}\nالعمولة: ${fmt(commission)} ${CURRENCY}\nالصافي يلي رح ينزل على رأس المال: ${fmt(net)} ${CURRENCY}`)) return;
+      const { error: updErr } = await db.from('orders').update({ platform_paid: true }).in('id', ids);
+      if(updErr){ toast('✗ '+updErr.message); return; }
+      await addCapitalTx(+net, 'platform_settlement', null, 'تحصيل '+platformName+' — '+ids.length+' طلب');
+      window.__platformSelected = new Set();
+      toast('✓ اتسددت الطلبات ونزل الصافي على رأس المال');
+      runPlatformStatement(platformId, platformName);
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
   function printPlatformStatement(){
     const d = window.__lastStatementData; if(!d) return;
