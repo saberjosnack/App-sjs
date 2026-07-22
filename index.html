@@ -480,7 +480,7 @@
     <!-- ===== الطلبات ===== -->
     <section id="v-day" class="hidden">
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px" id="dayQuickFilters">
-        <button class="mini ok" style="background:var(--ok);color:#fff" onclick="window.__dayFrom=null;window.__dayTo=null;loadDay();toast('🔄 تحديث')">🔄 تحديث الآن</button>
+        <button class="mini ok" id="dayAutoRefreshBtn" style="background:var(--ok);color:#fff" onclick="toggleDayAutoRefresh()">🔄 تحديث تلقائي: متوقف</button>
         <button class="mini ok" onclick="setDayFilter('today')">📅 اليوم</button>
         <button class="mini tog" onclick="setDayFilter('yesterday')">📅 البارحة</button>
         <button class="mini tog" onclick="setDayFilter('week')">📅 هذا الأسبوع</button>
@@ -503,7 +503,7 @@
       </div>
       <div id="dayDateLabel" style="font-weight:900;color:var(--maroon);margin-bottom:8px;font-size:.9rem"></div>
       <div class="search-bar hidden" id="invSearchBar">
-        <input id="invSearch" placeholder="🔍 بحث عن فاتورة: رقم الطلب / رقم الهاتف / اسم العميل" onkeydown="if(event.key==='Enter')searchInvoices()">
+        <input id="invSearch" placeholder="🔍 بحث: رقم الطلب / رقم الهاتف / اسم العميل / ملاحظة الطلب (رقم طلب منصة توصيل)" onkeydown="if(event.key==='Enter')searchInvoices()">
         <button class="mini ok" style="padding:10px 20px" onclick="searchInvoices()">بحث</button>
         <button class="mini tog" style="padding:10px 16px" onclick="document.getElementById('invSearch').value='';loadDay()">✗</button>
       </div>
@@ -654,34 +654,6 @@
   const db = supabase.createClient(SB_URL, SB_KEY);
 
   let ME = null;
-  // 🆕 دور "مشاهد فقط" (viewer) — يشوف كل شاشات وتقارير النظام متل المدير بالضبط،
-  // بس أي عملية كتابة (إضافة/تعديل/حذف) بأي جدول بتنحظر تلقائيًا من هون — مكان واحد
-  // موحّد بدل ما نعتمد على كل شاشة بالتطبيق تتأكد بنفسها (احتمال ينسى مكان وتصير ثغرة).
-  function makeBlockedQuery(){
-    const result = { data: null, error: { message: 'حساب مشاهدة فقط — التعديل غير مسموح' } };
-    const handler = {
-      get(target, prop){
-        if(prop === 'then') return (resolve) => resolve(result);
-        if(prop === 'catch' || prop === 'finally') return () => proxy;
-        return () => proxy; // أي استدعاء تسلسلي (select/eq/single...) بيرجع نفس الكائن الفارغ
-      }
-    };
-    const proxy = new Proxy(function(){}, handler);
-    return proxy;
-  }
-  const _dbFrom = db.from.bind(db);
-  db.from = function(table){
-    const builder = _dbFrom(table);
-    if(!(ME && ME.role==='viewer')) return builder;
-    ['insert','update','upsert','delete'].forEach(m=>{
-      builder[m] = function(...args){
-        console.warn('🔒 blocked write attempt (viewer role):', table, m);
-        toast('🔒 حساب مشاهدة فقط — ما فيك تعمل أي تعديل');
-        return makeBlockedQuery();
-      };
-    });
-    return builder;
-  };
   let BRANCHES = [], CATS = [], ITEMS = [], STAFF = [], CUSTOMERS = [], SETTINGS = {};
   // 🔒 حماية من النقر المزدوج — لو المستخدم كبس زر حفظ مرتين بسرعة (جرد، مصاريف، سلف...)،
   // ما بيسمح بتنفيذ نفس العملية مرتين بالتوازي. استخدم: if(!lockSubmit('key')) return; ... finally{ unlockSubmit('key'); }
@@ -742,7 +714,7 @@
   const toast = m => { const t=$('toast'); t.textContent=m; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),2400); };
   const TYPE_AR = { takeaway:'استلام', delivery:'توصيل', dine_in:'صالة' };
   const PAY_AR = { cash:'كاش', card:'كرت', cliq:'كليك' };
-  const ROLE_AR = { admin:'مدير', cashier:'كاشير', callcenter:'كول سنتر', kitchen:'مطبخ', viewer:'🕶️ مشاهد فقط' };
+  const ROLE_AR = { admin:'مدير', cashier:'كاشير', callcenter:'كول سنتر', kitchen:'مطبخ' };
   PAY_AR['platform'] = 'ذمم (تطبيق)';
   PAY_AR['employee_tab'] = 'ذمم موظف';
   PAY_AR['split'] = 'حساب مقطوع';
@@ -1173,7 +1145,6 @@
       <div class="tbl-wrap"><table class="tbl">
         <tr><th>الدور</th><th>عدد الصلاحيات</th><th>النوع</th><th></th></tr>
         <tr><td><b>👑 مالك</b></td><td>الكل (${allPermKeys.length})</td><td>أساسي — ثابت</td><td>—</td></tr>
-        <tr><td><b>🕶️ مشاهد فقط</b></td><td>يشوف كل شي — كل الشاشات والتقارير</td><td>أساسي — ثابت (بدون أي تعديل مهما كانت الصلاحيات)</td><td>—</td></tr>
         <tr><td><b>🧾 كاشير</b></td><td>${(ROLE_DEFAULT_PERMS.cashier||[]).length}</td><td>أساسي</td>
           <td><button class="mini edit" onclick="roleForm(null,'cashier')">تعديل الصلاحيات</button></td></tr>
         <tr><td><b>📞 كول سنتر</b></td><td>${(ROLE_DEFAULT_PERMS.callcenter||[]).length}</td><td>أساسي</td>
@@ -1241,9 +1212,6 @@
   function perm(key){
     if(!ME) return false;
     if(ME.role==='admin') return true;                       // المالك: كل شي دائمًا
-    // 🆕 دور "مشاهد فقط": نعامله متل المدير من ناحية العرض/الرؤية بس — يشوف كل الشاشات
-    // والأزرار، بس أي عملية كتابة فعلية بتنحظر مركزيًا من db.from() (فوق بأول الملف)
-    if(ME.role==='viewer') return true;
     const p = ME.permissions;
     if(p && typeof p === 'object' && key in p) return !!p[key];  // مخصص لهاد الموظف تحديدًا
     if(ME.role==='custom' && ME.role_id){
@@ -1320,23 +1288,12 @@
   }
 
   const APP_VERSION = 'SJS-POS 1.0';
-  // 🔧 طبقة حفظ ثالثة بالكوكيز (عمر طويل) — أحيانًا أداة تنظيف المتصفح أو Safari بتمسح
-  // localStorage و/أو IndexedDB بس مش الكوكيز، فهاي بتزيد فرصة استرجاع نفس معرّف الجهاز
-  function getCookie(name){
-    const m = document.cookie.match('(^|;)\\s*'+name+'\\s*=\\s*([^;]+)');
-    return m ? decodeURIComponent(m.pop()) : null;
-  }
-  function setCookie(name, value){
-    const d = new Date(); d.setFullYear(d.getFullYear()+5);
-    document.cookie = name+'='+encodeURIComponent(value)+';expires='+d.toUTCString()+';path=/;SameSite=Lax';
-  }
   function getDeviceId(){
-    let id = localStorage.getItem('sjs_device_id') || getCookie('sjs_device_id');
+    let id = localStorage.getItem('sjs_device_id');
     if(!id){
       id = 'dev-' + (crypto.randomUUID ? crypto.randomUUID() : (Date.now()+'-'+Math.random().toString(36).slice(2)));
+      localStorage.setItem('sjs_device_id', id);
     }
-    localStorage.setItem('sjs_device_id', id);
-    setCookie('sjs_device_id', id);
     // 🔧 نخزّن نسخة احتياطية بـIndexedDB كمان — أحيانًا مسح الكاش أو "مسح بيانات الموقع" بيمسح
     // localStorage بس مش IndexedDB (أو العكس)، فهيك بنقلل احتمال إنه الجهاز "ينسى نفسه" ويصير
     // النظام يعتبره جهاز جديد بالغلط رغم إنه نفس الجهاز فعليًا
@@ -1353,17 +1310,14 @@
   // 🔧 محاولة استرجاع معرف الجهاز من IndexedDB لو localStorage انمسح بالغلط — نشغّلها مرة وحدة بالإقلاع
   (function restoreDeviceIdFromIndexedDB(){
     try{
-      // لو موجود بالكوكيز بس مش بـlocalStorage (مسحوا الكاش بس مش الكوكيز)، نرجّعه فورًا
-      const cookieId = getCookie('sjs_device_id');
-      if(cookieId && !localStorage.getItem('sjs_device_id')){ localStorage.setItem('sjs_device_id', cookieId); }
-      if(localStorage.getItem('sjs_device_id')) return; // موجود أصلًا بمكان تاني، ما في داعي نرجع نجيبه
+      if(localStorage.getItem('sjs_device_id')) return; // موجود أصلًا، ما في داعي نرجع نجيبه
       const req = indexedDB.open('sjs_device_store', 1);
       req.onupgradeneeded = () => req.result.createObjectStore('kv');
       req.onsuccess = () => {
         try{
           const tx = req.result.transaction('kv','readonly');
           const getReq = tx.objectStore('kv').get('device_id');
-          getReq.onsuccess = () => { if(getReq.result){ localStorage.setItem('sjs_device_id', getReq.result); setCookie('sjs_device_id', getReq.result); } };
+          getReq.onsuccess = () => { if(getReq.result) localStorage.setItem('sjs_device_id', getReq.result); };
         }catch(e){}
       };
     }catch(e){}
@@ -1718,7 +1672,7 @@
   };
   async function doStartShift(openingValue, openingCard, openingCliq){
     const _bsel = document.getElementById('branchSel')?.value;
-    const isBranchFree = ME.role==='admin' || ME.role==='callcenter' || ME.role==='viewer';
+    const isBranchFree = ME.role==='admin' || ME.role==='callcenter';
     const branch_id = isBranchFree ? (_bsel || null) : (ME.branch_id || _bsel || null);
 
     try {
@@ -2413,7 +2367,7 @@
     const orderNote = document.getElementById('orderNote')?.value.trim()||'';
     // 🔒 مهم: الإدارة والسنتر ما بيتقيّدوا بفرعهم المسجّل بحسابهم إطلاقًا (حتى لو محدد بالغلط) —
     // دايمًا بيعتمدوا على القائمة يلي يختاروها يدويًا، عشان يقدروا يطلبوا لأي فرع بيدهم
-    const isBranchFree = ME.role==='admin' || ME.role==='callcenter' || ME.role==='viewer';
+    const isBranchFree = ME.role==='admin' || ME.role==='callcenter';
     const branchId = isBranchFree ? (document.getElementById('branchSel')?.value || BRANCHES[0]?.id) : (ME.branch_id || document.getElementById('branchSel')?.value || BRANCHES[0]?.id);
     const ticketData = {
       cart: cart.map(l=>({ itemId:l.item.id, name:l.item.name_ar, price:l.item.price, qty:l.qty, note:l.note||'', noteBy:l.noteBy||null })),
@@ -3704,6 +3658,11 @@
           orders = r.data||[];
         }
       }
+      if(!orders.length){
+        // 🔍 بحث بملاحظة الطلب — مفيد لما يكون مسجّل فيها رقم طلب منصة توصيل (طلبات/جاهز) للمطابقة المالية
+        const r = await db.from('orders').select(sel).ilike('notes', `%${q}%`).order('created_at',{ascending:false}).limit(50);
+        orders = r.data||[];
+      }
       DAY = orders;
       if(!orders.length){ L.innerHTML = '<div class="empty-note">ما في نتائج لـ"'+esc(q)+'"</div>'; return; }
       L.innerHTML = `<div style="font-weight:800;color:var(--muted);margin-bottom:8px">نتائج البحث: ${orders.length} فاتورة — اضغط على أي سطر للتفاصيل</div>
@@ -3790,6 +3749,19 @@
     window.__dayFrom=from; window.__dayTo=to;
     if(lbl) lbl.textContent=label;
     loadDay();
+  }
+  let __dayAutoRefreshTimer = null;
+  function toggleDayAutoRefresh(){
+    const btn = document.getElementById('dayAutoRefreshBtn');
+    if(__dayAutoRefreshTimer){
+      clearInterval(__dayAutoRefreshTimer); __dayAutoRefreshTimer = null;
+      if(btn){ btn.textContent = '🔄 تحديث تلقائي: متوقف'; btn.style.background = 'var(--ok)'; }
+    } else {
+      loadDay(); // تحديث فوري أول ما نفعّل
+      __dayAutoRefreshTimer = setInterval(loadDay, 20000); // كل 20 ثانية
+      if(btn){ btn.textContent = '🟢 تحديث تلقائي: شغال (كل 20ث)'; btn.style.background = 'var(--maroon)'; }
+      toast('🔄 التحديث التلقائي شغال الآن');
+    }
   }
   async function loadDay(){
     try {
@@ -4433,12 +4405,8 @@
     const p = __drPicker;
     if(!p.start){ toast('⚠️ اختر تاريخ أول'); return; }
     const start = p.start, end = p.end||p.start;
-    // 🔧 إصلاح: كان يقتطع اليوم من منتصف الليل لمنتصف الليل (00:00 → 23:59)، بدل ما يحترم
-    // "اليوم المالي" الفعلي للمطعم (10 صباحًا → 3 فجرًا اليوم التالي) — يلي بيخلي مبيعات الفترة
-    // المتأخرة (بعد نص الليل لغاية 3ص) تنحسب على اليوم الغلط.
-    const fromIso = new Date(start.getFullYear(),start.getMonth(),start.getDate(),FIN_START_H,0,0).toISOString();
-    const endNext = new Date(end.getFullYear(),end.getMonth(),end.getDate()+1);
-    const toIso = new Date(endNext.getFullYear(),endNext.getMonth(),endNext.getDate(),FIN_END_H,0,0).toISOString();
+    const fromIso = new Date(start.getFullYear(),start.getMonth(),start.getDate(),0,0,0).toISOString();
+    const toIso = new Date(end.getFullYear(),end.getMonth(),end.getDate(),23,59,59).toISOString();
     const label = start.toDateString()===end.toDateString() ? fmtDrDate(start) : (fmtDrDate(start)+' → '+fmtDrDate(end));
     if(p.scope==='sales'){
       _curFrom=fromIso; _curTo=toIso;
@@ -4795,7 +4763,7 @@
     platforms:'platforms_view', empmeals:'empmeals_view', topcust:'topcust_view', waste:'waste_log', suppliers:'purchases_view',
   };
   function canAccessAdminTab(tabKey){
-    if(isAdmin() || (ME && ME.role==='viewer')) return true;
+    if(isAdmin()) return true;
     const req = ADMIN_TAB_PERM[tabKey];
     if(req==='admin_only' || !req) return false;
     return perm(req);
@@ -5253,11 +5221,8 @@
       SH_LIST = data||[];
       // مبيعات كل شيفت
       for(const sh of SH_LIST){
-        const { data: os } = await db.from('orders').select('total, discount, status, order_type, delivery_fee').eq('shift_id', sh.id);
-        // 🔧 إصلاح: كان يحسب مبيعات الموظف = total الطلب شامل رسوم التوصيل، فبيطلع رقم أعلى
-        // من "صافي المبيعات" بتقرير الأرباح (يلي صح — رسوم التوصيل مش إيراد أصناف حقيقي).
-        // هلأ استثنينا رسوم التوصيل هون كمان عشان الرقمين يتطابقوا بكل الشاشات.
-        sh.__sales = (os||[]).filter(o=>o.status!=='cancelled').reduce((a,o)=>a+parseFloat(o.total||0)-(o.order_type==='delivery'?parseFloat(o.delivery_fee||0):0),0);
+        const { data: os } = await db.from('orders').select('total, discount, status').eq('shift_id', sh.id);
+        sh.__sales = (os||[]).filter(o=>o.status!=='cancelled').reduce((a,o)=>a+parseFloat(o.total||0),0);
         sh.__orders = (os||[]).filter(o=>o.status!=='cancelled').length;
         sh.__discount = (os||[]).filter(o=>o.status!=='cancelled').reduce((a,o)=>a+parseFloat(o.discount||0),0);
       }
@@ -6160,14 +6125,7 @@
       await addTreasuryTx(payStatus, -total, 'purchase', pur.id, 'فاتورة شراء — '+sup, isAllBranches ? null : window.__purchaseBranchId);
       await db.from('supplier_payments').insert({ supplier:sup, amount:total, account:payStatus, purchase_id:pur.id, branch_id: isAllBranches?null:window.__purchaseBranchId, note:'دفع كامل وقت الفاتورة', created_by: ME.full_name });
     }
-    // 🔧 إصلاح: كان الكود يحفظ بنود الفاتورة (المواد) بدون ما يتأكد من نجاح العملية —
-    // لو صار خطأ (اتصال، صلاحيات...)، الفاتورة الأساسية كانت تنحفظ بمجموعها الصحيح، بس
-    // بنود المواد تضيع بصمت بدون أي رسالة خطأ — وهاد سبب ظهور فواتير بمجموع صحيح وجدول مواد فاضي.
-    const { error: itemsErr } = await db.from('purchase_items').insert(items.map(x=>({...x,purchase_id:pur.id})));
-    if(itemsErr){
-      toast('⚠️ الفاتورة اتسجلت بس بنود المواد ما اتسجلت! السبب: '+itemsErr.message);
-      console.error('purchase_items insert failed:', itemsErr);
-    }
+    await db.from('purchase_items').insert(items.map(x=>({...x,purchase_id:pur.id})));
     for(const it of items){
       const {data:ing}=await db.from('ingredients').select('stock').eq('id',it.ingredient_id).single();
       await db.from('ingredients').update({stock:(parseFloat(ing?.stock||0)+it.quantity),unit_cost:it.unit_cost}).eq('id',it.ingredient_id);
@@ -6184,6 +6142,60 @@
   }
 
   /* ---- تقارير موسعة ---- */
+  async function diagnoseCompositeCost(){
+    const compositeItems = ITEMS.filter(i=>i.item_type==='composite');
+    modal(`<h3>🔍 تشخيص تكلفة صنف مركّب</h3>
+      <div class="fld"><label>اختر الصنف</label>
+        <select id="dcc_sel">${compositeItems.map(i=>`<option value="${i.id}">${esc(i.name_ar)}</option>`).join('')}</select>
+      </div>
+      <div class="m-act"><button class="save" onclick="runDiagnoseCompositeCost()">🔍 افحص</button><button class="cancel" onclick="closeModal()">إغلاق</button></div>
+      <div id="dcc_result" style="margin-top:14px"></div>`);
+  }
+  async function runDiagnoseCompositeCost(){
+    const itemId = document.getElementById('dcc_sel')?.value; if(!itemId) return;
+    const result = document.getElementById('dcc_result');
+    result.innerHTML = '... جاري الفحص';
+    try{
+      const [fixedRes, groupsRes] = await Promise.all([
+        db.from('composite_fixed').select('*').eq('menu_item_id', itemId),
+        db.from('composite_groups').select('*, composite_options(*)').eq('menu_item_id', itemId),
+      ]);
+      const fixed = fixedRes.data||[];
+      const groups = groupsRes.data||[];
+      const allComponentIds = [...new Set([
+        ...fixed.map(f=>f.component_item_id),
+        ...groups.flatMap(g=>(g.composite_options||[]).map(o=>o.component_item_id)),
+      ])].filter(Boolean);
+      const { data: recipesData } = await db.from('recipes').select('menu_item_id, recipe_items(quantity, ingredients(name, unit_cost))').in('menu_item_id', allComponentIds.length?allComponentIds:['00000000-0000-0000-0000-000000000000']);
+      const nameOf = id => ITEMS.find(i=>i.id===id)?.name_ar || '—';
+      let html = `<div style="font-weight:900;color:var(--maroon);margin-bottom:8px">🔒 المكونات الثابتة (composite_fixed) — دايمًا موجودة بكل طلب</div>`;
+      if(!fixed.length) html += `<div class="empty-note">ما في مكونات ثابتة مسجّلة لهاد الصنف!</div>`;
+      let totalFixedCost = 0;
+      fixed.forEach(f=>{
+        const r = recipesData?.find(rd=>rd.menu_item_id===f.component_item_id);
+        const unitCost = r ? (r.recipe_items||[]).reduce((a,ri)=>a+parseFloat(ri.quantity||0)*parseFloat(ri.ingredients?.unit_cost||0),0) : null;
+        const lineCost = (unitCost||0)*(f.qty||0);
+        totalFixedCost += lineCost;
+        html += `<div style="background:#fff;border-radius:8px;padding:8px 12px;margin-bottom:6px;font-size:.85rem">
+          <b>${esc(nameOf(f.component_item_id))}</b> — الكمية بالوجبة: ${f.qty}
+          ${unitCost===null?' — <span style="color:var(--red)">⚠️ ما لقيتلها وصفة (recipes) إطلاقًا، تكلفتها بتنحسب صفر!</span>' : ` — تكلفة الوحدة: ${fmt(unitCost)} — الإجمالي: <b style="color:var(--red)">${fmt(lineCost)}</b>`}
+        </div>`;
+      });
+      html += `<div style="font-weight:900;color:var(--maroon);margin:14px 0 8px">🔀 المجموعات القابلة للاختيار (composite_groups)</div>`;
+      if(!groups.length) html += `<div class="empty-note">ما في مجموعات اختيار لهاد الصنف — يبقى كل التكلفة من الثابت بس فوق</div>`;
+      groups.forEach(g=>{
+        html += `<div style="background:#fff8e1;border-radius:8px;padding:8px 12px;margin-bottom:6px;font-size:.85rem">
+          <b>${esc(g.name||'مجموعة')}</b> — الحد الأقصى للاختيار: ${g.max_select ?? '—'}<br>
+          الخيارات المتاحة: ${(g.composite_options||[]).map(o=>esc(nameOf(o.component_item_id))).join('، ')||'—'}
+        </div>`;
+      });
+      html += `<div style="background:#e8f5ff;border-radius:10px;padding:10px 12px;margin-top:10px;font-weight:800">
+        💡 مجموع تكلفة الثابت لحاله: ${fmt(totalFixedCost)} ${CURRENCY}<br>
+        <span style="font-weight:600;font-size:.8rem;color:var(--muted)">تكلفة المجموعات القابلة للاختيار بتتحدد فعليًا حسب شو العميل اختار بكل طلب — مش رقم ثابت، فبتختلف من طلب لطلب حسب الاختيار.</span>
+      </div>`;
+      result.innerHTML = html;
+    }catch(e){ result.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
+  }
   async function renderFixedCosts(){
     const { data, error } = await db.from('fixed_costs').select('*, branches(name_ar)').order('created_at',{ascending:false});
     if(error){ modal(`<h3>🏢 التكاليف الثابتة</h3><div class="alert-red">⚠️ ${esc(error.message||'الجدول fixed_costs غير موجود — نفّذ SQL أولاً')}</div><div class="m-act"><button class="cancel" onclick="closeModal()">إغلاق</button></div>`); return; }
@@ -6395,32 +6407,21 @@
       let itemProfitList = [];
       try{
         const soldItemIds = {}, soldItemRevenue = {};
-        // 🔧 إصلاح: قبل كنا نحدد "هل هاد الصنف مركّب؟" بالاعتماد على قائمة ITEMS المحفوظة
-        // بالذاكرة (item_type==='composite') — لو هاي القائمة قديمة (مثلاً الصنف انعدّل/انضاف
-        // بنفس الجلسة بدون تحديث الصفحة)، الكود كان "ينسى" إنه مركّب ويتجاهل تكلفته بالكامل
-        // (تكلفة = صفر). هلأ منحدد الأصناف المركبة مباشرة من قاعدة البيانات (composite_fixed +
-        // وجود composition فعلي بالطلب نفسه) — مش من نسخة محفوظة بالذاكرة ممكن تكون قديمة.
-        const rawOrderLines = []; // {menuItemId, qty, composition}
+        const compositeOrderLines = []; // {menuItemId, qty, composition}
         ok.forEach(o=>(o.order_items||[]).forEach(oi=>{
           soldItemIds[oi.menu_item_id] = (soldItemIds[oi.menu_item_id]||0) + parseFloat(oi.quantity||0);
           soldItemRevenue[oi.menu_item_id] = (soldItemRevenue[oi.menu_item_id]||0) + parseFloat(oi.quantity||0)*parseFloat(oi.unit_price||0);
-          rawOrderLines.push({ menuItemId: oi.menu_item_id, qty: parseFloat(oi.quantity||0), composition: oi.composition||[] });
+          const isComposite = ITEMS.find(i=>i.id===oi.menu_item_id)?.item_type==='composite';
+          if(isComposite) compositeOrderLines.push({ menuItemId: oi.menu_item_id, qty: parseFloat(oi.quantity||0), composition: oi.composition||[] });
         }));
         const itemIds = Object.keys(soldItemIds);
         if(itemIds.length){
+          const compositeIds = [...new Set(compositeOrderLines.map(l=>l.menuItemId))];
           const [{ data: recipesData }, { data: itemsData }, fixedRes] = await Promise.all([
             db.from('recipes').select('menu_item_id, recipe_items(quantity, ingredients(unit_cost))').in('menu_item_id', itemIds),
             db.from('menu_items').select('id, name_ar').in('id', itemIds),
-            db.from('composite_fixed').select('menu_item_id, component_item_id, qty').in('menu_item_id', itemIds),
+            compositeIds.length ? db.from('composite_fixed').select('menu_item_id, component_item_id, qty').in('menu_item_id', compositeIds) : Promise.resolve({data:[]}),
           ]);
-          // ⚠️ لو صار خطأ بجلب مكونات الوجبات المركبة، لازم نعرف — قبل كان بيختفي بصمت وتطلع التكلفة صفر بالغلط
-          if(fixedRes.error) console.warn('⚠️ composite_fixed fetch error:', fixedRes.error.message);
-          // صنف يُعتبر "مركّب" إذا: عنده مكونات ثابتة مسجّلة بقاعدة البيانات، أو أي طلب فعلي إله بيانات composition
-          const compositeIdSet = new Set([
-            ...(fixedRes.data||[]).map(f=>f.menu_item_id),
-            ...rawOrderLines.filter(l=>l.composition && l.composition.length).map(l=>l.menuItemId),
-          ]);
-          const compositeOrderLines = rawOrderLines.filter(l=>compositeIdSet.has(l.menuItemId));
           const nameMap = {}; (itemsData||[]).forEach(i=>nameMap[i.id]=i.name_ar);
           const recipeCostMap = {}; // menu_item_id -> تكلفة الوحدة من وصفته المباشرة (للأصناف العادية والمكونات الفرعية)
           (recipesData||[]).forEach(r=>{
@@ -6433,44 +6434,26 @@
             ...compositeOrderLines.flatMap(l=>(l.composition||[]).map(c=>c.component_item_id)),
           ])].filter(id=>id && !(id in recipeCostMap));
           if(componentIds.length){
-            const { data: compRecipes, error: compRecipesErr } = await db.from('recipes').select('menu_item_id, recipe_items(quantity, ingredients(unit_cost))').in('menu_item_id', componentIds);
-            if(compRecipesErr) console.warn('⚠️ component recipes fetch error:', compRecipesErr.message);
+            const { data: compRecipes } = await db.from('recipes').select('menu_item_id, recipe_items(quantity, ingredients(unit_cost))').in('menu_item_id', componentIds);
             (compRecipes||[]).forEach(r=>{
               recipeCostMap[r.menu_item_id] = (r.recipe_items||[]).reduce((a,ri)=>a+parseFloat(ri.quantity||0)*parseFloat(ri.ingredients?.unit_cost||0),0);
             });
           }
-          // 🔧 إصلاح: أي صنف (عادي أو مكوّن داخل وجبة مركّبة) ما إله وصفة أبدًا بجدول recipes —
-          // بدل ما نعتبر تكلفته صفر بصمت، نرجع لحقل "التكلفة" اليدوي المسجّل على الصنف نفسه (menu_items.cost) كبديل
-          const stillMissing = [...new Set([...itemIds, ...componentIds])].filter(id=>!(id in recipeCostMap));
-          if(stillMissing.length){
-            const { data: manualCostItems } = await db.from('menu_items').select('id, cost').in('id', stillMissing);
-            (manualCostItems||[]).forEach(m=>{ if(m.cost!=null && parseFloat(m.cost)>0) recipeCostMap[m.id] = parseFloat(m.cost); });
-          }
           // تكلفة كل وحدة وجبة مركّبة = مجموع تكلفة مكوناتها الثابتة + مكوناتها المختارة فعليًا (بمتوسط الطلبات)
-          // وبنفس الوقت نتتبع لو أي مكوّن فيها لسا تكلفته مجهولة تمامًا (لا وصفة ولا تكلفة يدوية) للتحذير عنه
-          const compositeCostTotal = {}, compositeCostCount = {}, compositeMissingData = {};
+          const compositeCostTotal = {}, compositeCostCount = {};
           compositeOrderLines.forEach(l=>{
-            let unitCost = 0, missing = false;
-            (fixedRes.data||[]).filter(f=>f.menu_item_id===l.menuItemId).forEach(f=>{
-              if(!(f.component_item_id in recipeCostMap)) missing = true;
-              unitCost += (f.qty||0) * (recipeCostMap[f.component_item_id]||0);
-            });
-            (l.composition||[]).forEach(c=>{
-              if(!(c.component_item_id in recipeCostMap)) missing = true;
-              unitCost += (c.qty||0) * (recipeCostMap[c.component_item_id]||0);
-            });
+            let unitCost = 0;
+            (fixedRes.data||[]).filter(f=>f.menu_item_id===l.menuItemId).forEach(f=>{ unitCost += (f.qty||0) * (recipeCostMap[f.component_item_id]||0); });
+            (l.composition||[]).forEach(c=>{ unitCost += (c.qty||0) * (recipeCostMap[c.component_item_id]||0); });
             compositeCostTotal[l.menuItemId] = (compositeCostTotal[l.menuItemId]||0) + unitCost*l.qty;
             compositeCostCount[l.menuItemId] = (compositeCostCount[l.menuItemId]||0) + l.qty;
-            if(missing) compositeMissingData[l.menuItemId] = true;
           });
           itemIds.forEach(id=>{
             const qty = soldItemIds[id]||0;
             const revenue = soldItemRevenue[id]||0;
             const isComposite = id in compositeCostTotal;
             const itemCogs = isComposite ? compositeCostTotal[id] : (recipeCostMap[id]!==undefined ? recipeCostMap[id]*qty : 0);
-            // 🔧 إصلاح: الوجبة المركّبة ما عادت تُعتبر "عندها وصفة كاملة" تلقائيًا —
-            // لازم كل مكوناتها (ثابتة + مختارة) تكون معروفة التكلفة فعلًا حتى تختفي علامة التحذير
-            const hasRecipe = isComposite ? !compositeMissingData[id] : recipeCostMap[id]!==undefined;
+            const hasRecipe = isComposite || recipeCostMap[id]!==undefined;
             cogs += itemCogs;
             itemProfitList.push({ name: nameMap[id]||'—', qty, revenue, cost: itemCogs, profit: revenue-itemCogs, margin: revenue>0?Math.round((revenue-itemCogs)/revenue*100):0, hasRecipe });
           });
@@ -6507,6 +6490,7 @@
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
         <button class="mini ok" style="background:var(--maroon)" onclick="renderFixedCosts()">🏢 إدارة التكاليف الثابتة</button>
+        <button class="mini edit" onclick="diagnoseCompositeCost()">🔍 تشخيص تكلفة صنف مركّب</button>
         <button class="mini ok" onclick="printProfitDetailPDF()">📄 طباعة تقرير مفصل</button>
       </div>
       <div style="color:var(--muted);font-size:.78rem;font-weight:600">💡 سلسلة الحساب: صافي المبيعات − تكلفة البضاعة المستهلكة (COGS) − تكلفة العمالة − الهدر − المصاريف − نصيب الفترة من التكاليف الثابتة = صافي الربح. (المشتريات معروضة للمرجعية بس — ما بتنخصم لحالها عشان ما نكرر خصم نفس التكلفة مرتين؛ COGS هي يلي بتحسب فعليًا شو انباع)</div>
@@ -6669,20 +6653,6 @@
   /* ---- عرض مخزون الفروع ---- */
   async function doInventory(branchId, branchName){
     await loadIngredients();
-    // 🆕 حماية استباقية من تكرار الجرد: قبل ما نفتح شاشة العدّ، نتأكد ما في جرد سبق وسُجّل
-    // لنفس الفرع باليوم المالي الحالي — عشان نمنع المشكلة قبل ما تصير (موظفين اتنين يجردوا
-    // بالغلط) بدل ما نصلّحها بعدين وقت الحذف
-    try{
-      const fd = getFinancialDay();
-      const { data: existingAudits } = await db.from('inventory_audits').select('staff_name, created_at')
-        .eq('branch_id', branchId).gte('created_at', fd.from).lte('created_at', fd.to)
-        .order('created_at', {ascending:false}).limit(1);
-      if(existingAudits && existingAudits.length){
-        const prev = existingAudits[0];
-        const proceed = confirm(`⚠️ تنبيه: في جرد سبق وتسجّل لفرع "${branchName}" اليوم (بواسطة ${prev.staff_name||'—'}، الساعة ${new Date(prev.created_at).toLocaleTimeString('ar-JO')}).\n\nعمل جرد ثاني بنفس اليوم بيلخبط أرقام المخزون إذا مش مقصود (موظفين جردوا مرتين بالغلط).\n\nمتأكد إنك بدك تكمل وتعمل جرد جديد؟`);
-        if(!proceed) return;
-      }
-    }catch(e){ console.error('duplicate audit check failed:', e); }
     const {data:inv}=await db.from('branch_inventory').select('*, ingredients(name,unit)').eq('branch_id',branchId);
     const rows=(inv||[]).map(i=>({
       id:i.id, ingId:i.ingredient_id, name:i.ingredients?.name||'—',
@@ -7181,39 +7151,11 @@
   async function deleteDaAudit(idx){
     const a = (window.__DA_LIST||[])[idx]; if(!a) return;
     if(!isAdmin()){ toast('⛔ صلاحية المالك فقط'); return; }
-    // 🔧 إصلاح: قبل كان الحذف يمسح السجل بس وبيسيب رقم المخزون متل ما هو — يلي بيعمل فرق
-    // حقيقي بالحالة الشائعة: موظفين جردوا نفس الفرع مرتين بالغلط، والمالك بده يحذف
-    // العملية المكررة الغلط ويرجّع المخزون للرقم الصحيح.
-    // منتأكد أول: هل هاد آخر جرد مسجّل لهاد الفرع؟ (نتأكد من قاعدة البيانات مباشرة، مش من القائمة المفلترة بالشاشة)
-    const { data: newerAudits } = await db.from('inventory_audits').select('id')
-      .eq('branch_id', a.branch_id).gt('created_at', a.created_at).limit(1);
-    const isLatestForBranch = !(newerAudits && newerAudits.length);
-    let revertStock = false, fallbackAudit = null;
-    if(isLatestForBranch){
-      const { data: olderAudits } = await db.from('inventory_audits').select('*')
-        .eq('branch_id', a.branch_id).lt('created_at', a.created_at)
-        .order('created_at',{ascending:false}).limit(1);
-      fallbackAudit = (olderAudits && olderAudits[0]) || null;
-      revertStock = confirm(`⚠️ حذف سجل هاد الجرد نهائيًا؟\n\nهاد آخر جرد مسجّل لهاد الفرع — لو صار بالغلط (مثلاً جرد الفرع مرتين بدل مرة)، فيني أرجّع أرقام المخزون الحالية تلقائيًا معه ${fallbackAudit?'لقيم الجرد يلي قبله ('+new Date(fallbackAudit.created_at).toLocaleString('ar-JO')+')':'لقيمها قبل هاد الجرد'}.\n\nاضغط "موافق" للحذف + تصحيح المخزون، أو "إلغاء" للتراجع.`);
-      if(!revertStock) return;
-    } else {
-      if(!confirm('⚠️ حذف سجل هاد الجرد نهائيًا؟\nملاحظة: هاد مش آخر جرد لهاد الفرع — حذفه بيمسح السجل التاريخي بس، وما بيرجّع أرقام المخزون الحالية (هي أصلًا اتغيرت بجرود وحركات لاحقة). لو بدك تصحح رقم غلط، استخدم "✏️ تعديل" بدلها.\nمتابعة؟')) return;
-    }
+    if(!confirm('⚠️ حذف سجل هاد الجرد نهائيًا؟\nملاحظة: هاد بيحذف السجل التاريخي بس — ما بيرجّع أرقام المخزون الحالية لقيمها قبل الجرد (هي أصلًا محدّثة وماشية طبيعي). لو بدك تصحح رقم غلط، استخدم "✏️ تعديل" بدلها.\nمتابعة؟')) return;
     try{
-      if(revertStock){
-        const details = a.details||[];
-        for(const d of details){
-          const fallbackDetail = fallbackAudit ? (fallbackAudit.details||[]).find(x=>x.ingredient_id===d.ingredient_id) : null;
-          const restoreVal = fallbackDetail ? fallbackDetail.actual : d.expected;
-          if(restoreVal==null) continue;
-          const { data: bi } = await db.from('branch_inventory').select('id').eq('branch_id', a.branch_id).eq('ingredient_id', d.ingredient_id).maybeSingle();
-          if(bi) await db.from('branch_inventory').update({ stock: restoreVal }).eq('id', bi.id);
-          else await db.from('branch_inventory').insert({ branch_id: a.branch_id, ingredient_id: d.ingredient_id, stock: restoreVal, min_stock:0 });
-        }
-      }
       const { error } = await db.from('inventory_audits').delete().eq('id', a.id);
       if(error){ toast('✗ '+error.message); return; }
-      toast(revertStock ? '✓ انحذف السجل وتصحّح المخزون' : '✓ انحذف السجل'); renderDailyAudits();
+      toast('✓ انحذف السجل'); renderDailyAudits();
     }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
   function editDaAudit(idx){
@@ -7409,10 +7351,6 @@
     const filterStaff = window.__trFilterStaff||'';
     let filtered = TRANSFERS_DATA;
     if(filterStaff) filtered = filtered.filter(t=>t.created_by===filterStaff);
-    // 🆕 تحديد صفوف معيّنة (تشيك بوكس) — عشان تقدر تطبع تقرير لعمليات نقل محدّدة بس بدل كل الجدول
-    if(!window.__trSelected) window.__trSelected = new Set();
-    const sel = window.__trSelected;
-    const allChecked = filtered.length>0 && filtered.every(t=>sel.has(t.id));
     C.innerHTML = `
       <button class="add-btn" onclick="transferForm()">🔄 طلب نقل بضاعة</button>
       <div class="two" style="margin-bottom:10px">
@@ -7420,13 +7358,11 @@
           <option value="">كل الموظفين</option>
           ${staffNames.map(n=>`<option value="${esc(n)}" ${filterStaff===n?'selected':''}>${esc(n)}</option>`).join('')}
         </select>
-        <button class="mini edit" onclick="printTransfersReport()">🖨️ طباعة تقرير النقل${sel.size?' ('+sel.size+' محدّد)':''}</button>
-        ${sel.size?`<button class="mini tog" onclick="window.__trSelected=new Set();renderTransfers()">✖️ إلغاء التحديد</button>`:''}
+        <button class="mini edit" onclick="printTransfersReport()">🖨️ طباعة تقرير النقل</button>
       </div>
       <div class="tbl-wrap"><table class="tbl">
-        <tr><th><input type="checkbox" ${allChecked?'checked':''} onchange="toggleAllTransferSelect(this.checked)"></th><th>التاريخ والساعة</th><th>المادة</th><th>الكمية</th><th>من</th><th>إلى</th><th>الموظف</th><th>الحالة</th><th>ملاحظة</th><th></th></tr>
+        <tr><th>التاريخ والساعة</th><th>المادة</th><th>الكمية</th><th>من</th><th>إلى</th><th>الموظف</th><th>الحالة</th><th>ملاحظة</th><th></th></tr>
         ${filtered.map((t,idx)=>`<tr>
-          <td><input type="checkbox" ${sel.has(t.id)?'checked':''} onchange="toggleTransferSelect('${t.id}',this.checked)"></td>
           <td>${new Date(t.created_at).toLocaleString('ar-JO')}</td>
           <td><b>${esc(t.ingredients?.name||'—')}</b> <small style="color:var(--muted)">(${esc(t.ingredients?.unit||'')})</small></td>
           <td><b>${t.quantity}</b></td>
@@ -7441,20 +7377,6 @@
           </td>
         </tr>`).join('')||'<tr><td colspan="9" class="empty-note">ما في نقل بضاعة مسجل</td></tr>'}
       </table></div>`;
-  }
-  function toggleTransferSelect(id, checked){
-    if(!window.__trSelected) window.__trSelected = new Set();
-    if(checked) window.__trSelected.add(id); else window.__trSelected.delete(id);
-    renderTransfers();
-  }
-  function toggleAllTransferSelect(checked){
-    if(!window.__trSelected) window.__trSelected = new Set();
-    const filterStaff = window.__trFilterStaff||'';
-    let filtered = TRANSFERS_DATA;
-    if(filterStaff) filtered = filtered.filter(t=>t.created_by===filterStaff);
-    if(checked) filtered.forEach(t=>window.__trSelected.add(t.id));
-    else filtered.forEach(t=>window.__trSelected.delete(t.id));
-    renderTransfers();
   }
   async function deleteTransferRecord(id){
     if(!isAdmin()){ toast('⛔ صلاحية المالك فقط'); return; }
@@ -7854,32 +7776,6 @@
       toast('✓ اتسجلت السلفة'); hrAdvancesView(empId, empName);
     }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
-  // 🆕 جدول موحّد لكل السلف الموافقة/المعطاة وبعدها لسا مش مسددة (status='open') — عبر كل
-  // الموظفين مو فترة الفلتر فقط، عشان ما تنسى ولا سلفة قديمة وما تظل عالقة
-  async function renderHrUnpaidAdvances(){
-    const box = document.getElementById('hrUnpaidAdvBox'); if(!box) return;
-    try{
-      const { data, error } = await db.from('hr_advances').select('*').eq('status','open').order('created_at',{ascending:true});
-      if(error){ box.innerHTML=''; return; }
-      const list = data||[];
-      const total = list.reduce((a,x)=>a+parseFloat(x.amount||0),0);
-      if(!list.length){ box.innerHTML=''; return; }
-      box.innerHTML = `<div class="panel" style="margin-bottom:14px;border:2px solid var(--red)">
-        <h4 style="color:var(--red);margin-bottom:8px">💸 سلف موافقة وغير مسددة بعد (${list.length}) — إجمالي ${fmt(total)} ${CURRENCY}</h4>
-        <div class="tbl-wrap"><table class="tbl">
-          <tr><th>الموظف</th><th>التاريخ</th><th>المبلغ</th><th>الحساب</th><th>ملاحظة</th><th></th></tr>
-          ${list.map(a=>`<tr>
-            <td><b>${esc(a.employee_name)}</b></td>
-            <td>${new Date(a.created_at).toLocaleDateString('ar-JO')}</td>
-            <td><b style="color:var(--red)">${fmt(a.amount)} ${CURRENCY}</b></td>
-            <td>${esc(a.account==='cash'?'💵 كاش':a.account||'—')}</td>
-            <td style="font-size:.8rem;color:var(--muted)">${esc(a.note||'—')}</td>
-            <td><button class="mini ok" onclick="repayHrAdvance('${a.id}','${a.employee_id}','${esc(a.employee_name)}').then(renderHrUnpaidAdvances)">✅ تسديد</button></td>
-          </tr>`).join('')}
-        </table></div>
-      </div>`;
-    }catch(e){ console.error(e); }
-  }
   async function repayHrAdvance(advId, empId, empName){
     if(!confirm('تأكيد تسديد السلفة؟')) return;
     try{
@@ -8005,7 +7901,6 @@
         </table></div>
       </div>`:''}
       <div id="hrAdvReqBox"></div>
-      <div id="hrUnpaidAdvBox"></div>
       <div id="hrDeviceReqBox"></div>
       <div class="panel" style="margin-bottom:14px">
         <h3>🧑‍💼 HR — الرواتب والدوام والوجبات والسلف</h3>
@@ -8027,7 +7922,6 @@
       </div>`;
     renderHrTable();
     renderHrAdvanceRequests();
-    renderHrUnpaidAdvances();
     renderHrDeviceRequests();
   }
   function renderHrTable(){
@@ -8084,33 +7978,15 @@
       </div>`;
     }catch(e){ console.error(e); }
   }
-  // 🆕 إصلاح: قبل كانت الموافقة بتاخد المبلغ المطلوب زي ما هو بدون تعديل — هلأ فيك تعدّل
-  // المبلغ الموافق عليه قبل التأكيد (مثلاً طلب 50، توافق على 20 بس)
-  function approveHrAdvanceRequest(reqId, empId, empName, amount){
-    modal(`<h3>✅ موافقة على سلفة — ${esc(empName)}</h3>
-      <div style="margin-bottom:12px;color:var(--muted);font-size:.9rem">المبلغ يلي طلبه الموظف: <b style="color:var(--maroon)">${fmt(amount)} ${CURRENCY}</b></div>
-      <div class="fld"><label>المبلغ الموافق عليه (فيك تعدّله قبل التأكيد)</label>
-        <input id="advApproveAmt" type="number" step="0.01" value="${amount}" style="border:1.5px solid var(--line);border-radius:10px;padding:10px;width:100%;font-weight:900;font-size:1.1rem">
-      </div>
-      <div class="m-act">
-        <button class="save" onclick="confirmApproveHrAdvance('${reqId}','${empId}','${esc(empName)}',${amount})">تأكيد الموافقة ✓</button>
-        <button class="cancel" onclick="closeModal()">إلغاء</button>
-      </div>`);
-  }
-  async function confirmApproveHrAdvance(reqId, empId, empName, requestedAmount){
-    const approvedAmt = parseFloat(document.getElementById('advApproveAmt').value);
-    if(isNaN(approvedAmt) || approvedAmt<=0){ toast('⚠️ أدخل مبلغ صحيح أكبر من صفر'); return; }
-    const diffNote = Math.abs(approvedAmt-requestedAmount)>0.001;
-    if(!confirm('تأكيد الموافقة على سلفة '+fmt(approvedAmt)+' '+CURRENCY+' لـ'+empName+(diffNote?(' (بدل المبلغ المطلوب '+fmt(requestedAmount)+' '+CURRENCY+')'):'')+'؟')) return;
+  async function approveHrAdvanceRequest(reqId, empId, empName, amount){
+    if(!confirm('تأكيد الموافقة على سلفة '+fmt(amount)+' '+CURRENCY+' لـ'+empName+'؟')) return;
     try{
-      const noteTxt = diffNote ? ('طلب ذاتي من بوابة الموظف — طلب '+fmt(requestedAmount)+' '+CURRENCY+'، تمت الموافقة على '+fmt(approvedAmt)+' '+CURRENCY) : 'طلب ذاتي من بوابة الموظف';
       const { data: adv, error } = await db.from('hr_advances').insert({
-        employee_id: empId, employee_name: empName, amount: approvedAmt, account:'cash', note: noteTxt, status:'open', created_by: ME.full_name
+        employee_id: empId, employee_name: empName, amount, account:'cash', note:'طلب ذاتي من بوابة الموظف', status:'open', created_by: ME.full_name
       }).select().single();
       if(error){ toast('✗ '+error.message); return; }
-      await addCapitalTx(-approvedAmt, 'advance', adv.id, 'سلفة موظف (طلب ذاتي) — '+empName);
+      await addCapitalTx(-amount, 'advance', adv.id, 'سلفة موظف (طلب ذاتي) — '+empName);
       await db.from('hr_advance_requests').update({ status:'approved', approved_by: ME.full_name, approved_at: new Date().toISOString() }).eq('id', reqId);
-      closeModal();
       toast('✓ اتوافق على السلفة'); renderHR();
     }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
@@ -8843,18 +8719,12 @@
     const filterStaff = window.__trFilterStaff||'';
     let filtered = TRANSFERS_DATA;
     if(filterStaff) filtered = filtered.filter(t=>t.created_by===filterStaff);
-    // 🆕 لو في عمليات محدّدة (تشيك بوكس) بالجدول، نطبع هاي بس — غير هيك نطبع كل الجدول المفلتر متل ما كان
-    const sel = window.__trSelected;
-    if(sel && sel.size) filtered = filtered.filter(t=>sel.has(t.id));
-    // 🔧 إصلاح: التقرير كان ناقص عمود "ملاحظة" بالكامل — وهو يلي فيه التفاصيل الحقيقية
-    // لعملية النقل (زي "الكل: 60 قطعة سكلوب، 100 قطعة برجر..."), فكان يطلع ملخص سطر وحد
-    // بس (اسم المادة الرئيسية + الكمية) بدل التفصيل الكامل المطلوب.
     const text = 'تقرير نقل البضاعة\n— Saber Jo Snack —\n════════════════\n'+
-      filtered.map(t=>new Date(t.created_at).toLocaleString('ar-JO')+' — '+(t.ingredients?.name||'—')+' × '+t.quantity+' — من '+t.from_branch_name+' إلى '+t.to_branch_name+' — بواسطة '+(t.created_by||'—')+(t.notes?('\n  📝 '+t.notes):'')+(t.status==='done'?'  [✅ مكتمل]':'  [⏳ معلق]')).join('\n')+'\n';
+      filtered.map(t=>new Date(t.created_at).toLocaleString('ar-JO')+' — '+(t.ingredients?.name||'—')+' × '+t.quantity+' — من '+t.from_branch_name+' إلى '+t.to_branch_name+' — بواسطة '+(t.created_by||'—')).join('\n')+'\n';
     const html = `<html dir="rtl"><head><meta charset="UTF-8"><style>body{font-family:Cairo,Arial;padding:16px}table{width:100%;border-collapse:collapse}td,th{padding:6px;border:1px solid #ccc;text-align:right;font-size:.85rem}</style></head><body>
       <h2>تقرير نقل البضاعة</h2>
-      <table><tr><th>التاريخ</th><th>المادة</th><th>الكمية</th><th>من</th><th>إلى</th><th>الموظف</th><th>الحالة</th><th>ملاحظة (التفصيل الكامل)</th></tr>
-      ${filtered.map(t=>`<tr><td>${new Date(t.created_at).toLocaleString('ar-JO')}</td><td>${esc(t.ingredients?.name||'—')}</td><td>${t.quantity}</td><td>${esc(t.from_branch_name)}</td><td>${esc(t.to_branch_name)}</td><td>${esc(t.created_by||'—')}</td><td>${t.status==='done'?'✅ مكتمل':'⏳ معلق'}</td><td>${esc(t.notes||'—')}</td></tr>`).join('')}
+      <table><tr><th>التاريخ</th><th>المادة</th><th>الكمية</th><th>من</th><th>إلى</th><th>الموظف</th></tr>
+      ${filtered.map(t=>`<tr><td>${new Date(t.created_at).toLocaleString('ar-JO')}</td><td>${esc(t.ingredients?.name||'—')}</td><td>${t.quantity}</td><td>${esc(t.from_branch_name)}</td><td>${esc(t.to_branch_name)}</td><td>${esc(t.created_by||'—')}</td></tr>`).join('')}
       </table></body></html>`;
     printRaw(text, html);
   }
@@ -9886,6 +9756,22 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
     }
   }
   /* ---- كشف حساب منصة بفترة محددة ---- */
+  async function togglePlatformSettled(orderId, checked){
+    try{
+      const { error } = await db.from('orders').update({ platform_settled: checked }).eq('id', orderId);
+      if(error){ toast('✗ '+error.message); return; }
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
+  }
+  async function markAllPlatformSettled(val){
+    const d = window.__lastStatementData; if(!d) return;
+    if(!confirm(val?'⚠️ تعليم كل طلبات هاي الفترة كمسددة؟':'⚠️ إلغاء تعليم كل طلبات هاي الفترة كمسددة؟')) return;
+    try{
+      const ids = d.orders.map(o=>o.id);
+      const { error } = await db.from('orders').update({ platform_settled: val }).in('id', ids);
+      if(error){ toast('✗ '+error.message); return; }
+      toast('✓ اتحدثت'); runPlatformStatement(d.platformId, d.platformName);
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
+  }
   async function showPlatformStatement(platformId, platformName){
     const today = new Date().toISOString().split('T')[0];
     const monthAgo = new Date(Date.now()-30*86400000).toISOString().split('T')[0];
@@ -9908,18 +9794,11 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
     if(!from || !to){ toast('⚠️ حدد الفترة'); return; }
     R.innerHTML = '<div class="empty-note">... جاري الحساب</div>';
     try{
-      // 🆕 نجيب platform_paid كمان عشان نعرف مين مسدد ومين لسا "دين" (ذمم) — وبنفس الوقت
-      // نجيب كل الطلبات الغير مسددة لهاد المنصة (كل الوقت، مش بس الفترة المفلترة) عشان الدين
-      // المستحق يكون شامل، زي بالضبط منطق كشف حساب المورد
-      const [{ data: orders, error }, { data: allUnpaid }] = await Promise.all([
-        db.from('orders')
-          .select('id, order_number, created_at, total, status, platform_paid, branches(name_ar), order_items(item_name, quantity, unit_price)')
-          .eq('platform_id', platformId)
-          .gte('created_at', from+'T00:00:00').lte('created_at', to+'T23:59:59')
-          .order('created_at', {ascending:false}),
-        db.from('orders').select('id, total')
-          .eq('platform_id', platformId).eq('platform_paid', false).neq('status','cancelled'),
-      ]);
+      const { data: orders, error } = await db.from('orders')
+        .select('id, order_number, created_at, total, status, notes, platform_settled, branches(name_ar), order_items(item_name, quantity, unit_price)')
+        .eq('platform_id', platformId)
+        .gte('created_at', from+'T00:00:00').lte('created_at', to+'T23:59:59')
+        .order('created_at', {ascending:false});
       if(error){ R.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message)}</div>`; return; }
       const platform = PLATFORMS_DATA.find(p=>p.id===platformId);
       const commissionPct = parseFloat(platform?.commission_percent||0);
@@ -9927,75 +9806,40 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
       const gross = ok.reduce((a,o)=>a+parseFloat(o.total||0),0);
       const commission = gross * commissionPct/100;
       const net = gross - commission;
-      const debtGross = (allUnpaid||[]).reduce((a,o)=>a+parseFloat(o.total||0),0);
-      const debtNet = debtGross - (debtGross*commissionPct/100);
-      window.__lastStatementData = { platformName, from, to, orders: ok, gross, commission, net, commissionPct };
-      if(!window.__platformSelected) window.__platformSelected = new Set();
-      const sel = window.__platformSelected;
+      const settledOrders = ok.filter(o=>o.platform_settled);
+      const settledNet = settledOrders.reduce((a,o)=>a+parseFloat(o.total||0)*(1-commissionPct/100),0);
+      const pendingNet = net - settledNet;
+      window.__lastStatementData = { platformId, platformName, from, to, orders: ok, gross, commission, net, commissionPct };
       R.innerHTML = `
         <div class="day-head" style="margin:10px 0">
           <div class="stat">عدد الطلبات<b>${ok.length}</b></div>
           <div class="stat">إجمالي المبيعات<b>${fmt(gross)} ${CURRENCY}</b></div>
           <div class="stat">العمولة (${commissionPct}%)<b style="color:var(--red)">${fmt(commission)} ${CURRENCY}</b></div>
-          <div class="stat">الصافي (الفترة)<b style="color:var(--ok)">${fmt(net)} ${CURRENCY}</b></div>
+          <div class="stat">الصافي المستحق لك<b style="color:var(--ok)">${fmt(net)} ${CURRENCY}</b></div>
+          <div class="stat">✅ مسدد (${settledOrders.length})<b style="color:var(--ok)">${fmt(settledNet)} ${CURRENCY}</b></div>
+          <div class="stat">⏳ لسا مش مسدد<b style="color:var(--warn)">${fmt(pendingNet)} ${CURRENCY}</b></div>
         </div>
-        <div class="panel" style="border:2px solid var(--red);margin-bottom:12px">
-          <div style="font-weight:900;color:var(--red)">💸 الدين المستحق حاليًا (غير مسدد — كل الوقت): ${fmt(debtNet)} ${CURRENCY}</div>
-          <div style="font-size:.8rem;color:var(--muted);margin-top:2px">حدد الطلبات يلي المنصة دفعتلك ياها فعليًا من الجدول تحت، وبعدين اضغط "تسديد المحدد" — بينزل الصافي على رأس المال تلقائيًا.</div>
-        </div>
-        <div style="display:flex;gap:8px;margin-bottom:10px">
-          <button class="mini ok" onclick="settleSelectedPlatformOrders('${platformId}','${esc(platformName)}',${commissionPct})">✅ تسديد المحدد (${sel.size})</button>
-          ${sel.size?`<button class="mini tog" onclick="window.__platformSelected=new Set();runPlatformStatement('${platformId}','${esc(platformName)}')">✖️ إلغاء التحديد</button>`:''}
+        <div style="display:flex;gap:8px;margin-bottom:8px">
+          <button class="mini ok" onclick="markAllPlatformSettled(true)">✅ علّم الكل مسدد</button>
+          <button class="mini tog" onclick="markAllPlatformSettled(false)">↩️ إلغاء تعليم الكل</button>
         </div>
         <div class="tbl-wrap"><table class="tbl">
-          <tr><th></th><th>#</th><th>التاريخ</th><th>الفرع</th><th>الأصناف</th><th>الإجمالي</th><th>العمولة</th><th>الصافي</th><th>الحالة</th></tr>
+          <tr><th>✔</th><th>#</th><th>التاريخ</th><th>الفرع</th><th>ملاحظة الطلب</th><th>الإجمالي</th><th>العمولة</th><th>الصافي</th></tr>
           ${ok.map(o=>{
             const oComm = parseFloat(o.total||0)*commissionPct/100;
             const oNet = parseFloat(o.total||0)-oComm;
-            const itemsStr = (o.order_items||[]).map(i=>i.quantity+'×'+i.item_name+' ('+fmt(i.unit_price*i.quantity)+')').join('، ');
-            return `<tr>
-              <td>${o.platform_paid?'':`<input type="checkbox" ${sel.has(o.id)?'checked':''} onchange="togglePlatformOrderSelect('${o.id}',this.checked)">`}</td>
+            return `<tr style="${o.platform_settled?'background:#eafaf0':''}">
+              <td><input type="checkbox" ${o.platform_settled?'checked':''} onchange="togglePlatformSettled('${o.id}', this.checked)" style="width:18px;height:18px"></td>
               <td><b>${o.order_number}</b></td><td>${new Date(o.created_at).toLocaleString('ar-JO')}</td><td>${esc(o.branches?.name_ar||'—')}</td>
-              <td style="font-size:.82rem;color:var(--muted)">${esc(itemsStr)||'—'}</td>
+              <td style="font-size:.82rem;color:var(--muted)">${esc(o.notes||'—')}</td>
               <td><b>${fmt(o.total)}</b></td>
               <td style="color:var(--red)">${fmt(oComm)}</td>
               <td style="color:var(--ok)"><b>${fmt(oNet)}</b></td>
-              <td>${o.platform_paid?'<b style="color:var(--ok)">✅ مسدد</b>':'<b style="color:var(--red)">🔴 غير مسدد</b>'}</td>
             </tr>`;
-          }).join('')||'<tr><td colspan="9" class="empty-note">ما في طلبات بهاي الفترة</td></tr>'}
+          }).join('')||'<tr><td colspan="8" class="empty-note">ما في طلبات بهاي الفترة</td></tr>'}
         </table></div>
         <button class="mini edit" style="margin-top:10px;width:100%" onclick="printPlatformStatement()">🖨️ طباعة كشف الحساب</button>`;
     }catch(e){ R.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
-  }
-  function togglePlatformOrderSelect(orderId, checked){
-    if(!window.__platformSelected) window.__platformSelected = new Set();
-    if(checked) window.__platformSelected.add(orderId); else window.__platformSelected.delete(orderId);
-    // بس نحدّث زر التسديد وعدّاده بدون ما نعيد بناء الجدول كامل (يفقد التحديد الحالي)
-    const btn = document.querySelector('[onclick^="settleSelectedPlatformOrders"]');
-    if(btn) btn.textContent = `✅ تسديد المحدد (${window.__platformSelected.size})`;
-  }
-  // 🆕 تسديد الطلبات المحددة من منصة توصيل: يعلّمهم "مسدد" ويحط الصافي (بعد خصم العمولة)
-  // على رأس المال دفعة وحدة — بالضبط زي طلب المستخدم
-  async function settleSelectedPlatformOrders(platformId, platformName, commissionPct){
-    const sel = window.__platformSelected;
-    if(!sel || !sel.size){ toast('⚠️ حدد طلب واحد على الأقل من الجدول'); return; }
-    if(!lockSubmit('settlePlatform')) return;
-    setTimeout(()=>unlockSubmit('settlePlatform'), 4000);
-    try{
-      const ids = [...sel];
-      const { data: os, error } = await db.from('orders').select('id, total').in('id', ids);
-      if(error){ toast('✗ '+error.message); return; }
-      const gross = (os||[]).reduce((a,o)=>a+parseFloat(o.total||0),0);
-      const commission = gross * (parseFloat(commissionPct)||0)/100;
-      const net = gross - commission;
-      if(!confirm(`تأكيد تسديد ${ids.length} طلب من "${platformName}"؟\n\nالإجمالي: ${fmt(gross)} ${CURRENCY}\nالعمولة: ${fmt(commission)} ${CURRENCY}\nالصافي يلي رح ينزل على رأس المال: ${fmt(net)} ${CURRENCY}`)) return;
-      const { error: updErr } = await db.from('orders').update({ platform_paid: true }).in('id', ids);
-      if(updErr){ toast('✗ '+updErr.message); return; }
-      await addCapitalTx(+net, 'platform_settlement', null, 'تحصيل '+platformName+' — '+ids.length+' طلب');
-      window.__platformSelected = new Set();
-      toast('✓ اتسددت الطلبات ونزل الصافي على رأس المال');
-      runPlatformStatement(platformId, platformName);
-    }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
   function printPlatformStatement(){
     const d = window.__lastStatementData; if(!d) return;
@@ -10719,7 +10563,6 @@ try {
       <div class="fld"><label>الدور</label><select id="f_sr" onchange="resetPermsToRole(this.value)">
         <option value="cashier" ${st.role==='cashier'?'selected':''}>كاشير</option>
         <option value="callcenter" ${st.role==='callcenter'?'selected':''}>كول سنتر</option>
-        <option value="viewer" ${st.role==='viewer'?'selected':''}>🕶️ مشاهد فقط (يشوف كل شي، ما بيقدر يعدّل)</option>
         <option value="admin" ${st.role==='admin'?'selected':''}>مدير (كل الصلاحيات)</option>
         ${CUSTOM_ROLES.map(r=>`<option value="custom:${r.id}" ${st.role==='custom'&&st.role_id===r.id?'selected':''}>${esc(r.name)}</option>`).join('')}
         </select></div>
@@ -10740,7 +10583,7 @@ try {
         <div style="background:#fff;border:1.5px solid var(--line);border-radius:12px;padding:10px 14px;max-height:280px;overflow-y:auto">${permHtml}</div>
       </div>
       <div class="m-act"><button class="save" onclick="saveStaff('${id||''}')">حفظ ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
-    document.getElementById('permsBox').style.display = (st.role==='admin'||st.role==='viewer') ? 'none' : '';
+    document.getElementById('permsBox').style.display = (st.role==='admin') ? 'none' : '';
     if(st.role==='custom') setPermsBoxMode('custom');
   }
   function setPermsBoxMode(mode){
@@ -10757,7 +10600,7 @@ try {
     }
   }
   window.resetPermsToRole = function(role){
-    document.getElementById('permsBox').style.display = (role==='admin'||role==='viewer') ? 'none' : '';
+    document.getElementById('permsBox').style.display = (role==='admin') ? 'none' : '';
     if(role.startsWith('custom:')){
       const rid = role.split(':')[1];
       const cr = CUSTOM_ROLES.find(r=>r.id===rid);
@@ -11008,6 +10851,12 @@ try {
   }
 
   function switchView(v){
+    // 🔧 نوقف التحديث التلقائي لشاشة الطلبات لو غادرها المستخدم (ما نبقيه يشتغل بالخلفية بلا داعي)
+    if(v!=='day' && __dayAutoRefreshTimer){
+      clearInterval(__dayAutoRefreshTimer); __dayAutoRefreshTimer = null;
+      const btn = document.getElementById('dayAutoRefreshBtn');
+      if(btn){ btn.textContent = '🔄 تحديث تلقائي: متوقف'; btn.style.background = 'var(--ok)'; }
+    }
     // حراسة الأدوار — منع الوصول نهائيًا بغض النظر عن الأزرار الظاهرة
     const adm = isAdmin();
     const cc = ME && ME.role==='callcenter';
