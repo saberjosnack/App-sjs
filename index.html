@@ -1019,25 +1019,25 @@
       if (err) err.textContent = '...جاري التحقق';
 
       try {
-          const { data, error } = await db.from('staff')
-              .select('*, branches(name_ar)')
-              .eq('pin', pin)
-              .eq('is_active', true)
-              .limit(1);
+          // 🔒 التحقق من الـPIN صار عن طريق Edge Function آمنة (verify-pin) بدل سؤال جدول staff مباشرة من المتصفح
+          const { data, error } = await db.functions.invoke('verify-pin', {
+              body: { pin }
+          });
 
-          if (error) {
-              if (err) err.textContent = '❌ ' + (error.message || 'خطأ بالاتصال');
-              console.error('login error:', JSON.stringify(error));
+          if (error || !data || data.error) {
+              if (err) err.textContent = '❌ ' + ((data && data.error) || (error && error.message) || 'رمز غير صحيح');
+              console.error('login error:', error, data);
+              window.pinClear();
               return;
           }
 
-          if (!data || data.length === 0) {
+          if (!data.staff) {
               if (err) err.textContent = '❌ رمز غير صحيح';
               window.pinClear();
               return;
           }
 
-          ME = data[0];
+          ME = data.staff;
           sessionStorage.setItem('sjs_me', JSON.stringify(ME));
           enterApp();
 
@@ -4908,9 +4908,8 @@
         </div>
 
         <hr style="margin:16px 0"><h4 style="color:var(--maroon)">🤖 قراءة فواتير الموردين بالذكاء الاصطناعي</h4>
-        <div style="color:var(--muted);font-size:.78rem;font-weight:600;margin-bottom:8px">مفتاح API تبعك من <a href="https://platform.claude.com/dashboard" target="_blank">platform.claude.com/dashboard</a> — بينحفظ بقاعدة البيانات، وزر المسح نفسه رح يضاف بفاتورة الشراء بجلسة جاية.</div>
+        <div style="color:var(--muted);font-size:.78rem;font-weight:600;margin-bottom:8px">مفتاح الـ API محفوظ بأمان بإعدادات السيرفر (مش هون) — بس فعّل الخانة تحت وحدد الموديل.</div>
         <div class="fld"><label class="chk"><input type="checkbox" id="f_aiEnabled" ${SETTINGS.ai_invoice_enabled?'checked':''}> فعّل قراءة الفواتير بالذكاء الاصطناعي</label></div>
-        <div class="fld"><label>مفتاح API (Anthropic)</label><input id="f_aiKey" type="password" value="${esc(SETTINGS.ai_api_key||'')}" placeholder="sk-ant-..." autocomplete="off"></div>
         <div class="fld"><label>الموديل</label><select id="f_aiModel">
           <option value="claude-sonnet-5" ${(!SETTINGS.ai_model||SETTINGS.ai_model==='claude-sonnet-5')?'selected':''}>Claude Sonnet 5 (متوازن — موصى فيه)</option>
           <option value="claude-opus-4-8" ${SETTINGS.ai_model==='claude-opus-4-8'?'selected':''}>Claude Opus 4.8 (الأدق — أغلى)</option>
@@ -5935,7 +5934,7 @@
         <div id="fp_sup_ings_list" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px"></div>
         <button type="button" class="mini ok" onclick="quickAddIngredientForSupplier()">＋ صنف جديد لهاد المورد</button>
       </div>
-      ${(SETTINGS.ai_invoice_enabled && SETTINGS.ai_api_key)?`
+      ${(SETTINGS.ai_invoice_enabled)?`
       <div class="fld" style="background:#f0e6ff;border-radius:10px;padding:10px 12px">
         <button type="button" class="mini ok" style="background:#7b2cbf;width:100%" onclick="document.getElementById('fp_ai_file').click()">📷 مسح الفاتورة بالذكاء الاصطناعي</button>
         <input type="file" id="fp_ai_file" accept="image/*" capture="environment" class="hidden" onchange="scanInvoiceWithAI(this)">
@@ -6050,25 +6049,10 @@
       const prompt = `هاي صورة فاتورة شراء من مورد لمطعم. اقرأها واستخرج المعلومات التالية بصيغة JSON فقط (بدون أي نص إضافي قبلها أو بعدها، بدون markdown fences):
 {"supplier": "اسم المورد المكتوب بالفاتورة أو null إذا مش واضح", "date": "التاريخ بصيغة YYYY-MM-DD أو null إذا مش واضح", "items": [{"name": "اسم المادة بالعربي كما فهمته", "quantity": رقم, "unit_cost": رقم (سعر الوحدة الواحدة، لو مكتوب بس الإجمالي احسبه بالقسمة على الكمية)}]}
 لو في أي معلومة مش واضحة أو ناقصة خليها null أو صفر — لا تخترع أرقام.`;
-      const resp = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          'x-api-key': SETTINGS.ai_api_key,
-          'anthropic-version': '2023-06-01',
-          'anthropic-dangerous-direct-browser-access': 'true'
-        },
-        body: JSON.stringify({
-          model: SETTINGS.ai_model || 'claude-sonnet-5',
-          max_tokens: 2000,
-          messages: [{ role:'user', content: [
-            { type:'image', source: { type:'base64', media_type: mediaType, data: base64 } },
-            { type:'text', text: prompt }
-          ]}]
-        })
+      const { data, error: fnErr } = await db.functions.invoke('ai-invoice-ocr', {
+        body: { base64, mediaType, prompt, model: SETTINGS.ai_model || 'claude-sonnet-5' }
       });
-      const data = await resp.json();
-      if(data.error){ statusEl.innerHTML = '⚠️ خطأ: '+esc(data.error.message||'فشل الاتصال بالذكاء الاصطناعي'); return; }
+      if(fnErr || !data || data.error){ statusEl.innerHTML = '⚠️ خطأ: '+esc(data?.error||fnErr?.message||'فشل الاتصال بالذكاء الاصطناعي'); return; }
       let text = (data.content||[]).map(c=>c.text||'').join('').trim();
       text = text.replace(/^```json\s*/i,'').replace(/^```\s*/,'').replace(/```\s*$/,'').trim();
       const parsed = JSON.parse(text);
@@ -9815,8 +9799,15 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
         return;
       }
       if(!data || !data.length){ toast('⚠️ ما تحدث أي طلب — تأكد الطلب لسا موجود'); return; }
-      // ✅ تحديث فوري للون الصف بدون ما ننتظر إعادة تحميل كامل الجدول
-      if(rowEl) rowEl.style.background = checked ? '#eafaf0' : '';
+      // ✅ تحديث فوري للإحصائيات والفلاتر بدون إعادة تحميل كامل الجدول
+      const d = window.__lastStatementData;
+      if(d){
+        const o = d.orders.find(x=>x.id===orderId);
+        if(o) o.platform_settled = checked;
+        renderStatementTable();
+      } else if(rowEl){
+        rowEl.style.background = checked ? '#eafaf0' : '';
+      }
       toast(checked ? '✓ اتعلّم مسدد' : '✓ اترفع تعليم المسدد');
     }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
@@ -9843,8 +9834,12 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
       <button class="mini ok" style="margin:8px 0" onclick="runPlatformStatement('${platformId}','${esc(platformName)}')">📊 عرض كشف الحساب</button>
       <div id="stmt_result"></div>
       <div class="m-act"><button class="cancel" onclick="closeModal()">إغلاق</button></div>`);
+    // 🔧 تكبير هاد المودال بالتحديد بس (بدون ما يأثر عالمودالز التانية بالبرنامج)
+    const box = document.querySelector('#theModal .mbox');
+    if(box) box.style.cssText += ';width:min(96vw,900px);max-width:900px';
   }
   window.__lastStatementData = null;
+  window.__stmtFilter = 'all';
   async function runPlatformStatement(platformId, platformName){
     const from = document.getElementById('stmt_from').value;
     const to = document.getElementById('stmt_to').value;
@@ -9861,46 +9856,68 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
       const platform = PLATFORMS_DATA.find(p=>p.id===platformId);
       const commissionPct = parseFloat(platform?.commission_percent||0);
       const ok = (orders||[]).filter(o=>o.status!=='cancelled');
-      const gross = ok.reduce((a,o)=>a+parseFloat(o.total||0),0);
-      const commission = gross * commissionPct/100;
-      const net = gross - commission;
-      const settledOrders = ok.filter(o=>o.platform_settled);
-      const settledNet = settledOrders.reduce((a,o)=>a+parseFloat(o.total||0)*(1-commissionPct/100),0);
-      const pendingNet = net - settledNet;
-      window.__lastStatementData = { platformId, platformName, from, to, orders: ok, gross, commission, net, commissionPct };
-      R.innerHTML = `
-        <div class="day-head" style="margin:10px 0">
-          <div class="stat">عدد الطلبات<b>${ok.length}</b></div>
-          <div class="stat">إجمالي المبيعات<b>${fmt(gross)} ${CURRENCY}</b></div>
-          <div class="stat">العمولة (${commissionPct}%)<b style="color:var(--red)">${fmt(commission)} ${CURRENCY}</b></div>
-          <div class="stat">الصافي المستحق لك<b style="color:var(--ok)">${fmt(net)} ${CURRENCY}</b></div>
-          <div class="stat">✅ مسدد (${settledOrders.length})<b style="color:var(--ok)">${fmt(settledNet)} ${CURRENCY}</b></div>
-          <div class="stat">⏳ لسا مش مسدد<b style="color:var(--warn)">${fmt(pendingNet)} ${CURRENCY}</b></div>
-        </div>
-        <div style="display:flex;gap:8px;margin-bottom:8px">
-          <button class="mini ok" onclick="markAllPlatformSettled(true)">✅ علّم الكل مسدد</button>
-          <button class="mini tog" onclick="markAllPlatformSettled(false)">↩️ إلغاء تعليم الكل</button>
-        </div>
-        <div class="tbl-wrap"><table class="tbl">
-          <tr><th>✔</th><th>#</th><th>التاريخ</th><th>الفرع</th><th>ملاحظة الطلب</th><th>الإجمالي</th><th>العمولة</th><th>الصافي</th></tr>
-          ${ok.map(o=>{
-            const oComm = parseFloat(o.total||0)*commissionPct/100;
-            const oNet = parseFloat(o.total||0)-oComm;
-            return `<tr style="${o.platform_settled?'background:#eafaf0':''}">
-              <td><input type="checkbox" ${o.platform_settled?'checked':''} onchange="togglePlatformSettled('${o.id}', this.checked, this.closest('tr'))" style="width:18px;height:18px"></td>
-              <td><b>${o.order_number}</b></td><td>${new Date(o.created_at).toLocaleString('ar-JO')}</td><td>${esc(o.branches?.name_ar||'—')}</td>
-              <td style="font-size:.82rem;color:var(--muted)">${esc(o.notes||'—')}</td>
-              <td><b>${fmt(o.total)}</b></td>
-              <td style="color:var(--red)">${fmt(oComm)}</td>
-              <td style="color:var(--ok)"><b>${fmt(oNet)}</b></td>
-            </tr>`;
-          }).join('')||'<tr><td colspan="8" class="empty-note">ما في طلبات بهاي الفترة</td></tr>'}
-        </table></div>
-        <button class="mini edit" style="margin-top:10px;width:100%" onclick="printPlatformStatement()">🖨️ طباعة كشف الحساب</button>`;
+      window.__lastStatementData = { platformId, platformName, from, to, orders: ok, commissionPct };
+      window.__stmtFilter = 'all';
+      renderStatementTable();
     }catch(e){ R.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
+  }
+  function setStmtFilter(f){
+    window.__stmtFilter = f;
+    renderStatementTable();
+  }
+  function renderStatementTable(){
+    const d = window.__lastStatementData; if(!d) return;
+    const R = document.getElementById('stmt_result'); if(!R) return;
+    const { orders: ok, commissionPct } = d;
+    const gross = ok.reduce((a,o)=>a+parseFloat(o.total||0),0);
+    const commission = gross * commissionPct/100;
+    const net = gross - commission;
+    const settledOrders = ok.filter(o=>o.platform_settled);
+    const pendingOrders = ok.filter(o=>!o.platform_settled);
+    const settledNet = settledOrders.reduce((a,o)=>a+parseFloat(o.total||0)*(1-commissionPct/100),0);
+    const pendingNet = net - settledNet;
+    const f = window.__stmtFilter || 'all';
+    const shown = f==='settled' ? settledOrders : f==='pending' ? pendingOrders : ok;
+    R.innerHTML = `
+      <div class="day-head" style="margin:10px 0">
+        <div class="stat">عدد الطلبات<b>${ok.length}</b></div>
+        <div class="stat">إجمالي المبيعات<b>${fmt(gross)} ${CURRENCY}</b></div>
+        <div class="stat">العمولة (${commissionPct}%)<b style="color:var(--red)">${fmt(commission)} ${CURRENCY}</b></div>
+        <div class="stat">الصافي المستحق لك<b style="color:var(--ok)">${fmt(net)} ${CURRENCY}</b></div>
+        <div class="stat">✅ مسدد (${settledOrders.length})<b style="color:var(--ok)">${fmt(settledNet)} ${CURRENCY}</b></div>
+        <div class="stat">⏳ لسا مش مسدد (${pendingOrders.length})<b style="color:var(--warn)">${fmt(pendingNet)} ${CURRENCY}</b></div>
+      </div>
+      <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+        <button class="mini ${f==='all'?'ok':'edit'}" onclick="setStmtFilter('all')">📋 الكل (${ok.length})</button>
+        <button class="mini ${f==='settled'?'ok':'edit'}" onclick="setStmtFilter('settled')">✅ مسدد (${settledOrders.length})</button>
+        <button class="mini ${f==='pending'?'ok':'edit'}" onclick="setStmtFilter('pending')">⏳ غير مسدد (${pendingOrders.length})</button>
+      </div>
+      <div style="display:flex;gap:8px;margin-bottom:8px">
+        <button class="mini ok" onclick="markAllPlatformSettled(true)">✅ علّم الكل مسدد</button>
+        <button class="mini tog" onclick="markAllPlatformSettled(false)">↩️ إلغاء تعليم الكل</button>
+      </div>
+      <div class="tbl-wrap"><table class="tbl">
+        <tr><th>✔</th><th>#</th><th>التاريخ</th><th>الفرع</th><th>ملاحظة الطلب</th><th>الإجمالي</th><th>العمولة</th><th>الصافي</th></tr>
+        ${shown.map(o=>{
+          const oComm = parseFloat(o.total||0)*commissionPct/100;
+          const oNet = parseFloat(o.total||0)-oComm;
+          return `<tr style="${o.platform_settled?'background:#eafaf0':''}">
+            <td><input type="checkbox" ${o.platform_settled?'checked':''} onchange="togglePlatformSettled('${o.id}', this.checked, this.closest('tr'))" style="width:18px;height:18px"></td>
+            <td><b>${o.order_number}</b></td><td>${new Date(o.created_at).toLocaleString('ar-JO')}</td><td>${esc(o.branches?.name_ar||'—')}</td>
+            <td style="font-size:.82rem;color:var(--muted)">${esc(o.notes||'—')}</td>
+            <td><b>${fmt(o.total)}</b></td>
+            <td style="color:var(--red)">${fmt(oComm)}</td>
+            <td style="color:var(--ok)"><b>${fmt(oNet)}</b></td>
+          </tr>`;
+        }).join('')||'<tr><td colspan="8" class="empty-note">ما في طلبات بهاي الفلترة</td></tr>'}
+      </table></div>
+      <button class="mini edit" style="margin-top:10px;width:100%" onclick="printPlatformStatement()">🖨️ طباعة كشف الحساب</button>`;
   }
   function printPlatformStatement(){
     const d = window.__lastStatementData; if(!d) return;
+    const gross = d.orders.reduce((a,o)=>a+parseFloat(o.total||0),0);
+    const commission = gross * d.commissionPct/100;
+    const net = gross - commission;
     const orderLine = o => {
       const oComm = parseFloat(o.total||0)*d.commissionPct/100;
       const oNet = parseFloat(o.total||0)-oComm;
@@ -9912,9 +9929,9 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
       'الفترة: '+d.from+' → '+d.to+'\n'+
       '════════════════\n'+
       'عدد الطلبات: '+d.orders.length+'\n'+
-      'إجمالي المبيعات: '+fmt(d.gross)+' '+CURRENCY+'\n'+
-      'العمولة ('+d.commissionPct+'%): '+fmt(d.commission)+' '+CURRENCY+'\n'+
-      'الصافي المستحق: '+fmt(d.net)+' '+CURRENCY+'\n'+
+      'إجمالي المبيعات: '+fmt(gross)+' '+CURRENCY+'\n'+
+      'العمولة ('+d.commissionPct+'%): '+fmt(commission)+' '+CURRENCY+'\n'+
+      'الصافي المستحق: '+fmt(net)+' '+CURRENCY+'\n'+
       '════════════════\n'+
       d.orders.map(o=>{ const x=orderLine(o); return '#'+o.order_number+' — '+new Date(o.created_at).toLocaleDateString('ar-JO')+'\n  الأصناف: '+(x.items||'—')+'\n  الإجمالي: '+fmt(o.total)+' | عمولة: '+fmt(x.oComm)+' | صافي: '+fmt(x.oNet); }).join('\n')+'\n';
     const html = `<html dir="rtl"><head><meta charset="UTF-8"><style>body{font-family:Cairo,Arial;padding:16px}table{width:100%;border-collapse:collapse}td,th{padding:6px;border:1px solid #ccc;text-align:right;font-size:.85rem}</style></head><body>
@@ -9922,7 +9939,7 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
       <table><tr><th>#</th><th>التاريخ</th><th>الأصناف</th><th>الإجمالي</th><th>العمولة</th><th>الصافي</th></tr>
       ${d.orders.map(o=>{ const x=orderLine(o); return `<tr><td>${o.order_number}</td><td>${new Date(o.created_at).toLocaleString('ar-JO')}</td><td>${esc(x.items||'—')}</td><td>${fmt(o.total)}</td><td>${fmt(x.oComm)}</td><td>${fmt(x.oNet)}</td></tr>`; }).join('')}
       </table>
-      <h3>الإجمالي: ${fmt(d.gross)} — العمولة: ${fmt(d.commission)} — الصافي: ${fmt(d.net)} ${CURRENCY}</h3>
+      <h3>الإجمالي: ${fmt(gross)} — العمولة: ${fmt(commission)} — الصافي: ${fmt(net)} ${CURRENCY}</h3>
       </body></html>`;
     if(typeof printRaw === 'function') printRaw(text, html);
     else window.print();
@@ -10214,7 +10231,6 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
     });
     const settings = {
       ai_invoice_enabled: document.getElementById('f_aiEnabled')?.checked ?? false,
-      ai_api_key: document.getElementById('f_aiKey')?.value.trim() || '',
       ai_model: document.getElementById('f_aiModel')?.value || 'claude-sonnet-5',
       hr_portal_show_hours: document.getElementById('f_hrShowHours')?.checked ?? true,
       hr_portal_show_net: document.getElementById('f_hrShowNet')?.checked ?? true,
