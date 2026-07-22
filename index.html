@@ -4753,7 +4753,22 @@
 
   /* ================= الإدارة ================= */
   let admView='items';
-  function admTab(v){ admView=v; document.querySelectorAll('.adm-tabs button').forEach(b=>b.classList.toggle('on', b.dataset.a===v)); renderAdmin(); }
+  let __hrReqPanelsTimer = null;
+  function admTab(v){
+    admView=v;
+    document.querySelectorAll('.adm-tabs button').forEach(b=>b.classList.toggle('on', b.dataset.a===v));
+    renderAdmin();
+    // 🔧 حماية إضافية: نحدّث لوحتي طلبات السلف وطلبات الجهاز كل 15 ثانية طول ما شاشة HR مفتوحة —
+    // لو صار أي شي يفضي المحتوى بالغلط، بترجع تظهر لحالها بسرعة بدل ما تختفي وتضل مختفية
+    if(__hrReqPanelsTimer){ clearInterval(__hrReqPanelsTimer); __hrReqPanelsTimer = null; }
+    if(v==='hr'){
+      __hrReqPanelsTimer = setInterval(()=>{
+        if(document.getElementById('hrAdvReqBox')) renderHrAdvanceRequests();
+        if(document.getElementById('hrOpenAdvBox')) renderOpenAdvancesPanel();
+        if(document.getElementById('hrDeviceReqBox')) renderHrDeviceRequests();
+      }, 15000);
+    }
+  }
 
   const ADMIN_TAB_PERM = {
     items:'items_manage', cats:'cats_manage', codes:'codes_manage', staff:'staff_manage', roles:'admin_only', branches:'branches_manage', sett:'settings_manage', devices:'devices_manage',
@@ -7776,6 +7791,39 @@
       toast('✓ اتسجلت السلفة'); hrAdvancesView(empId, empName);
     }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
+  async function renderOpenAdvancesPanel(){
+    const box = document.getElementById('hrOpenAdvBox'); if(!box) return;
+    try{
+      const { data, error } = await db.from('hr_advances').select('*').eq('status','open').order('created_at',{ascending:false});
+      if(error){ box.innerHTML=''; return; }
+      const list = data||[];
+      if(!list.length){ box.innerHTML=''; return; }
+      const total = list.reduce((a,x)=>a+parseFloat(x.amount||0),0);
+      box.innerHTML = `<div class="panel" style="margin-bottom:14px;border:2px solid var(--maroon)">
+        <h4 style="color:var(--maroon);margin-bottom:8px">💰 سلف مفتوحة تحتاج تسديد (${list.length}) — إجمالي ${fmt(total)} ${CURRENCY}</h4>
+        <div class="tbl-wrap"><table class="tbl">
+          <tr><th>الموظف</th><th>التاريخ</th><th>المبلغ</th><th>ملاحظة</th><th></th></tr>
+          ${list.map(a=>`<tr>
+            <td><b>${esc(a.employee_name)}</b></td>
+            <td>${new Date(a.created_at).toLocaleDateString('ar-JO')}</td>
+            <td><b>${fmt(a.amount)} ${CURRENCY}</b></td>
+            <td style="font-size:.85rem;color:var(--muted)">${esc(a.note||'—')}</td>
+            <td><button class="mini ok" onclick="repayHrAdvanceFromPanel('${a.id}','${a.employee_id}','${esc(a.employee_name)}')">✅ تسديد</button></td>
+          </tr>`).join('')}
+        </table></div>
+      </div>`;
+    }catch(e){ console.error(e); }
+  }
+  async function repayHrAdvanceFromPanel(advId, empId, empName){
+    if(!confirm('تأكيد تسديد سلفة '+empName+'؟')) return;
+    try{
+      const { data: adv } = await db.from('hr_advances').select('*').eq('id', advId).single();
+      if(!adv) return;
+      await db.from('hr_advances').update({ status:'repaid', repaid_at: new Date().toISOString() }).eq('id', advId);
+      await addCapitalTx(+adv.amount, 'advance', advId, 'تسديد سلفة — '+empName);
+      toast('✓ اتسددت السلفة'); renderOpenAdvancesPanel();
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
+  }
   async function repayHrAdvance(advId, empId, empName){
     if(!confirm('تأكيد تسديد السلفة؟')) return;
     try{
@@ -7901,6 +7949,7 @@
         </table></div>
       </div>`:''}
       <div id="hrAdvReqBox"></div>
+      <div id="hrOpenAdvBox"></div>
       <div id="hrDeviceReqBox"></div>
       <div class="panel" style="margin-bottom:14px">
         <h3>🧑‍💼 HR — الرواتب والدوام والوجبات والسلف</h3>
@@ -7922,6 +7971,7 @@
       </div>`;
     renderHrTable();
     renderHrAdvanceRequests();
+    renderOpenAdvancesPanel();
     renderHrDeviceRequests();
   }
   function renderHrTable(){
@@ -10767,9 +10817,10 @@ try {
       <div class="stat">ملغي اليوم<b>${(today.data||[]).length - T.length}</b></div>
       <div class="stat" style="border:1.5px solid var(--muted)">🍽️ وجبات الموظفين (مستبعدة)<b>${mealsToday.length} <small>(${fmt(mealsTodaySum)})</small></b></div>`;
 
-    // بالفروع
+    // بالفروع — 🔧 إصلاح: نفس تعريف "صافي المبيعات" بالضبط (بدون أجرة التوصيل) — كانت تستخدم
+    // o.total الخام (شامل التوصيل) فكانت تطلع أعلى من الرقم الحقيقي وتختلف عن باقي الشاشة
     const byBr = {};
-    T.forEach(o=>{ byBr[o.branch_id]=byBr[o.branch_id]||{n:0,s:0}; byBr[o.branch_id].n++; byBr[o.branch_id].s+=parseFloat(o.total||0); });
+    T.forEach(o=>{ byBr[o.branch_id]=byBr[o.branch_id]||{n:0,s:0}; byBr[o.branch_id].n++; byBr[o.branch_id].s+=(parseFloat(o.subtotal||0)-parseFloat(o.discount||0)); });
     document.getElementById('dashBranches').innerHTML = `<div class="dash-card">` +
       (BRANCHES.map(b=>{ const d=byBr[b.id]||{n:0,s:0};
         return `<div class="dash-row"><span>${esc(b.name_ar)} (${d.n} طلب)</span><b>${fmt(d.s)} ${CURRENCY}</b></div>`; }).join('')||'—') + `</div>`;
