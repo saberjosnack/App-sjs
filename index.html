@@ -9756,10 +9756,18 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
     }
   }
   /* ---- كشف حساب منصة بفترة محددة ---- */
-  async function togglePlatformSettled(orderId, checked){
+  async function togglePlatformSettled(orderId, checked, rowEl){
     try{
-      const { error } = await db.from('orders').update({ platform_settled: checked }).eq('id', orderId);
-      if(error){ toast('✗ '+error.message); return; }
+      const { error, data } = await db.from('orders').update({ platform_settled: checked }).eq('id', orderId).select('id');
+      if(error){
+        toast('✗ فشل التحديث — '+(error.message.includes('column')?'لازم تنفّذ SQL "setup_platform_settled" أولاً':error.message));
+        console.error(error);
+        return;
+      }
+      if(!data || !data.length){ toast('⚠️ ما تحدث أي طلب — تأكد الطلب لسا موجود'); return; }
+      // ✅ تحديث فوري للون الصف بدون ما ننتظر إعادة تحميل كامل الجدول
+      if(rowEl) rowEl.style.background = checked ? '#eafaf0' : '';
+      toast(checked ? '✓ اتعلّم مسدد' : '✓ اترفع تعليم المسدد');
     }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
   async function markAllPlatformSettled(val){
@@ -9829,7 +9837,7 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
             const oComm = parseFloat(o.total||0)*commissionPct/100;
             const oNet = parseFloat(o.total||0)-oComm;
             return `<tr style="${o.platform_settled?'background:#eafaf0':''}">
-              <td><input type="checkbox" ${o.platform_settled?'checked':''} onchange="togglePlatformSettled('${o.id}', this.checked)" style="width:18px;height:18px"></td>
+              <td><input type="checkbox" ${o.platform_settled?'checked':''} onchange="togglePlatformSettled('${o.id}', this.checked, this.closest('tr'))" style="width:18px;height:18px"></td>
               <td><b>${o.order_number}</b></td><td>${new Date(o.created_at).toLocaleString('ar-JO')}</td><td>${esc(o.branches?.name_ar||'—')}</td>
               <td style="font-size:.82rem;color:var(--muted)">${esc(o.notes||'—')}</td>
               <td><b>${fmt(o.total)}</b></td>
