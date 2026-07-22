@@ -1019,8 +1019,9 @@
       if (err) err.textContent = '...جاري التحقق';
 
       try {
-          // 🔒 التحقق من الـPIN صار عن طريق Edge Function آمنة (verify-pin) بدل سؤال جدول staff مباشرة من المتصفح
-          const { data, error } = await db.functions.invoke('verify-pin', {
+          // 🔒 التحقق من الـPIN صار عن طريق Edge Function آمنة بدل سؤال جدول staff مباشرة من المتصفح
+          // ⚠️ اسم الفنكشن الفعلي على Supabase هو "rapid-handler" (الـ slug ما تغيّر لما انسمّت "verify-pin" بالداشبورد)
+          const { data, error } = await db.functions.invoke('rapid-handler', {
               body: { pin }
           });
 
