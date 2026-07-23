@@ -8023,12 +8023,13 @@
       if(!list.length){ box.innerHTML=''; return; }
       box.innerHTML = `<div class="panel" style="margin-bottom:14px;border:2px solid var(--warn)">
         <h4 style="color:var(--warn);margin-bottom:8px">🧾 طلبات سلف من الموظفين (${list.length})</h4>
+        <div style="color:var(--muted);font-size:.78rem;font-weight:600;margin-bottom:8px">💡 تقدر تعدّل المبلغ قبل ما توافق (مثلًا الموظف طلب 50 وبدك توافق على 30 بس)</div>
         <div class="tbl-wrap"><table class="tbl">
-          <tr><th>الموظف</th><th>التاريخ</th><th>المبلغ</th><th>السبب</th><th></th></tr>
+          <tr><th>الموظف</th><th>التاريخ</th><th>المبلغ (قابل للتعديل)</th><th>السبب</th><th></th></tr>
           ${list.map(r=>`<tr>
             <td><b>${esc(r.employee_name)}</b></td>
             <td>${new Date(r.created_at).toLocaleString('ar-JO')}</td>
-            <td><b>${fmt(r.amount)} ${CURRENCY}</b></td>
+            <td><input type="number" step="0.01" min="0.01" id="advReqAmt_${r.id}" value="${r.amount}" style="width:90px;border:1.5px solid var(--line);border-radius:8px;padding:6px 8px;font-weight:800"></td>
             <td style="font-size:.85rem;color:var(--muted)">${esc(r.note||'—')}</td>
             <td style="white-space:nowrap">
               <button class="mini ok" onclick="approveHrAdvanceRequest('${r.id}','${r.employee_id}','${esc(r.employee_name)}',${r.amount})">✅ موافقة</button>
@@ -8039,8 +8040,11 @@
       </div>`;
     }catch(e){ console.error(e); }
   }
-  async function approveHrAdvanceRequest(reqId, empId, empName, amount){
-    if(!confirm('تأكيد الموافقة على سلفة '+fmt(amount)+' '+CURRENCY+' لـ'+empName+'؟')) return;
+  async function approveHrAdvanceRequest(reqId, empId, empName, originalAmount){
+    // 🔧 نقرأ المبلغ من الخانة القابلة للتعديل وقت الموافقة — لو الأدمن غيّره، بيعتمد الرقم الجديد
+    const editedAmt = parseFloat(document.getElementById('advReqAmt_'+reqId)?.value);
+    const amount = (!isNaN(editedAmt) && editedAmt>0) ? editedAmt : originalAmount;
+    if(!confirm('تأكيد الموافقة على سلفة '+fmt(amount)+' '+CURRENCY+' لـ'+empName+(amount!==originalAmount?' (المبلغ الأصلي المطلوب كان '+fmt(originalAmount)+')':'')+'؟')) return;
     try{
       const { data: adv, error } = await db.from('hr_advances').insert({
         employee_id: empId, employee_name: empName, amount, account:'cash', note:'طلب ذاتي من بوابة الموظف', status:'open', created_by: ME.full_name
