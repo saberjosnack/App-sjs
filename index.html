@@ -7745,11 +7745,37 @@
             <td>${a.account==='cash'?'💵 كاش':'🏦 بنك'}</td>
             <td style="font-size:.85rem;color:var(--muted)">${esc(a.note||'—')}</td>
             <td>${a.status==='open'?'<b style="color:var(--warn)">⏳ قائمة</b>':'<b style="color:var(--ok)">✅ متسددة</b>'}</td>
-            <td>${a.status==='open'?`<button class="mini ok" onclick="repayHrAdvance('${a.id}','${empId}','${esc(empName)}')">تسديد</button>`:''}</td>
+            <td>${a.status==='open'?`<button class="mini edit" onclick="editHrAdvanceForm('${a.id}','${empId}','${esc(empName)}')">✏️</button> <button class="mini ok" onclick="repayHrAdvance('${a.id}','${empId}','${esc(empName)}')">تسديد</button>`:''}</td>
           </tr>`).join('')||'<tr><td colspan="6" class="empty-note">ما في سلف مسجلة</td></tr>'}
         </table></div>
         <div class="m-act"><button class="cancel" onclick="closeModal()">إغلاق</button></div>`;
     }catch(e){ const body=document.getElementById('advBody'); if(body) body.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
+  }
+  async function editHrAdvanceForm(advId, empId, empName){
+    try{
+      const { data: adv, error } = await db.from('hr_advances').select('*').eq('id', advId).single();
+      if(error||!adv){ toast('✗ ما لقيت السلفة'); return; }
+      modal(`<h3>✏️ تعديل سلفة — ${esc(empName)}</h3>
+        <div class="fld"><label>المبلغ</label><input id="adv_edit_amt" type="number" step="0.01" min="0" value="${adv.amount}"></div>
+        <div class="fld"><label>من حساب</label>
+          <select id="adv_edit_acc"><option value="cash" ${adv.account==='cash'?'selected':''}>💵 كاش</option><option value="bank" ${adv.account==='bank'?'selected':''}>🏦 بنك/كليك</option></select></div>
+        <div class="fld"><label>ملاحظة</label><input id="adv_edit_note" value="${esc(adv.note||'')}" placeholder="اختياري"></div>
+        <div class="m-act"><button class="save" onclick="saveEditHrAdvance('${advId}','${empId}','${esc(empName)}',${adv.amount})">حفظ ✓</button><button class="cancel" onclick="hrAdvancesView('${empId}','${esc(empName)}')">رجوع</button></div>`);
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
+  }
+  async function saveEditHrAdvance(advId, empId, empName, oldAmount){
+    const newAmt = parseFloat(document.getElementById('adv_edit_amt')?.value);
+    const acc = document.getElementById('adv_edit_acc')?.value||'cash';
+    const note = document.getElementById('adv_edit_note')?.value.trim();
+    if(isNaN(newAmt)||newAmt<=0){ toast('⚠️ اكتب مبلغ صحيح'); return; }
+    try{
+      const { error } = await db.from('hr_advances').update({ amount: newAmt, account: acc, note: note||null }).eq('id', advId);
+      if(error){ toast('✗ '+error.message); return; }
+      // 🏦 لو اتغيّر المبلغ، نصحح الفرق برأس المال (كان مخصوم المبلغ القديم، لازم ينخصم/يرجع الفرق)
+      const diff = newAmt - oldAmount;
+      if(Math.abs(diff)>0.001) await addCapitalTx(-diff, 'advance', advId, 'تصحيح تعديل سلفة — '+empName);
+      toast('✓ اتعدّلت السلفة'); hrAdvancesView(empId, empName); renderOpenAdvancesPanel();
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
   function giveHrAdvanceForm(empId, empName){
     modal(`<h3>➕ سلفة جديدة — ${esc(empName)}</h3>
@@ -7833,7 +7859,7 @@
       HR_FILTER.to = new Date().toISOString().split('T')[0];
     }
     const [empRes, attRes, advRes, ordRes, shiftAdjRes, tlRes] = await Promise.all([
-      db.from('meal_names').select('*').eq('is_active', true).order('name'),
+      db.from('meal_names').select('*').order('name'), // 🔧 كل الموظفين (فعّال وغير فعّال) — كانوا يستبعدوا الغير فعّالين من الأساس فما كانوا يظهروا أبدًا حتى للتفعيل
       db.from('hr_attendance').select('employee_id, work_date, hours')
         .gte('work_date', HR_FILTER.from).lte('work_date', HR_FILTER.to),
       db.from('hr_advances').select('employee_id, amount, created_at, status')
@@ -7966,8 +7992,8 @@
     const filteredRows = hrQ ? rows.filter(r=>(r.emp.name||'').toLowerCase().includes(hrQ)) : rows;
     wrap.innerHTML = `<div class="tbl-wrap"><table class="tbl">
         <tr><th>الموظف</th><th>سعر الساعة</th><th>ساعات العمل</th><th>أيام الحضور</th><th>الوجبات</th><th>قيمة الوجبات</th><th>السلف</th><th>خصم الشيفتات</th><th>صافي المستحق</th><th></th></tr>
-        ${filteredRows.map(r=>`<tr>
-          <td><b>${esc(r.emp.name)}</b></td>
+        ${filteredRows.map(r=>`<tr class="${r.emp.is_active===false?'off':''}">
+          <td><b>${esc(r.emp.name)}</b>${r.emp.is_active===false?' <span style="color:var(--red);font-size:.75rem;font-weight:800">(غير فعّال)</span>':''}</td>
           <td>${fmt(r.emp.hourly_wage||0)}</td>
           <td>${r.hours.toFixed(1)}</td>
           <td>${r.days}</td>
@@ -8917,7 +8943,12 @@
   async function renderEmpMeals(){
     const C = document.getElementById('admContent');
     if(!C) return;
-    await loadEmpMealNames();
+    // 🔧 نجيب كل الموظفين (فعّال وغير فعّال) لحالنا هون — بدل ما نعتمد على loadEmpMealNames()
+    // المشتركة مع القائمة المنسدلة بالطلب (يلي بتصفّي الغير فعّالين عن قصد هناك، بس هون بدنا نشوفهم)
+    try{
+      const { data } = await db.from('meal_names').select('*').order('name');
+      MEAL_NAMES_DATA = data||[];
+    }catch(e){ console.error('load meal names for report failed:', e); }
     const today = new Date().toISOString().split('T')[0];
     const monthStart = new Date(); monthStart.setDate(1);
     const monthStartStr = monthStart.toISOString().split('T')[0];
