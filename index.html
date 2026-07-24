@@ -518,6 +518,11 @@
         <button class="add-btn" style="margin:0" onclick="custForm()">＋ عميل جديد</button>
         <button class="mini ok" style="padding:10px 18px" onclick="selectAllCustomers()">☑️ تحديد الكل</button>
       </div>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
+        <label style="font-size:.82rem;font-weight:700;color:var(--muted)">🔢 عدد الطلبات (على الأقل):</label>
+        <input id="custMinOrders" type="number" min="0" placeholder="0" value="0" oninput="renderCustomers()" style="width:80px;border:1.5px solid var(--line);border-radius:8px;padding:6px 10px;font-family:inherit">
+        <button id="custSortBtn" class="mini tog" onclick="toggleCustOrderSort()">↕️ ترتيب حسب عدد الطلبات</button>
+      </div>
       <div id="custBulkBar" class="hidden" style="display:flex;gap:8px;align-items:center;margin-bottom:10px;background:#e6f7ec;border:1.5px solid var(--ok);border-radius:10px;padding:8px 12px">
         <b id="custBulkCount" style="color:var(--ok)"></b>
         <button class="mini ok" onclick="openBulkWhatsapp()">📢 إرسال رسالة واتساب للمختارين</button>
@@ -4099,7 +4104,10 @@
   function selectAllCustomers(){
     const custSearch = document.getElementById('custSearch');
     const q = custSearch ? (custSearch.value||'').trim() : '';
-    const list = q ? CUSTOMERS.filter(c=>(c.name||'').includes(q) || (c.phone||'').includes(q)) : CUSTOMERS;
+    const minOrdersEl = document.getElementById('custMinOrders');
+    const minOrders = minOrdersEl ? (parseInt(minOrdersEl.value)||0) : 0;
+    let list = q ? CUSTOMERS.filter(c=>(c.name||'').includes(q) || (c.phone||'').includes(q)) : CUSTOMERS;
+    if(minOrders>0) list = list.filter(c=>(c.real_orders_count||0) >= minOrders);
     if(CUST_SELECTED.size === list.length && list.length>0){
       // كله محدد أصلاً — الضغطة هاي بتلغي التحديد
       clearCustSelection();
@@ -4192,25 +4200,50 @@
       closeModal(); toast('✓ اتسجل التقييم');
     }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
+  async function computeOrderCounts(customerIds){
+    // العدد الحقيقي لطلبات كل عميل من جدول الطلبات نفسه (بدون الملغاة) —
+    // بدل الاعتماد على عداد orders_count المخزّن اللي ممكن ينزاح مع الوقت (تعديل طلب، أو استدعاء upsertCustomer أكثر من مرة لنفس الطلب)
+    if(!customerIds || !customerIds.length) return {};
+    try{
+      const { data } = await db.from('orders').select('customer_id').in('customer_id', customerIds).neq('status','cancelled');
+      const map = {};
+      (data||[]).forEach(o=>{ if(o.customer_id) map[o.customer_id] = (map[o.customer_id]||0)+1; });
+      return map;
+    }catch(e){ console.error('computeOrderCounts failed:', e); return {}; }
+  }
   async function loadCustomers(){
     try {
       const { data } = await db.from('customers').select('*').order('created_at', {ascending:false}).limit(500);
       CUSTOMERS = data||[];
+      const counts = await computeOrderCounts(CUSTOMERS.map(c=>c.id));
+      CUSTOMERS.forEach(c=>{ c.real_orders_count = counts[c.id]||0; });
       renderCustomers();
     } catch(e) { console.error(e); }
   }
   let CUST_SELECTED = new Set();
+  let CUST_ORDER_SORT = null; // null = بدون ترتيب خاص، 'desc' أو 'asc'
+  function toggleCustOrderSort(){
+    CUST_ORDER_SORT = CUST_ORDER_SORT === 'desc' ? 'asc' : CUST_ORDER_SORT === 'asc' ? null : 'desc';
+    const btn = document.getElementById('custSortBtn');
+    if(btn) btn.textContent = CUST_ORDER_SORT === 'desc' ? '🔽 الأكثر طلبات أولًا' : CUST_ORDER_SORT === 'asc' ? '🔼 الأقل طلبات أولًا' : '↕️ ترتيب حسب عدد الطلبات';
+    renderCustomers();
+  }
   function renderCustomers(){
     const custSearch = document.getElementById('custSearch');
     const q = custSearch ? (custSearch.value||'').trim() : '';
-    const list = q ? CUSTOMERS.filter(c=>(c.name||'').includes(q) || (c.phone||'').includes(q)) : CUSTOMERS;
+    const minOrdersEl = document.getElementById('custMinOrders');
+    const minOrders = minOrdersEl ? (parseInt(minOrdersEl.value)||0) : 0;
+    let list = q ? CUSTOMERS.filter(c=>(c.name||'').includes(q) || (c.phone||'').includes(q)) : CUSTOMERS.slice();
+    if(minOrders>0) list = list.filter(c=>(c.real_orders_count||0) >= minOrders);
+    if(CUST_ORDER_SORT==='desc') list.sort((a,b)=>(b.real_orders_count||0)-(a.real_orders_count||0));
+    else if(CUST_ORDER_SORT==='asc') list.sort((a,b)=>(a.real_orders_count||0)-(b.real_orders_count||0));
     const custList = document.getElementById('custList');
     if (!custList) return;
     custList.innerHTML = `<table class="tbl"><tr><th></th><th>الاسم</th><th>الهاتف</th><th>العنوان</th><th>الطلبات</th><th>ملاحظات</th><th></th></tr>
       ${list.map(c=>`<tr>
         <td><input type="checkbox" ${CUST_SELECTED.has(c.id)?'checked':''} onchange="toggleCustSelect('${c.id}',this.checked)" style="width:18px;height:18px"></td>
         <td>${c.flagged?'🚩 ':''}${esc(c.name)}</td><td dir="ltr" style="text-align:right">${esc(c.phone)}</td>
-        <td>${esc(c.address||'—')}</td><td>${c.orders_count||0}</td>
+        <td>${esc(c.address||'—')}</td><td>${c.real_orders_count!=null ? c.real_orders_count : (c.orders_count||0)}</td>
         <td>${esc(c.notes||'—')}</td>
         <td style="white-space:nowrap">
           <button class="mini edit" onclick="custForm('${c.id}')">تعديل</button>
@@ -9211,9 +9244,11 @@ window.__lastEmpMealsData = null;
     if(!C) return;
     C.innerHTML = '<div class="empty-note">... جاري التحميل</div>';
     try{
-      const { data: customers } = await db.from('customers').select('*').order('orders_count',{ascending:false}).limit(100);
-      // متوسط تقييم كل عميل من طلباته
+      const { data: customers } = await db.from('customers').select('*').limit(500);
+      // العدد الحقيقي للطلبات من جدول الطلبات (بدل العداد المخزّن اللي ممكن ينزاح)
       const custIds = (customers||[]).map(c=>c.id);
+      const orderCounts = await computeOrderCounts(custIds);
+      // متوسط تقييم كل عميل من طلباته
       const { data: ratedOrders } = custIds.length ? await db.from('orders').select('customer_id, customer_rating').in('customer_id', custIds).not('customer_rating','is',null) : {data:[]};
       const ratingMap = {};
       (ratedOrders||[]).forEach(o=>{
@@ -9223,8 +9258,8 @@ window.__lastEmpMealsData = null;
       });
       TOP_CUST_DATA = (customers||[]).map(c=>{
         const r = ratingMap[c.id];
-        return {...c, avgRating: r ? (r.sum/r.count) : null, ratingCount: r?.count||0};
-      });
+        return {...c, orders_count: orderCounts[c.id]||0, avgRating: r ? (r.sum/r.count) : null, ratingCount: r?.count||0};
+      }).sort((a,b)=>(b.orders_count||0)-(a.orders_count||0)).slice(0,100);
       C.innerHTML = `
         <div style="color:var(--muted);font-weight:700;font-size:.85rem;margin-bottom:10px">مرتبين حسب عدد الطلبات — استخدم الفلتر لترتيب حسب التقييم بدل هيك.</div>
         <div style="display:flex;gap:8px;margin-bottom:12px">
