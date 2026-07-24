@@ -528,20 +528,9 @@
 
     <!-- ===== اللوحة (مدير) ===== -->
     <section id="v-dash" class="hidden">
-      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px" id="dashQuickFilters">
-        <button class="mini ok" onclick="setDashFilter('today')">📅 اليوم</button>
-        <button class="mini tog" onclick="setDashFilter('yesterday')">📅 البارحة</button>
-        <button class="mini tog" onclick="setDashFilter('week')">📅 هذا الأسبوع</button>
-        <button class="mini tog" onclick="setDashFilter('month')">📅 هذا الشهر</button>
-        <button class="mini tog" onclick="setDashFilter('last7')">📅 آخر 7 أيام</button>
-        <button class="mini tog" onclick="setDashFilter('last30')">📅 آخر 30 يوم</button>
-        <button class="mini edit" onclick="setDashFilter('custom')">📅 تحديد يدوي</button>
-      </div>
-      <div id="dashCustomRow" class="hidden" style="display:none;gap:8px;flex-wrap:wrap;margin-bottom:8px">
-        <div><label style="font-weight:700;font-size:.82rem;color:var(--muted)">من تاريخ</label><br><input type="date" id="dashFrom" class="dfield" style="width:auto"></div>
-        <div><label style="font-weight:700;font-size:.82rem;color:var(--muted)">إلى تاريخ</label><br><input type="date" id="dashTo" class="dfield" style="width:auto"></div>
-        <div style="display:flex;align-items:flex-end"><button class="mini ok" style="padding:9px 18px" onclick="loadDashboard()">عرض</button></div>
-      </div>
+      <button class="mini ok" style="padding:10px 20px;font-size:.95rem;margin-bottom:8px" onclick="openDateRangeModal('dash')">📅 <span id="dashDateBtnLabel">اليوم</span> ▾</button>
+      <input type="date" id="dashFrom" class="hidden">
+      <input type="date" id="dashTo" class="hidden">
       <div id="dashDateLabel" style="font-weight:900;color:var(--maroon);margin-bottom:8px;font-size:.9rem"></div>
       <div id="dashAlert"></div>
       <div class="day-head" id="dashCards"></div>
@@ -1734,13 +1723,13 @@
   async function doEndShift(countedValue, countedCard, countedCliq, ccSkip){
     try {
       const { data: orders } = await db.from('orders')
-        .select('total, subtotal, discount, delivery_fee, payment_method, order_type, status, split_details, cancel_reason, order_items(item_name, quantity, unit_price)')
+        .select('total, subtotal, discount, delivery_fee, payment_method, order_type, status, split_details, cancel_reason, employee_tab_name, order_items(item_name, quantity, unit_price)')
         .eq('shift_id', currentShift.id);
       const all = orders || [];
       const cancelled = all.filter(o=>o.status==='cancelled');
       // 🧾 الذمم (حساب موظف آجل) — منفصلة تمامًا عن حساب المبيعات، بتتعرض لحالها بس للمرجعية
-      const dhemam = all.filter(o=>o.status!=='cancelled' && o.payment_method==='employee_tab');
-      const ok = all.filter(o=>o.status!=='cancelled' && o.payment_method!=='employee_tab');
+      const dhemam = all.filter(o=>o.status!=='cancelled' && o.employee_tab_name);
+      const ok = all.filter(o=>o.status!=='cancelled' && !o.employee_tab_name);
       // 💰 المبيعات الحقيقية = بدون الذمم وبدون أجور التوصيل (يلي بتروح للسائق مش إلنا) — كاش/كرت/كليك بس
       const sum = k => ok.reduce((a,o)=>{
         const delFee = o.order_type==='delivery' ? parseFloat(o.delivery_fee||0) : 0;
@@ -4417,7 +4406,15 @@
       closeModal();
       loadSalesReport();
     }
-    // 🔧 قابلة للتوسيع لباقي الشاشات (لوحة التحكم، اليوميات...) بنفس الطريقة لو احتجناها لاحقًا
+    if(p.scope==='dash'){
+      window.__dashFrom = fromIso; window.__dashTo = toIso;
+      document.getElementById('dashFrom').value = start.toISOString().split('T')[0];
+      document.getElementById('dashTo').value = end.toISOString().split('T')[0];
+      const btnLbl = document.getElementById('dashDateBtnLabel'); if(btnLbl) btnLbl.textContent = label;
+      closeModal();
+      loadDashboard();
+    }
+    // 🔧 قابلة للتوسيع لباقي الشاشات (اليوميات...) بنفس الطريقة لو احتجناها لاحقًا
   }
   function setQuickFilter(mode){
     // تحديث الأزرار
@@ -5234,12 +5231,20 @@
       const { data, error } = await q;
       if(error) throw error;
       SH_LIST = data||[];
-      // مبيعات كل شيفت
+      // مبيعات كل شيفت — 🔧 إصلاح: صافي المبيعات الحقيقي بس (بدون أجور التوصيل وبدون ذمم الموظفين/التطبيقات)،
+      // وكل بند من هدول صار يتحسب لحاله منفصل عشان يظهر كخيار اختياري مش مدموج بالمبيعات
       for(const sh of SH_LIST){
-        const { data: os } = await db.from('orders').select('total, discount, status').eq('shift_id', sh.id);
-        sh.__sales = (os||[]).filter(o=>o.status!=='cancelled').reduce((a,o)=>a+parseFloat(o.total||0),0);
-        sh.__orders = (os||[]).filter(o=>o.status!=='cancelled').length;
-        sh.__discount = (os||[]).filter(o=>o.status!=='cancelled').reduce((a,o)=>a+parseFloat(o.discount||0),0);
+        const { data: os } = await db.from('orders').select('total, subtotal, discount, delivery_fee, order_type, payment_method, status, employee_tab_name').eq('shift_id', sh.id);
+        const ok = (os||[]).filter(o=>o.status!=='cancelled' && !o.employee_tab_name);
+        const dhemam = (os||[]).filter(o=>o.status!=='cancelled' && o.employee_tab_name);
+        sh.__sales = ok.reduce((a,o)=>a+parseFloat(o.subtotal||0)-parseFloat(o.discount||0),0);
+        sh.__orders = ok.length;
+        sh.__discount = ok.reduce((a,o)=>a+parseFloat(o.discount||0),0);
+        sh.__delivery = ok.filter(o=>o.order_type==='delivery').reduce((a,o)=>a+parseFloat(o.delivery_fee||0),0);
+        sh.__dhemamCount = dhemam.length;
+        sh.__dhemamTotal = dhemam.reduce((a,o)=>a+parseFloat(o.total||0),0);
+        const { data: wd } = await db.from('expenses').select('amount').eq('shift_id', sh.id).eq('category','سحب من الدرج');
+        sh.__expenses = (wd||[]).reduce((a,w)=>a+parseFloat(w.amount||0),0);
       }
       const closed = SH_LIST.filter(x=>x.status==='closed');
       const shTotalDiff = sh => {
@@ -5253,7 +5258,7 @@
       document.getElementById('shStats').innerHTML = `
         <div class="stat">عدد الشيفتات<b>${SH_LIST.length}</b></div>
         <div class="stat">مفتوحة الآن<b>${SH_LIST.filter(x=>x.status==='open').length}</b></div>
-        <div class="stat">إجمالي المبيعات<b>${fmt(SH_LIST.reduce((a,x)=>a+(x.__sales||0),0))} ${CURRENCY}</b></div>
+        <div class="stat">إجمالي المبيعات (صافي)<b>${fmt(SH_LIST.reduce((a,x)=>a+(x.__sales||0),0))} ${CURRENCY}</b></div>
         <div class="stat">إجمالي الخصومات<b style="color:var(--warn)">${fmt(totDiscounts)} ${CURRENCY}</b></div>
         <div class="stat">صافي الفروقات (المجموع الكلي)<b style="color:${totDiff<-0.01?'var(--red)':totDiff>0.01?'var(--warn)':'var(--ok)'}">${totDiff>0?'+':''}${fmt(totDiff)}</b></div>`;
       const dur = sh => {
@@ -5261,7 +5266,18 @@
         const m = Math.floor((end - new Date(sh.start_time))/60000);
         return Math.floor(m/60)+'س '+(m%60)+'د';
       };
-      L.innerHTML = `<table class="tbl"><tr><th>الموظف</th><th>الفرع</th><th>التاريخ</th><th>فتح</th><th>إغلاق</th><th>المدة</th><th>طلبات</th><th>مبيعات</th><th>خصومات</th><th>افتتاحي (إجمالي)</th><th>متوقع (إجمالي)</th><th>فعلي (إجمالي)</th><th>المطابقة</th><th></th></tr>
+      // 🔧 خيارات عرض منفصلة — أجور التوصيل وذمم التطبيقات/الموظفين والمصاريف (سحوبات الدرج) صارت
+      // أعمدة اختيارية تفعّلها وقت ما تحتاجها، مش مدموجة بعمود المبيعات الأساسي دايمًا
+      const showDel = document.getElementById('shShowDelivery')?.checked;
+      const showDhemam = document.getElementById('shShowDhemam')?.checked;
+      const showExp = document.getElementById('shShowExpenses')?.checked;
+      L.innerHTML = `
+        <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:10px;background:#fff8e1;border-radius:10px;padding:8px 12px">
+          <label class="chk"><input type="checkbox" id="shShowDelivery" onchange="loadShiftsPage()" ${showDel?'checked':''}> 🛵 عرض أجور التوصيل</label>
+          <label class="chk"><input type="checkbox" id="shShowDhemam" onchange="loadShiftsPage()" ${showDhemam?'checked':''}> 🧾 عرض ذمم التطبيقات/الموظفين</label>
+          <label class="chk"><input type="checkbox" id="shShowExpenses" onchange="loadShiftsPage()" ${showExp?'checked':''}> 💸 عرض المصاريف (سحوبات الدرج)</label>
+        </div>
+        <table class="tbl"><tr><th>الموظف</th><th>الفرع</th><th>التاريخ</th><th>فتح</th><th>إغلاق</th><th>المدة</th><th>طلبات</th><th>مبيعات (صافي)</th><th>خصومات</th>${showDel?'<th>🛵 أجور توصيل</th>':''}${showDhemam?'<th>🧾 ذمم</th>':''}${showExp?'<th>💸 مصاريف/سحوبات</th>':''}<th>افتتاحي (إجمالي)</th><th>متوقع (إجمالي)</th><th>فعلي (إجمالي)</th><th>المطابقة</th><th></th></tr>
         ${SH_LIST.map(sh=>{
           const diff = shTotalDiff(sh);
           const hasC = diff!==null;
@@ -5283,6 +5299,9 @@
             <td>${sh.__orders||0}</td>
             <td><b>${fmt(sh.__sales||0)}</b></td>
             <td>${sh.__discount>0?`<b style="color:var(--warn)">${fmt(sh.__discount)}</b>`:'—'}</td>
+            ${showDel?`<td style="color:var(--muted)">${sh.__delivery>0?fmt(sh.__delivery):'—'}</td>`:''}
+            ${showDhemam?`<td style="color:var(--muted)">${sh.__dhemamCount>0?sh.__dhemamCount+' — '+fmt(sh.__dhemamTotal):'—'}</td>`:''}
+            ${showExp?`<td style="color:var(--red)">${sh.__expenses>0?fmt(sh.__expenses):'—'}</td>`:''}
             <td>${fmt(totOpening)}</td>
             <td>${totExpected!==null?fmt(totExpected):'—'}</td>
             <td>${totCounted!==null?fmt(totCounted):'—'}</td>
@@ -5303,12 +5322,12 @@
   async function reprintShift(id){
     const sh = SH_LIST.find(x=>x.id===id); if(!sh) return;
     const { data: orders } = await db.from('orders')
-      .select('total, subtotal, discount, delivery_fee, payment_method, order_type, status, split_details, cancel_reason, order_items(item_name, quantity, unit_price)')
+      .select('total, subtotal, discount, delivery_fee, payment_method, order_type, status, split_details, cancel_reason, employee_tab_name, order_items(item_name, quantity, unit_price)')
       .eq('shift_id', sh.id);
     const all = orders||[];
     const cancelledOrders = all.filter(o=>o.status==='cancelled');
-    const dhemam = all.filter(o=>o.status!=='cancelled' && o.payment_method==='employee_tab');
-    const ok = all.filter(o=>o.status!=='cancelled' && o.payment_method!=='employee_tab');
+    const dhemam = all.filter(o=>o.status!=='cancelled' && o.employee_tab_name);
+    const ok = all.filter(o=>o.status!=='cancelled' && !o.employee_tab_name);
     const sum = k => ok.reduce((a,o)=>{
       const delFee = o.order_type==='delivery' ? parseFloat(o.delivery_fee||0) : 0;
       return a + (k==='total' ? Math.max(0, parseFloat(o.total||0)-delFee) : parseFloat(o[k]||0));
@@ -10837,6 +10856,13 @@ try {
       t0=new Date(fd.from); tEnd=new Date(fd.to);
       window.__dashFrom=fd.from; window.__dashTo=fd.to;
       setTimeout(()=>{ const lbl=document.getElementById('dashDateLabel'); if(lbl && !lbl.textContent) lbl.textContent='📅 اليوم — '+fd.label; },0);
+    }
+    // 🔧 تحديث زر التاريخ تلقائيًا من النطاق الفعلي — يشتغل مهما كانت طريقة فتح الشاشة
+    const dashBtnLbl = document.getElementById('dashDateBtnLabel');
+    if(dashBtnLbl){
+      const sameDay = t0.toDateString()===tEnd.toDateString();
+      dashBtnLbl.textContent = sameDay ? t0.toLocaleDateString('ar-JO',{year:'numeric',month:'2-digit',day:'2-digit'})
+        : (t0.toLocaleDateString('ar-JO',{year:'numeric',month:'2-digit',day:'2-digit'})+' → '+tEnd.toLocaleDateString('ar-JO',{year:'numeric',month:'2-digit',day:'2-digit'}));
     }
     const y0 = new Date(t0.getTime() - 86400000);
     // طلبات الفترة + أمس (حتى نفس الساعة)
