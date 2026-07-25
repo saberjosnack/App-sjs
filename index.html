@@ -11926,7 +11926,7 @@ try {
       const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0,0,0,0);
       const { data: linkedStaffRows } = await db.from('staff').select('id').eq('linked_hr_id', EMP.id);
       const linkedIds = (linkedStaffRows||[]).map(s=>s.id);
-      const [logsRes, attRes, advRes, mealsRes, shiftAdjRes] = await Promise.all([
+      const [logsRes, attRes, advRes, mealsRes, shiftAdjRes, dedRes, rwdRes] = await Promise.all([
         db.from('hr_time_logs').select('*').eq('employee_id', EMP.id).gte('clock_in', monthStart.toISOString()).order('clock_in',{ascending:false}),
         db.from('hr_attendance').select('hours').eq('employee_id', EMP.id).gte('work_date', monthStart.toISOString().split('T')[0]),
         db.from('hr_advances').select('*').eq('employee_id', EMP.id).order('created_at',{ascending:false}),
@@ -11934,6 +11934,8 @@ try {
         linkedIds.length
           ? db.from('shift_adjustments').select('amount').in('staff_id', linkedIds).eq('status','approved').gte('created_at', monthStart.toISOString())
           : db.from('shift_adjustments').select('amount').eq('staff_name', EMP.name).eq('status','approved').gte('created_at', monthStart.toISOString()),
+        db.from('employee_deductions').select('amount').eq('employee_id', EMP.id).gte('created_at', monthStart.toISOString()),
+        db.from('employee_rewards').select('amount').eq('employee_id', EMP.id).gte('created_at', monthStart.toISOString()),
       ]);
       const logs = logsRes.data||[];
       // 🚩 نفس فحص الأمان: أي جلسة أطول من 16 ساعة متواصلة مستبعدة (غالبًا نسيان خروج) لحد ما الأدمن يراجعها
@@ -11950,9 +11952,11 @@ try {
       const meals = mealsRes.data||[];
       const mealsTotal = meals.reduce((a,o)=>a+parseFloat(o.total||0),0);
       const shiftDed = (shiftAdjRes.data||[]).reduce((a,x)=>a+Math.abs(x.amount||0),0);
+      const deductionsTotal = (dedRes.data||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
+      const rewardsTotal = (rwdRes.data||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
       const gross = hoursThisMonth * (EMP.hourly_wage||0);
       const prevBalance = parseFloat(EMP.opening_balance||0);
-      const net = gross - advTakenThisMonth - mealsTotal - shiftDed + prevBalance;
+      const net = gross - advTakenThisMonth - mealsTotal - shiftDed - deductionsTotal + rewardsTotal + prevBalance;
 
       const { data: reqs } = await db.from('hr_advance_requests').select('*').eq('employee_id', EMP.id).order('created_at',{ascending:false}).limit(10);
       const allAdvances = adv.slice().sort((a,b)=>new Date(b.created_at)-new Date(a.created_at));
@@ -11976,6 +11980,8 @@ try {
           ${settingOn('hr_portal_show_advances')?`<div class="stat">إجمالي السلف القائمة (كل الوقت)<b style="color:var(--warn)">${fmt(advOutstanding)} ${CURRENCY}</b></div>`:''}
           ${settingOn('hr_portal_show_meals')?`<div class="stat">وجبات هالشهر<b>${meals.length} <small>(${fmt(mealsTotal)})</small></b></div>`:''}
           ${shiftDed>0?`<div class="stat" style="grid-column:1/-1">🔻 خصم عجز/زيادة شيفت (معتمد)<b style="color:var(--red)">${fmt(shiftDed)} ${CURRENCY}</b></div>`:''}
+          ${deductionsTotal>0?`<div class="stat" style="grid-column:1/-1">➖ خصومات هالشهر<b style="color:var(--red)">${fmt(deductionsTotal)} ${CURRENCY}</b></div>`:''}
+          ${rewardsTotal>0?`<div class="stat" style="grid-column:1/-1">🎁 مكافآت هالشهر<b style="color:var(--ok)">+${fmt(rewardsTotal)} ${CURRENCY}</b></div>`:''}
           ${settingOn('hr_portal_show_balance') && prevBalance!==0?`<div class="stat" style="grid-column:1/-1">📒 رصيد سابق (مرحّل)<b style="color:${prevBalance<0?'var(--red)':'var(--ok)'}">${prevBalance>0?'+':''}${fmt(prevBalance)} ${CURRENCY}</b></div>`:''}
         </div>
 
@@ -12138,7 +12144,7 @@ try {
     const fromIso = monthStart.toISOString();
     const { data: linkedStaffRows2 } = await db.from('staff').select('id').eq('linked_hr_id', empId);
     const linkedIds2 = (linkedStaffRows2||[]).map(s=>s.id);
-    const [attRes, logsRes, advRes, mealsRes, shiftAdjRes] = await Promise.all([
+    const [attRes, logsRes, advRes, mealsRes, shiftAdjRes, dedRes, rwdRes] = await Promise.all([
       db.from('hr_attendance').select('hours').eq('employee_id', empId).gte('work_date', fromIso.split('T')[0]),
       db.from('hr_time_logs').select('clock_in,clock_out').eq('employee_id', empId).not('clock_out','is',null).gte('clock_in', fromIso),
       db.from('hr_advances').select('amount').eq('employee_id', empId).gte('created_at', fromIso),
@@ -12146,6 +12152,8 @@ try {
       linkedIds2.length
         ? db.from('shift_adjustments').select('amount').in('staff_id', linkedIds2).eq('status','approved').gte('created_at', fromIso)
         : db.from('shift_adjustments').select('amount').eq('staff_name', empName).eq('status','approved').gte('created_at', fromIso),
+      db.from('employee_deductions').select('amount').eq('employee_id', empId).gte('created_at', fromIso),
+      db.from('employee_rewards').select('amount').eq('employee_id', empId).gte('created_at', fromIso),
     ]);
     const manualHours = (attRes.data||[]).reduce((a,x)=>a+parseFloat(x.hours||0),0);
     const portalHours = (logsRes.data||[]).filter(l=>((new Date(l.clock_out)-new Date(l.clock_in))/3600000)<=16).reduce((a,l)=>a+((new Date(l.clock_out)-new Date(l.clock_in))/3600000),0);
@@ -12154,7 +12162,9 @@ try {
     const advOutstanding = (advRes.data||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
     const mealsTotal = (mealsRes.data||[]).reduce((a,o)=>a+parseFloat(o.total||0),0);
     const shiftDed = (shiftAdjRes.data||[]).reduce((a,x)=>a+Math.abs(x.amount||0),0);
-    const net = gross - advOutstanding - mealsTotal - shiftDed + parseFloat(openingBalance||0);
+    const deductionsTotal = (dedRes.data||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
+    const rewardsTotal = (rwdRes.data||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
+    const net = gross - advOutstanding - mealsTotal - shiftDed - deductionsTotal + rewardsTotal + parseFloat(openingBalance||0);
     const maxAllowed = Math.max(0, net * ((maxAdvPercent||30)/100));
     return { net, maxAllowed };
   }
