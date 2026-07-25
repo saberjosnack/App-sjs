@@ -8149,13 +8149,23 @@
   // من الفلترة. هالفنكشن بتحول تاريخ محلي (YYYY-MM-DD) لحدود دقيقة بتوقيت عمّان الصحيح.
   function localDayStart(dateStr){ return dateStr+'T00:00:00+03:00'; }
   function localDayEnd(dateStr){ return dateStr+'T23:59:59+03:00'; }
+  // 🔧 مهم: نحسب "اليوم" و"أول الشهر" بتوقيت عمّان المحلي (+3)، مش UTC الخام — كان فيه خطأ هون
+  // ممكن يخلي فلتر HR الافتراضي يبلش بتاريخ مختلف بيوم عن بوابة الموظف قرب منتصف الليل بالضبط
+  function localTodayStr(){
+    const now = new Date();
+    const amman = new Date(now.getTime() + (3*60 - now.getTimezoneOffset())*60000);
+    return amman.toISOString().split('T')[0];
+  }
+  function localMonthStartStr(){
+    const t = localTodayStr();
+    return t.split('-').slice(0,2).join('-')+'-01';
+  }
   async function renderHR(){
     const C = document.getElementById('admContent');
     C.innerHTML = '<div class="empty-note">... جاري التحميل</div>';
     if(!HR_FILTER.from){
-      const d = new Date(); d.setDate(1);
-      HR_FILTER.from = d.toISOString().split('T')[0];
-      HR_FILTER.to = new Date().toISOString().split('T')[0];
+      HR_FILTER.from = localMonthStartStr();
+      HR_FILTER.to = localTodayStr();
     }
     const [empRes, attRes, advRes, ordRes, shiftAdjRes, tlRes, dedRes, rwdRes] = await Promise.all([
       db.from('meal_names').select('*').order('name'), // 🔧 كل الموظفين (فعّال وغير فعّال) — كانوا يستبعدوا الغير فعّالين من الأساس فما كانوا يظهروا أبدًا حتى للتفعيل
@@ -8287,6 +8297,7 @@
           <div><label style="font-weight:700;font-size:.82rem">من تاريخ</label><br><input type="date" id="hr_from" value="${HR_FILTER.from}" class="dfield"></div>
           <div><label style="font-weight:700;font-size:.82rem">إلى تاريخ</label><br><input type="date" id="hr_to" value="${HR_FILTER.to}" class="dfield"></div>
           <button class="mini ok" style="align-self:end" onclick="applyHrFilter()">🔍 فلترة</button>
+          <button class="mini tog" style="align-self:end" onclick="HR_FILTER.from=localMonthStartStr();HR_FILTER.to=localTodayStr();renderHR();">📅 الشهر الحالي (نفس بوابة الموظف)</button>
           <button class="add-btn" style="align-self:end;margin:0" onclick="mealNameForm()">＋ إضافة موظف HR</button>
           <button class="mini edit" style="align-self:end" onclick="printHRPDF()">📄 PDF منسّق</button>
         </div>
