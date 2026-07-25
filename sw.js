@@ -3674,7 +3674,10 @@
           <td>${TYPE_AR[o.order_type]||''}</td>
           <td><b>${fmt(o.total)}</b></td>
           <td>${o.status==='cancelled'?'❌':'✅'}</td>
-          <td><button class="mini tog" onclick="event.stopPropagation();reprintDay('${o.id}')">🖨️</button></td>
+          <td style="white-space:nowrap">
+            <button class="mini tog" onclick="event.stopPropagation();reprintDay('${o.id}')">🖨️</button>
+            <button class="mini del" onclick="event.stopPropagation();complaintForm('${o.id}','${esc(o.order_number)}','${o.branch_id||''}','${esc(o.branches?.name_ar||'')}','${o.created_by||''}','${esc(o.created_by_name||'')}')">😠</button>
+          </td>
         </tr>`).join('')}</table>`;
     }catch(e){ console.error(e); L.innerHTML = '<div class="alert-red">⚠️ '+esc(e.message||'خطأ بالبحث')+'</div>'; }
   }
@@ -5136,9 +5139,22 @@
       const list = data||[];
       window.__COMPLAINTS = list;
       const open = list.filter(c=>c.status!=='resolved');
+      // 📋 نجيب تفاصيل الطلب الكاملة (الأصناف، السعر، بيانات العميل) لكل شكوى مرتبطة بطلب حقيقي
+      const orderIds = [...new Set(list.map(c=>c.order_id).filter(Boolean))];
+      let ordersMap = {};
+      if(orderIds.length){
+        try{
+          const { data: ordersData } = await db.from('orders')
+            .select('id, total, subtotal, discount, delivery_fee, order_type, payment_method, created_at, customers(name,phone,address), order_items(item_name, quantity, unit_price)')
+            .in('id', orderIds);
+          (ordersData||[]).forEach(o=>ordersMap[o.id]=o);
+        }catch(e){ console.error('load complaint orders failed:', e); }
+      }
       box.innerHTML = `
         <div style="margin-bottom:14px;font-weight:800">😠 كل الشكاوي (${list.length}) — ${open.length} لسا مفتوحة</div>
-        ${list.map(c=>`<div style="border:1.5px solid ${c.status==='resolved'?'var(--line)':'var(--red)'};border-radius:12px;margin-bottom:14px;overflow:hidden;${c.status==='resolved'?'opacity:.7':''}">
+        ${list.map(c=>{
+          const ord = ordersMap[c.order_id];
+          return `<div style="border:1.5px solid ${c.status==='resolved'?'var(--line)':'var(--red)'};border-radius:12px;margin-bottom:14px;overflow:hidden;${c.status==='resolved'?'opacity:.7':''}">
           <div style="background:${c.status==='resolved'?'#f0f0f0':'#ffe0e0'};padding:10px 14px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px">
             <b>🧾 طلب #${esc(c.order_number||'—')} — ${esc(c.branch_name||'—')}</b>
             <span>${new Date(c.created_at).toLocaleString('ar-JO')}</span>
@@ -5146,6 +5162,15 @@
           <div style="padding:12px">
             <div style="margin-bottom:6px"><b>الموظف المسؤول عن الطلب:</b> ${esc(c.employee_name||'—')}</div>
             <div style="margin-bottom:6px"><b>الوصف:</b> ${esc(c.note||'—')}</div>
+            ${ord?`<div style="background:#f7f2e8;border-radius:10px;padding:10px 12px;margin:10px 0;font-size:.85rem">
+              <div style="font-weight:800;color:var(--maroon);margin-bottom:6px">📋 تفاصيل الطلب الكاملة</div>
+              ${ord.customers?.name||ord.customers?.phone?`<div>👤 ${esc(ord.customers?.name||'—')} — 📞 ${esc(ord.customers?.phone||'—')}${ord.customers?.address?' — 📍 '+esc(ord.customers.address):''}</div>`:''}
+              <div>نوع الطلب: ${TYPE_AR?.[ord.order_type]||esc(ord.order_type||'—')} — الدفع: ${PAY_AR?.[ord.payment_method]||esc(ord.payment_method||'—')}</div>
+              <ul style="margin:6px 0 6px 0;padding-inline-start:20px">
+                ${(ord.order_items||[]).map(i=>`<li>${i.quantity}× ${esc(i.item_name)} — ${fmt(i.quantity*i.unit_price)} ${CURRENCY}</li>`).join('')}
+              </ul>
+              <div style="font-weight:800">الإجمالي: ${fmt(ord.total)} ${CURRENCY}</div>
+            </div>`:(c.order_id?'<div style="color:var(--muted);font-size:.8rem">⚠️ ما قدرنا نجيب تفاصيل الطلب (ممكن اتحذف)</div>':'')}
             ${(c.images&&c.images.length)?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0">
               ${c.images.map(url=>`<img src="${url}" onclick="window.open('${url}','_blank')" style="width:110px;height:110px;object-fit:cover;border-radius:8px;cursor:pointer;border:1.5px solid var(--line)">`).join('')}
             </div>`:''}
@@ -5154,7 +5179,8 @@
               <button class="mini del" onclick="deductFromComplaint('${c.id}','${esc(c.employee_id||'')}','${esc(c.employee_name||'')}')">➖ خصم على الموظف</button>
             </div>
           </div>
-        </div>`).join('') || '<div class="empty-note">ما في شكاوي مسجّلة</div>'}`;
+        </div>`;
+        }).join('') || '<div class="empty-note">ما في شكاوي مسجّلة</div>'}`;
     }catch(e){ box.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message)}</div>`; console.error(e); }
   }
   async function resolveComplaint(id){
@@ -8157,6 +8183,14 @@
     if(attRes.error){
       C.innerHTML = `<div class="alert-red">⚠️ ${esc(attRes.error.message||'الجدول hr_attendance غير موجود — نفّذ SQL أولاً')}</div>`;
       console.error(attRes.error); return;
+    }
+    // 🔧 مهم: باقي الاستعلامات (السلف، الطلبات، خصومات الشيفت، الساعات الذاتية، الخصومات، المكافآت)
+    // ما كانت تُفحص أخطاؤها إطلاقًا — لو عمود جديد ناقص (زي reviewed_ok قبل تنفيذ الـSQL)، الاستعلام
+    // كان يفشل بصمت ويرجع بيانات فاضية بدون أي تنبيه، فتختفي الساعات/السلف من الحساب بدون سبب واضح
+    const otherErrors = [advRes, ordRes, shiftAdjRes, tlRes, dedRes, rwdRes].map(r=>r.error).filter(Boolean);
+    if(otherErrors.length){
+      C.innerHTML = `<div class="alert-red">⚠️ صار خطأ بجلب بيانات HR — على الأغلب ناقص تنفيذ SQL: ${esc(otherErrors.map(e=>e.message).join(' | '))}</div>`;
+      console.error(otherErrors); return;
     }
     const empList = empRes.data||[];
     const attendance = attRes.data||[];
