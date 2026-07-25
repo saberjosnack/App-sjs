@@ -611,6 +611,9 @@
         <button data-a="suppliers" onclick="admTab('suppliers')">🚚 الموردين</button>
         <button data-a="ordersScreen" onclick="admTab('ordersScreen')" style="background:#25D366;color:#fff;border-color:#128C7E">📋 الطلبيات</button>
         <button data-a="devices" onclick="admTab('devices')">🖥️ الأجهزة</button>
+        <button data-a="complaints" onclick="admTab('complaints')" style="background:#ffd0d0;border-color:#c0392b">😠 شكاوي العملاء</button>
+        <button data-a="deductions" onclick="admTab('deductions')" style="background:#ffe0e0;border-color:#c0392b">➖ جدول الخصومات</button>
+        <button data-a="rewards" onclick="admTab('rewards')" style="background:#d4f7d4;border-color:#1a9c4b">🎁 جدول المكافآت</button>
         <button data-a="sett" onclick="admTab('sett')">🔧 إعدادات</button>
         <button data-a="shifts" onclick="admTab('shifts')">🔄 شيفتات</button>
       </div>
@@ -1229,7 +1232,7 @@
     const dashBtn = document.querySelector('[data-v="dash"]');
     if (dashBtn) dashBtn.style.display = adm ? '' : 'none';
     const invBar = document.getElementById('invSearchBar');
-    if (invBar) invBar.classList.toggle('hidden', !adm);
+    if (invBar) invBar.classList.toggle('hidden', !(adm || cc));
     // التوصيل حسب الصلاحية
     const delBtn = document.querySelector('#otypeBar [data-t="delivery"]');
     if (delBtn) delBtn.style.display = perm('order_delivery') ? '' : 'none';
@@ -3630,7 +3633,7 @@
   let DAY = [];
   /* ---- بحث الفواتير (مدير) ---- */
   async function searchInvoices(){
-    if(!isAdmin()){ toast('⛔ صلاحية المدير فقط'); return; }
+    if(!isAdmin() && !isCallCenter()){ toast('⛔ صلاحية المدير أو الكول سنتر فقط'); return; }
     const q = document.getElementById('invSearch').value.trim();
     if(!q){ loadDay(); return; }
     const L = document.getElementById('dayList');
@@ -3671,7 +3674,10 @@
           <td>${TYPE_AR[o.order_type]||''}</td>
           <td><b>${fmt(o.total)}</b></td>
           <td>${o.status==='cancelled'?'❌':'✅'}</td>
-          <td><button class="mini tog" onclick="event.stopPropagation();reprintDay('${o.id}')">🖨️</button></td>
+          <td style="white-space:nowrap">
+            <button class="mini tog" onclick="event.stopPropagation();reprintDay('${o.id}')">🖨️</button>
+            <button class="mini del" onclick="event.stopPropagation();complaintForm('${o.id}','${esc(o.order_number)}','${o.branch_id||''}','${esc(o.branches?.name_ar||'')}','${o.created_by||''}','${esc(o.created_by_name||'')}')">😠</button>
+          </td>
         </tr>`).join('')}</table>`;
     }catch(e){ console.error(e); L.innerHTML = '<div class="alert-red">⚠️ '+esc(e.message||'خطأ بالبحث')+'</div>'; }
   }
@@ -3715,6 +3721,7 @@
       <div class="trow total"><span>الإجمالي</span><span>${fmt(o.total)} ${CURRENCY}</span></div>
       <div class="m-act">
         <button class="save" onclick="reprintDay('${o.id}');closeModal()">🖨️ طباعة</button>
+        <button class="mini del" onclick="complaintForm('${o.id}','${esc(o.order_number)}','${o.branch_id||''}','${esc(o.branches?.name_ar||'')}','${o.created_by||''}','${esc(o.created_by_name||'')}')">😠 تسجيل شكوى عميل</button>
         <button class="cancel" onclick="closeModal()">إغلاق</button>
       </div>`);
   }
@@ -3785,7 +3792,7 @@
         if(window.__dayFrom && window.__dayTo){
           q = q.gte('created_at', window.__dayFrom).lte('created_at', window.__dayTo);
         } else if(df && dt){
-          q = q.gte('created_at', df+'T00:00:00').lte('created_at', dt+'T23:59:59');
+          q = q.gte('created_at', localDayStart(df)).lte('created_at', localDayEnd(dt));
         } else {
           const fd = getFinancialDay();
           q = q.gte('created_at', fd.from).lte('created_at', fd.to);
@@ -3932,12 +3939,61 @@
         ${o.order_type==='delivery'?`<tr><td>أجرة التوصيل</td><td class="tl">${fmt(o.delivery_fee)}</td></tr>`:''}
         <tr><td><b>الإجمالي</b></td><td class="tl"><b style="color:var(--red)">${fmt(o.total)} ${CURRENCY}</b></td></tr>
       </table></div>
-      <div class="m-act"><button class="cancel" onclick="closeModal()">إغلاق</button></div>`);
+      <div class="m-act"><button class="cancel" onclick="closeModal()">إغلاق</button><button class="mini del" onclick="complaintForm('${o.id}','${esc(o.order_number)}','${o.branch_id||''}','${esc(o.branches?.name_ar||'')}','${o.created_by||''}','${esc(o.created_by_name||'')}')">😠 تسجيل شكوى عميل</button></div>`);
   }
 
+  /* ---- شكوى عميل على طلب ---- */
+  window.__complaintImgs = [];
+  function complaintForm(orderId, orderNumber, branchId, branchName, defaultEmpId, defaultEmpName){
+    window.__complaintImgs = [];
+    db.from('meal_names').select('id,name').order('name').then(({data})=>{
+      const emps = data||[];
+      modal(`<h3>😠 تسجيل شكوى عميل — طلب #${esc(orderNumber)}</h3>
+        <div class="f-row"><label>الموظف المسؤول عن الطلب</label>
+          <select id="cmpEmp">${emps.map(e=>`<option value="${e.id}" ${e.name===defaultEmpName?'selected':''}>${esc(e.name)}</option>`).join('')}</select>
+        </div>
+        <div class="f-row"><label>وصف الشكوى</label><textarea id="cmpNote" rows="3" placeholder="اكتب تفاصيل شكوى العميل..."></textarea></div>
+        <div class="f-row"><label>صور (سكرين شوت المحادثة، صورة أو أكتر)</label>
+          <input type="file" id="cmpFiles" accept="image/*" multiple onchange="addComplaintImages(this)">
+          <div id="cmpImgPrev" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"></div>
+        </div>
+        <div class="m-act"><button class="cancel" onclick="closeModal()">إلغاء</button><button class="save" onclick="saveComplaint('${orderId}','${esc(orderNumber)}','${branchId}','${esc(branchName)}')">💾 حفظ الشكوى</button></div>`);
+    });
+  }
+  function addComplaintImages(input){
+    const files = input.files; if(!files || !files.length) return;
+    [...files].forEach(f=>{
+      const img = new Image();
+      img.onload = ()=>{
+        const cv = document.createElement('canvas');
+        const scale = Math.min(1, 900/Math.max(img.width, img.height));
+        cv.width = Math.round(img.width*scale); cv.height = Math.round(img.height*scale);
+        cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+        const dataUrl = cv.toDataURL('image/jpeg', 0.75);
+        window.__complaintImgs.push(dataUrl);
+        const prev = document.getElementById('cmpImgPrev');
+        if(prev) prev.innerHTML += `<img src="${dataUrl}" style="width:80px;height:80px;object-fit:cover;border-radius:8px;border:1.5px solid var(--line)">`;
+      };
+      img.src = URL.createObjectURL(f);
+    });
+  }
+  async function saveComplaint(orderId, orderNumber, branchId, branchName){
+    const empSel = document.getElementById('cmpEmp');
+    const empId = empSel?.value; const empName = empSel?.selectedOptions?.[0]?.textContent;
+    const note = document.getElementById('cmpNote')?.value?.trim();
+    if(!note && !window.__complaintImgs.length){ toast('⚠️ اكتب وصف أو أرفق صورة على الأقل'); return; }
+    try{
+      const { error } = await db.from('customer_complaints').insert({
+        order_id: orderId||null, order_number: orderNumber||null, branch_id: branchId||null, branch_name: branchName||null,
+        employee_id: empId||null, employee_name: empName||null,
+        images: window.__complaintImgs, note: note||null, status:'open', created_by: ME.full_name
+      });
+      if(error){ toast('✗ '+error.message); return; }
+      toast('✓ اتسجلت الشكوى'); window.__complaintImgs = []; closeModal();
+    }catch(e){ toast('✗ '+e.message); }
+  }
   async function markReady(id){
     try {
-      await db.from('orders').update({ status:'ready', updated_at: new Date().toISOString() }).eq('id', id);
       toast('✅ الطلب صار جاهز');
       loadDay(); checkOverdue();
     } catch(e) { console.error(e); }
@@ -4479,7 +4535,7 @@
     if(_curFrom && _curTo) return {from:_curFrom, to:_curTo};
     const fd=document.getElementById('salesFrom')?.value;
     const td=document.getElementById('salesTo')?.value;
-    if(fd&&td) return {from:fd+'T00:00:00', to:td+'T23:59:59'};
+    if(fd&&td) return {from:localDayStart(fd), to:localDayEnd(td)};
     // افتراضي: اليوم المالي
     return getFinancialDay();
   }
@@ -4805,6 +4861,7 @@
     items:'items_manage', cats:'cats_manage', codes:'codes_manage', staff:'staff_manage', roles:'admin_only', branches:'branches_manage', sett:'settings_manage', devices:'devices_manage',
     ingredients:'inventory_view', recipes:'inventory_view',
     inventory:'inventory_audit', transfers:'inventory_transfer', warehouse:'admin_only', treasury:'admin_only', hr:'admin_only', chats:'admin_only', dailyAudits:'admin_only', hrLocations:'admin_only', dutyHours:'admin_only', hrClosures:'admin_only', ordersScreen:'admin_only',
+    complaints:'admin_only', deductions:'admin_only', rewards:'admin_only',
     expenses:'expenses_view', purchases:'purchases_view',
     platforms:'platforms_view', empmeals:'empmeals_view', topcust:'topcust_view', waste:'waste_log', suppliers:'purchases_view',
   };
@@ -5059,6 +5116,179 @@
       loadShiftsPage();
       renderShiftAdjustments();
     }
+    if(admView==='complaints'){
+      C.innerHTML = `<div id="complaintsBox"><div class="empty-note">جاري التحميل...</div></div>`;
+      renderComplaints();
+    }
+    if(admView==='deductions'){
+      C.innerHTML = `<div id="deductionsBox"><div class="empty-note">جاري التحميل...</div></div>`;
+      renderDeductionsLedger();
+    }
+    if(admView==='rewards'){
+      C.innerHTML = `<div id="rewardsBox"><div class="empty-note">جاري التحميل...</div></div>`;
+      renderRewardsLedger();
+    }
+  }
+
+  /* ---- شكاوي العملاء ---- */
+  async function renderComplaints(){
+    const box = document.getElementById('complaintsBox'); if(!box) return;
+    try{
+      const { data, error } = await db.from('customer_complaints').select('*').order('created_at',{ascending:false});
+      if(error){ box.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message||'الجدول customer_complaints غير موجود — نفّذ SQL أولاً')}</div>`; return; }
+      const list = data||[];
+      window.__COMPLAINTS = list;
+      const open = list.filter(c=>c.status!=='resolved');
+      // 📋 نجيب تفاصيل الطلب الكاملة (الأصناف، السعر، بيانات العميل) لكل شكوى مرتبطة بطلب حقيقي
+      const orderIds = [...new Set(list.map(c=>c.order_id).filter(Boolean))];
+      let ordersMap = {};
+      if(orderIds.length){
+        try{
+          const { data: ordersData } = await db.from('orders')
+            .select('id, total, subtotal, discount, delivery_fee, order_type, payment_method, created_at, customers(name,phone,address), order_items(item_name, quantity, unit_price)')
+            .in('id', orderIds);
+          (ordersData||[]).forEach(o=>ordersMap[o.id]=o);
+        }catch(e){ console.error('load complaint orders failed:', e); }
+      }
+      box.innerHTML = `
+        <div style="margin-bottom:14px;font-weight:800">😠 كل الشكاوي (${list.length}) — ${open.length} لسا مفتوحة</div>
+        ${list.map(c=>{
+          const ord = ordersMap[c.order_id];
+          return `<div style="border:1.5px solid ${c.status==='resolved'?'var(--line)':'var(--red)'};border-radius:12px;margin-bottom:14px;overflow:hidden;${c.status==='resolved'?'opacity:.7':''}">
+          <div style="background:${c.status==='resolved'?'#f0f0f0':'#ffe0e0'};padding:10px 14px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px">
+            <b>🧾 طلب #${esc(c.order_number||'—')} — ${esc(c.branch_name||'—')}</b>
+            <span>${new Date(c.created_at).toLocaleString('ar-JO')}</span>
+          </div>
+          <div style="padding:12px">
+            <div style="margin-bottom:6px"><b>الموظف المسؤول عن الطلب:</b> ${esc(c.employee_name||'—')}</div>
+            <div style="margin-bottom:6px"><b>الوصف:</b> ${esc(c.note||'—')}</div>
+            ${ord?`<div style="background:#f7f2e8;border-radius:10px;padding:10px 12px;margin:10px 0;font-size:.85rem">
+              <div style="font-weight:800;color:var(--maroon);margin-bottom:6px">📋 تفاصيل الطلب الكاملة</div>
+              ${ord.customers?.name||ord.customers?.phone?`<div>👤 ${esc(ord.customers?.name||'—')} — 📞 ${esc(ord.customers?.phone||'—')}${ord.customers?.address?' — 📍 '+esc(ord.customers.address):''}</div>`:''}
+              <div>نوع الطلب: ${TYPE_AR?.[ord.order_type]||esc(ord.order_type||'—')} — الدفع: ${PAY_AR?.[ord.payment_method]||esc(ord.payment_method||'—')}</div>
+              <ul style="margin:6px 0 6px 0;padding-inline-start:20px">
+                ${(ord.order_items||[]).map(i=>`<li>${i.quantity}× ${esc(i.item_name)} — ${fmt(i.quantity*i.unit_price)} ${CURRENCY}</li>`).join('')}
+              </ul>
+              <div style="font-weight:800">الإجمالي: ${fmt(ord.total)} ${CURRENCY}</div>
+            </div>`:(c.order_id?'<div style="color:var(--muted);font-size:.8rem">⚠️ ما قدرنا نجيب تفاصيل الطلب (ممكن اتحذف)</div>':'')}
+            ${(c.images&&c.images.length)?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0">
+              ${c.images.map(url=>`<img src="${url}" onclick="window.open('${url}','_blank')" style="width:110px;height:110px;object-fit:cover;border-radius:8px;cursor:pointer;border:1.5px solid var(--line)">`).join('')}
+            </div>`:''}
+            <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+              ${c.status!=='resolved'?`<button class="mini ok" onclick="resolveComplaint('${c.id}')">✅ تم إنهاء الخلاف</button>`:'<b style="color:var(--ok)">✅ متسوّى</b>'}
+              <button class="mini del" onclick="deductFromComplaint('${c.id}','${esc(c.employee_id||'')}','${esc(c.employee_name||'')}')">➖ خصم على الموظف</button>
+            </div>
+          </div>
+        </div>`;
+        }).join('') || '<div class="empty-note">ما في شكاوي مسجّلة</div>'}`;
+    }catch(e){ box.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message)}</div>`; console.error(e); }
+  }
+  async function resolveComplaint(id){
+    if(!confirm('تأكيد إنه الخلاف مع العميل انتهى؟')) return;
+    try{
+      await db.from('customer_complaints').update({ status:'resolved', resolved_by: ME.full_name, resolved_at: new Date().toISOString() }).eq('id', id);
+      toast('✓ تم إنهاء الخلاف'); renderComplaints();
+    }catch(e){ toast('✗ '+e.message); }
+  }
+  async function deductFromComplaint(complaintId, empId, empName){
+    const { data } = await db.from('meal_names').select('id,name').order('name');
+    const emps = data||[];
+    modal(`<h3>➖ خصم على موظف</h3>
+      <div class="f-row"><label>الموظف</label><select id="dedEmp">${emps.map(e=>`<option value="${e.id}" ${e.id===empId?'selected':''}>${esc(e.name)}</option>`).join('')}</select></div>
+      <div class="f-row"><label>المبلغ (${CURRENCY})</label><input id="dedAmt" type="number" step="0.01" placeholder="0.00"></div>
+      <div class="f-row"><label>السبب</label><input id="dedReason" placeholder="شكوى عميل — طلب #..." value="${empName?('شكوى عميل من '+esc(empName)):''}"></div>
+      <div class="m-act"><button class="cancel" onclick="closeModal()">إلغاء</button><button class="save" onclick="saveDeduction('${complaintId}')">💾 حفظ الخصم</button></div>`);
+  }
+  async function saveDeduction(complaintId){
+    const empSel = document.getElementById('dedEmp');
+    const empId = empSel?.value; const empName = empSel?.selectedOptions?.[0]?.textContent;
+    const amount = parseFloat(document.getElementById('dedAmt')?.value);
+    const reason = document.getElementById('dedReason')?.value?.trim();
+    if(!empId || !amount || amount<=0){ toast('⚠️ اختر الموظف والمبلغ'); return; }
+    try{
+      const { error } = await db.from('employee_deductions').insert({
+        employee_id: empId, employee_name: empName, amount, reason: reason||null,
+        complaint_id: complaintId||null, created_by: ME.full_name
+      });
+      if(error){ toast('✗ '+error.message); return; }
+      toast('✓ اتسجّل الخصم'); closeModal();
+      if(document.getElementById('complaintsBox')) renderComplaints();
+      if(document.getElementById('deductionsBox')) renderDeductionsLedger();
+    }catch(e){ toast('✗ '+e.message); }
+  }
+
+  /* ---- جدول الخصومات ---- */
+  async function renderDeductionsLedger(){
+    const box = document.getElementById('deductionsBox'); if(!box) return;
+    try{
+      const { data, error } = await db.from('employee_deductions').select('*').order('created_at',{ascending:false});
+      if(error){ box.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message||'الجدول employee_deductions غير موجود — نفّذ SQL أولاً')}</div>`; return; }
+      const list = data||[];
+      const total = list.reduce((a,d)=>a+parseFloat(d.amount||0),0);
+      box.innerHTML = `
+        <button class="add-btn" onclick="deductFromComplaint('', '', '')">➖ إضافة خصم يدوي</button>
+        <div style="margin:10px 0;font-weight:800">إجمالي الخصومات: <span style="color:var(--red)">${fmt(total)} ${CURRENCY}</span> — ${list.length} سجل</div>
+        <div class="tbl-wrap"><table class="tbl">
+          <tr><th>التاريخ</th><th>الموظف</th><th>المبلغ</th><th>السبب</th><th></th></tr>
+          ${list.map(d=>`<tr>
+            <td>${new Date(d.created_at).toLocaleDateString('ar-JO')}</td>
+            <td>${esc(d.employee_name||'—')}</td>
+            <td><b style="color:var(--red)">-${fmt(d.amount)}</b></td>
+            <td>${esc(d.reason||'—')}${d.complaint_id?' <span style="color:var(--muted);font-size:.75rem">(من شكوى عميل)</span>':''}</td>
+            <td><button class="mini del" onclick="deleteDeduction('${d.id}')">🗑️</button></td>
+          </tr>`).join('') || '<tr><td colspan="5" class="empty-note">ما في خصومات</td></tr>'}
+        </table></div>`;
+    }catch(e){ box.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message)}</div>`; console.error(e); }
+  }
+  async function deleteDeduction(id){
+    if(!confirm('⚠️ حذف هاد الخصم نهائيًا؟')) return;
+    try{ await db.from('employee_deductions').delete().eq('id', id); toast('✓ انحذف'); renderDeductionsLedger(); }
+    catch(e){ toast('✗ '+e.message); }
+  }
+
+  /* ---- جدول المكافآت ---- */
+  async function renderRewardsLedger(){
+    const box = document.getElementById('rewardsBox'); if(!box) return;
+    try{
+      const { data, error } = await db.from('employee_rewards').select('*').order('created_at',{ascending:false});
+      if(error){ box.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message||'الجدول employee_rewards غير موجود — نفّذ SQL أولاً')}</div>`; return; }
+      const list = data||[];
+      const total = list.reduce((a,d)=>a+parseFloat(d.amount||0),0);
+      box.innerHTML = `
+        <button class="add-btn" onclick="addRewardForm()">🎁 إضافة مكافأة</button>
+        <div style="margin:10px 0;font-weight:800">إجمالي المكافآت: <span style="color:var(--ok)">${fmt(total)} ${CURRENCY}</span> — ${list.length} سجل</div>
+        <div class="tbl-wrap"><table class="tbl">
+          <tr><th>التاريخ</th><th>الموظف</th><th>المبلغ</th><th>السبب</th><th></th></tr>
+          ${list.map(d=>`<tr>
+            <td>${new Date(d.created_at).toLocaleDateString('ar-JO')}</td>
+            <td>${esc(d.employee_name||'—')}</td>
+            <td><b style="color:var(--ok)">+${fmt(d.amount)}</b></td>
+            <td>${esc(d.reason||'—')}</td>
+            <td><button class="mini del" onclick="deleteReward('${d.id}')">🗑️</button></td>
+          </tr>`).join('') || '<tr><td colspan="5" class="empty-note">ما في مكافآت</td></tr>'}
+        </table></div>`;
+    }catch(e){ box.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message)}</div>`; console.error(e); }
+  }
+  async function addRewardForm(){
+    const { data } = await db.from('meal_names').select('id,name').order('name');
+    const emps = data||[];
+    modal(`<h3>🎁 إضافة مكافأة لموظف</h3>
+      <div class="f-row"><label>الموظف</label><select id="rwdEmp">${emps.map(e=>`<option value="${e.id}">${esc(e.name)}</option>`).join('')}</select></div>
+      <div class="f-row"><label>المبلغ (${CURRENCY})</label><input id="rwdAmt" type="number" step="0.01" placeholder="0.00"></div>
+      <div class="f-row"><label>السبب</label><input id="rwdReason" placeholder="مكافأة أداء ممتاز..."></div>
+      <div class="m-act"><button class="cancel" onclick="closeModal()">إلغاء</button><button class="save" onclick="saveReward()">💾 حفظ</button></div>`);
+  }
+  async function saveReward(){
+    const empSel = document.getElementById('rwdEmp');
+    const empId = empSel?.value; const empName = empSel?.selectedOptions?.[0]?.textContent;
+    const amount = parseFloat(document.getElementById('rwdAmt')?.value);
+    const reason = document.getElementById('rwdReason')?.value?.trim();
+    if(!empId || !amount || amount<=0){ toast('⚠️ اختر الموظف والمبلغ'); return; }
+    try{
+      const { error } = await db.from('employee_rewards').insert({ employee_id: empId, employee_name: empName, amount, reason: reason||null, created_by: ME.full_name });
+      if(error){ toast('✗ '+error.message); return; }
+      toast('✓ اتسجّلت المكافأة'); closeModal(); renderRewardsLedger();
+    }catch(e){ toast('✗ '+e.message); }
   }
 
   /* ---- طلبات الموافقة على عجز/زيادة الشيفتات ---- */
@@ -6984,7 +7214,7 @@
       const {data: orders} = await db.from('orders')
         .select('id, order_items(item_name, quantity, menu_item_id)')
         .eq('branch_id', branchId).eq('status','delivered')
-        .gte('created_at', from+'T00:00:00').lte('created_at', to+'T23:59:59');
+        .gte('created_at', localDayStart(from)).lte('created_at', localDayEnd(to));
       const allItems = (orders||[]).flatMap(o=>o.order_items||[]);
       const itemIds = [...new Set(allItems.map(l=>l.menu_item_id).filter(Boolean))];
       // 2) الوصفات
@@ -7004,7 +7234,7 @@
       const invMap = {}; (inv||[]).forEach(i=>invMap[i.ingredient_id]=i);
       // 5) آخر جرد بهاي الفترة (لو موجود) لعرض الهدر/السرقة
       const {data: lastAudit} = await db.from('inventory_audits').select('*')
-        .eq('branch_id', branchId).gte('created_at', from+'T00:00:00').lte('created_at', to+'T23:59:59')
+        .eq('branch_id', branchId).gte('created_at', localDayStart(from)).lte('created_at', localDayEnd(to))
         .order('created_at',{ascending:false}).limit(1);
       const auditDetails = lastAudit?.[0]?.details || [];
 
@@ -7138,7 +7368,7 @@
       DA_FILTER.from = today; DA_FILTER.to = today;
     }
     let q = db.from('inventory_audits').select('*, branches(name_ar)')
-      .gte('created_at', DA_FILTER.from+'T00:00:00').lte('created_at', DA_FILTER.to+'T23:59:59')
+      .gte('created_at', localDayStart(DA_FILTER.from)).lte('created_at', localDayEnd(DA_FILTER.to))
       .order('created_at',{ascending:false});
     if(DA_FILTER.branch) q = q.eq('branch_id', DA_FILTER.branch);
     const { data, error } = await q;
@@ -7564,7 +7794,7 @@
     const to = document.getElementById('cons_to')?.value;
     try{
       const { data, error } = await db.from('inventory_movements').select('ingredient_id, quantity, type')
-        .eq('type','sale').gte('created_at', from+'T00:00:00').lte('created_at', to+'T23:59:59');
+        .eq('type','sale').gte('created_at', localDayStart(from)).lte('created_at', localDayEnd(to));
       if(error){ body.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message||'الجدول inventory_movements غير موجود')}</div>`; return; }
       const byIng = {};
       (data||[]).forEach(m=>{
@@ -7671,7 +7901,7 @@
     let moveErr = null;
     try{
       let q = db.from('inventory_movements').select('*, ingredients(name,unit), branches(name_ar)')
-        .gte('created_at', WH_FILTER.from+'T00:00:00').lte('created_at', WH_FILTER.to+'T23:59:59')
+        .gte('created_at', localDayStart(WH_FILTER.from)).lte('created_at', localDayEnd(WH_FILTER.to))
         .order('created_at',{ascending:false}).limit(500);
       if(WH_FILTER.branch) q = q.eq('branch_id', WH_FILTER.branch);
       if(WH_FILTER.ing) q = q.eq('ingredient_id', WH_FILTER.ing);
@@ -7912,6 +8142,12 @@
   let HR_FILTER = { from:'', to:'' };
   let HR_SEARCH = '';
   function hrsBetween(a,b){ return Math.max(0,(new Date(b)-new Date(a))/3600000); }
+  // 🔧 مهم جدًا: عمّان بتوقيت UTC+3 طول السنة (بدون توقيت صيفي). أي مقارنة تاريخ بدون تحديد
+  // المنطقة الزمنية بيفترضها Postgres UTC — يعني "00:00:00" اليوم بتصير فعليًا 3:00 صباحًا بتوقيت
+  // عمّان، فأي جلسة عمل بدأت بين منتصف الليل والساعة 3 فجرًا (وارد كتير لأن آخر دوام 2 فجرًا) بتنقص
+  // من الفلترة. هالفنكشن بتحول تاريخ محلي (YYYY-MM-DD) لحدود دقيقة بتوقيت عمّان الصحيح.
+  function localDayStart(dateStr){ return dateStr+'T00:00:00+03:00'; }
+  function localDayEnd(dateStr){ return dateStr+'T23:59:59+03:00'; }
   async function renderHR(){
     const C = document.getElementById('admContent');
     C.innerHTML = '<div class="empty-note">... جاري التحميل</div>';
@@ -7920,21 +8156,25 @@
       HR_FILTER.from = d.toISOString().split('T')[0];
       HR_FILTER.to = new Date().toISOString().split('T')[0];
     }
-    const [empRes, attRes, advRes, ordRes, shiftAdjRes, tlRes] = await Promise.all([
+    const [empRes, attRes, advRes, ordRes, shiftAdjRes, tlRes, dedRes, rwdRes] = await Promise.all([
       db.from('meal_names').select('*').order('name'), // 🔧 كل الموظفين (فعّال وغير فعّال) — كانوا يستبعدوا الغير فعّالين من الأساس فما كانوا يظهروا أبدًا حتى للتفعيل
       db.from('hr_attendance').select('employee_id, work_date, hours')
         .gte('work_date', HR_FILTER.from).lte('work_date', HR_FILTER.to),
       db.from('hr_advances').select('employee_id, amount, created_at, status')
-        .gte('created_at', HR_FILTER.from+'T00:00:00').lte('created_at', HR_FILTER.to+'T23:59:59'),
+        .gte('created_at', localDayStart(HR_FILTER.from)).lte('created_at', localDayEnd(HR_FILTER.to)),
       db.from('orders').select('employee_tab_name, employee_meal_id, total, status')
         .not('employee_tab_name','is',null)
-        .gte('created_at', HR_FILTER.from+'T00:00:00').lte('created_at', HR_FILTER.to+'T23:59:59'),
+        .gte('created_at', localDayStart(HR_FILTER.from)).lte('created_at', localDayEnd(HR_FILTER.to)),
       db.from('shift_adjustments').select('staff_id, staff_name, amount, status, created_at')
         .eq('status','approved')
-        .gte('created_at', HR_FILTER.from+'T00:00:00').lte('created_at', HR_FILTER.to+'T23:59:59'),
-      db.from('hr_time_logs').select('employee_id, clock_in, clock_out')
+        .gte('created_at', localDayStart(HR_FILTER.from)).lte('created_at', localDayEnd(HR_FILTER.to)),
+      db.from('hr_time_logs').select('id, employee_id, clock_in, clock_out, reviewed_ok')
         .not('clock_out','is',null)
-        .gte('clock_in', HR_FILTER.from+'T00:00:00').lte('clock_in', HR_FILTER.to+'T23:59:59'),
+        .gte('clock_in', localDayStart(HR_FILTER.from)).lte('clock_in', localDayEnd(HR_FILTER.to)),
+      db.from('employee_deductions').select('employee_id, amount, reason, created_at')
+        .gte('created_at', localDayStart(HR_FILTER.from)).lte('created_at', localDayEnd(HR_FILTER.to)),
+      db.from('employee_rewards').select('employee_id, amount, reason, created_at')
+        .gte('created_at', localDayStart(HR_FILTER.from)).lte('created_at', localDayEnd(HR_FILTER.to)),
     ]);
     if(empRes.error){
       C.innerHTML = `<div class="alert-red">⚠️ ${esc(empRes.error.message||'خطأ بجلب موظفي HR')}</div>`;
@@ -7944,6 +8184,14 @@
       C.innerHTML = `<div class="alert-red">⚠️ ${esc(attRes.error.message||'الجدول hr_attendance غير موجود — نفّذ SQL أولاً')}</div>`;
       console.error(attRes.error); return;
     }
+    // 🔧 مهم: باقي الاستعلامات (السلف، الطلبات، خصومات الشيفت، الساعات الذاتية، الخصومات، المكافآت)
+    // ما كانت تُفحص أخطاؤها إطلاقًا — لو عمود جديد ناقص (زي reviewed_ok قبل تنفيذ الـSQL)، الاستعلام
+    // كان يفشل بصمت ويرجع بيانات فاضية بدون أي تنبيه، فتختفي الساعات/السلف من الحساب بدون سبب واضح
+    const otherErrors = [advRes, ordRes, shiftAdjRes, tlRes, dedRes, rwdRes].map(r=>r.error).filter(Boolean);
+    if(otherErrors.length){
+      C.innerHTML = `<div class="alert-red">⚠️ صار خطأ بجلب بيانات HR — على الأغلب ناقص تنفيذ SQL: ${esc(otherErrors.map(e=>e.message).join(' | '))}</div>`;
+      console.error(otherErrors); return;
+    }
     const empList = empRes.data||[];
     const attendance = attRes.data||[];
     const advances = advRes.data||[];
@@ -7952,15 +8200,18 @@
     // (يعني نفس الشخص كاشير ومسجّل بـHR كمان بنفس الاسم بالضبط)
     const shiftAdjustments = shiftAdjRes.data||[];
     const timeLogs = tlRes.data||[];
+    const deductions = dedRes.data||[];
+    const rewards = rwdRes.data||[];
 
     const rows = empList.map(e=>{
       const myAtt = attendance.filter(a=>a.employee_id===e.id);
       const manualHours = myAtt.reduce((a,x)=>a+parseFloat(x.hours||0), 0);
       const myLogs = timeLogs.filter(l=>l.employee_id===e.id);
       // 🚩 أي جلسة حضور واحدة أطول من 16 ساعة متواصلة غالبًا نسيان تسجيل خروج، مش دوام حقيقي —
-      // منستبعدها من حساب الراتب تلقائيًا ومنعلّم عليها بتنبيه، لحد ما الأدمن يراجعها ويصححها يدويًا
-      const suspiciousLogs = myLogs.filter(l=>((new Date(l.clock_out)-new Date(l.clock_in))/3600000) > 16);
-      const validLogs = myLogs.filter(l=>((new Date(l.clock_out)-new Date(l.clock_in))/3600000) <= 16);
+      // منستبعدها من حساب الراتب تلقائيًا ومنعلّم عليها بتنبيه، لحد ما الأدمن "يعتمدها" يدويًا
+      // (لبعض الموظفين فعلًا بيشتغلوا شيفتات أطول من 16 ساعة أحيانًا) أو يصحح وقت الخروج
+      const suspiciousLogs = myLogs.filter(l=>((new Date(l.clock_out)-new Date(l.clock_in))/3600000) > 16 && !l.reviewed_ok);
+      const validLogs = myLogs.filter(l=>((new Date(l.clock_out)-new Date(l.clock_in))/3600000) <= 16 || l.reviewed_ok);
       const portalHours = validLogs.reduce((a,l)=>a+((new Date(l.clock_out)-new Date(l.clock_in))/3600000), 0);
       const hours = manualHours + portalHours;
       const days = myAtt.length + validLogs.length;
@@ -7974,10 +8225,15 @@
         return a.staff_name===e.name;
       });
       const shiftDeduction = myShiftAdj.reduce((a,x)=>a+Math.abs(x.amount||0),0);
+      // ➖ خصومات (شكاوي عملاء أو خصم يدوي) و 🎁 مكافآت المدير — كلاهما بنفس فترة HR_FILTER
+      const myDeductions = deductions.filter(d=>d.employee_id===e.id);
+      const deductionsTotal = myDeductions.reduce((a,x)=>a+parseFloat(x.amount||0),0);
+      const myRewards = rewards.filter(r=>r.employee_id===e.id);
+      const rewardsTotal = myRewards.reduce((a,x)=>a+parseFloat(x.amount||0),0);
       const gross = hours * (e.hourly_wage||0);
       const opening = parseFloat(e.opening_balance||0);
-      const net = gross - advTotal - mealsTotal - shiftDeduction + opening;
-      return { emp:e, hours, days, advTotal, mealsCount, mealsTotal, shiftDeduction, opening, gross, net, suspiciousLogs };
+      const net = gross - advTotal - mealsTotal - shiftDeduction - deductionsTotal + rewardsTotal + opening;
+      return { emp:e, hours, days, advTotal, mealsCount, mealsTotal, shiftDeduction, deductionsTotal, rewardsTotal, opening, gross, net, suspiciousLogs };
     });
     const totalNet = rows.reduce((a,r)=>a+r.net,0);
     window.__HR_ROWS = rows;
@@ -8053,7 +8309,7 @@
     const hrQ = (HR_SEARCH||'').trim().toLowerCase();
     const filteredRows = hrQ ? rows.filter(r=>(r.emp.name||'').toLowerCase().includes(hrQ)) : rows;
     wrap.innerHTML = `<div class="tbl-wrap"><table class="tbl">
-        <tr><th>الموظف</th><th>سعر الساعة</th><th>ساعات العمل</th><th>أيام الحضور</th><th>الوجبات</th><th>قيمة الوجبات</th><th>السلف</th><th>خصم الشيفتات</th><th>صافي المستحق</th><th></th></tr>
+        <tr><th>الموظف</th><th>سعر الساعة</th><th>ساعات العمل</th><th>أيام الحضور</th><th>الوجبات</th><th>قيمة الوجبات</th><th>السلف</th><th>خصم الشيفتات</th><th>خصومات</th><th>مكافآت</th><th>صافي المستحق</th><th></th></tr>
         ${filteredRows.map(r=>`<tr class="${r.emp.is_active===false?'off':''}">
           <td><b>${esc(r.emp.name)}</b>${r.emp.is_active===false?' <span style="color:var(--red);font-size:.75rem;font-weight:800">(غير فعّال)</span>':''}</td>
           <td>${fmt(r.emp.hourly_wage||0)}</td>
@@ -8063,6 +8319,8 @@
           <td>${r.mealsTotal>0?`<b style="color:var(--warn)">${fmt(r.mealsTotal)}</b>`:'—'}</td>
           <td>${r.advTotal>0?`<b style="color:var(--warn)">${fmt(r.advTotal)}</b>`:'—'}</td>
           <td>${r.shiftDeduction>0?`<b style="color:var(--red)">${fmt(r.shiftDeduction)}</b>`:'—'}</td>
+          <td>${r.deductionsTotal>0?`<b style="color:var(--red)">${fmt(r.deductionsTotal)}</b>`:'—'}</td>
+          <td>${r.rewardsTotal>0?`<b style="color:var(--ok)">+${fmt(r.rewardsTotal)}</b>`:'—'}</td>
           <td><b style="color:${r.net<0?'var(--red)':'var(--ok)'}">${fmt(r.net)} ${CURRENCY}</b></td>
           <td style="white-space:nowrap">
             <button class="mini edit" onclick="mealNameForm('${r.emp.id}')">✏️ تعديل</button>
@@ -8072,7 +8330,7 @@
             <button class="mini tog" onclick="hrStatement('${r.emp.id}')">📋 كشف</button>
             <button class="mini ok" style="background:var(--maroon)" onclick="printHrEmployeePDF('${r.emp.id}')">📄 طباعة كشف</button>
           </td>
-        </tr>`).join('')||'<tr><td colspan="10" class="empty-note">ما في نتائج</td></tr>'}
+        </tr>`).join('')||'<tr><td colspan="12" class="empty-note">ما في نتائج</td></tr>'}
       </table></div>`;
   }
   /* ---- طلبات السلف الذاتية من بوابة الموظف ---- */
@@ -8106,14 +8364,24 @@
     // 🔧 نقرأ المبلغ من الخانة القابلة للتعديل وقت الموافقة — لو الأدمن غيّره، بيعتمد الرقم الجديد
     const editedAmt = parseFloat(document.getElementById('advReqAmt_'+reqId)?.value);
     const amount = (!isNaN(editedAmt) && editedAmt>0) ? editedAmt : originalAmount;
-    if(!confirm('تأكيد الموافقة على سلفة '+fmt(amount)+' '+CURRENCY+' لـ'+empName+(amount!==originalAmount?' (المبلغ الأصلي المطلوب كان '+fmt(originalAmount)+')':'')+'؟')) return;
+    const wasEdited = amount !== originalAmount;
+    if(!confirm('تأكيد الموافقة على سلفة '+fmt(amount)+' '+CURRENCY+' لـ'+empName+(wasEdited?' (المبلغ الأصلي المطلوب كان '+fmt(originalAmount)+')':'')+'؟')) return;
     try{
       const { data: adv, error } = await db.from('hr_advances').insert({
         employee_id: empId, employee_name: empName, amount, account:'cash', note:'طلب ذاتي من بوابة الموظف', status:'open', created_by: ME.full_name
       }).select().single();
       if(error){ toast('✗ '+error.message); return; }
       await addCapitalTx(-amount, 'advance', adv.id, 'سلفة موظف (طلب ذاتي) — '+empName);
-      await db.from('hr_advance_requests').update({ status:'approved', approved_by: ME.full_name, approved_at: new Date().toISOString() }).eq('id', reqId);
+      const updatePayload = { status:'approved', approved_by: ME.full_name, approved_at: new Date().toISOString() };
+      if(wasEdited){
+        // ⚙️ لو الأدمن غيّر المبلغ وقت الموافقة، نحدّث مبلغ الطلب نفسه ونسجّل ملاحظة تلقائية —
+        // عشان يبين بسجل طلبات الموظف (وأي أرشيف) إنه المبلغ اتعدّل ولقداش، مش بس يبقى المبلغ الأصلي
+        const { data: reqRow } = await db.from('hr_advance_requests').select('note').eq('id', reqId).maybeSingle();
+        const oldNote = reqRow?.note || '';
+        updatePayload.amount = amount;
+        updatePayload.note = (oldNote ? oldNote+' — ' : '') + `⚙️ تم تعديل الطلب تلقائيًا من ${fmt(originalAmount)} إلى ${fmt(amount)} ${CURRENCY} عند الموافقة`;
+      }
+      await db.from('hr_advance_requests').update(updatePayload).eq('id', reqId);
       toast('✓ اتوافق على السلفة'); renderHR();
     }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
@@ -8445,11 +8713,11 @@
       db.from('hr_attendance').select('work_date, hours, note').eq('employee_id', empId)
         .gte('work_date', HR_FILTER.from).lte('work_date', HR_FILTER.to).order('work_date'),
       db.from('hr_advances').select('created_at, amount, account, note, status').eq('employee_id', empId)
-        .gte('created_at', HR_FILTER.from+'T00:00:00').lte('created_at', HR_FILTER.to+'T23:59:59').order('created_at'),
+        .gte('created_at', localDayStart(HR_FILTER.from)).lte('created_at', localDayEnd(HR_FILTER.to)).order('created_at'),
       db.from('orders').select('created_at, order_number, total').or(`employee_meal_id.eq.${empId},employee_tab_name.eq."${r.emp.name}"`).neq('status','cancelled')
-        .gte('created_at', HR_FILTER.from+'T00:00:00').lte('created_at', HR_FILTER.to+'T23:59:59').order('created_at'),
+        .gte('created_at', localDayStart(HR_FILTER.from)).lte('created_at', localDayEnd(HR_FILTER.to)).order('created_at'),
       db.from('shift_adjustments').select('created_at, amount, note, staff_id, staff_name').eq('status','approved')
-        .gte('created_at', HR_FILTER.from+'T00:00:00').lte('created_at', HR_FILTER.to+'T23:59:59').order('created_at'),
+        .gte('created_at', localDayStart(HR_FILTER.from)).lte('created_at', localDayEnd(HR_FILTER.to)).order('created_at'),
     ]);
     const att = attRes.data||[], adv = advRes.data||[], meals = ordRes.data||[];
     const linkedStaffIds = STAFF.filter(s=>s.linked_hr_id===empId).map(s=>s.id);
@@ -9154,7 +9422,7 @@ window.__lastEmpMealsData = null;
       let q = db.from('orders')
         .select('id, order_number, created_at, total, subtotal, discount, status, employee_tab_name, employee_meal_id, order_items(item_name, quantity, unit_price)')
         .not('employee_tab_name','is',null)
-        .gte('created_at', from+'T00:00:00').lte('created_at', to+'T23:59:59')
+        .gte('created_at', localDayStart(from)).lte('created_at', localDayEnd(to))
         .order('created_at', {ascending:false});
       if(filterName) q = q.or(`employee_tab_name.eq."${filterName}",employee_meal_id.eq.${(MEAL_NAMES_DATA.find(n=>n.name===filterName)?.id)||'00000000-0000-0000-0000-000000000000'}`);
       const { data: orders, error } = await q;
@@ -9463,7 +9731,7 @@ window.__lastEmpMealsData = null;
     try{
       const { data, error } = await db.from('waste_log')
         .select('*, ingredients(name,unit,unit_cost), branches(name_ar)')
-        .gte('created_at', from+'T00:00:00').lte('created_at', to+'T23:59:59')
+        .gte('created_at', localDayStart(from)).lte('created_at', localDayEnd(to))
         .order('created_at', {ascending:false});
       if(error){ R.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message||'الجدول waste_log غير موجود — نفّذ SQL أولاً')}</div>`; return; }
       WASTE_DATA = data||[];
@@ -9701,7 +9969,7 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
         db.from('purchases').select('*, purchase_items(*, ingredients(name,unit)), branches(name_ar)')
           .eq('supplier', supplierName).gte('purchase_date', from).lte('purchase_date', to).order('purchase_date', {ascending:false}),
         db.from('supplier_payments').select('*').eq('supplier', supplierName)
-          .gte('created_at', from+'T00:00:00').lte('created_at', to+'T23:59:59').order('created_at', {ascending:false}),
+          .gte('created_at', localDayStart(from)).lte('created_at', localDayEnd(to)).order('created_at', {ascending:false}),
       ]);
       if(purRes.error){ R.innerHTML = `<div class="alert-red">⚠️ ${esc(purRes.error.message)}</div>`; return; }
       const list = purRes.data||[];
@@ -9950,7 +10218,7 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
       const { data: orders, error } = await db.from('orders')
         .select('id, order_number, created_at, total, status, notes, platform_settled, branches(name_ar), order_items(item_name, quantity, unit_price)')
         .eq('platform_id', platformId)
-        .gte('created_at', from+'T00:00:00').lte('created_at', to+'T23:59:59')
+        .gte('created_at', localDayStart(from)).lte('created_at', localDayEnd(to))
         .order('created_at', {ascending:false});
       if(error){ R.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message)}</div>`; return; }
       const platform = PLATFORMS_DATA.find(p=>p.id===platformId);
@@ -11262,7 +11530,7 @@ try {
     wrap.innerHTML = '<div class="empty-note">... جاري التحميل</div>';
     try{
       let q1 = db.from('hr_time_logs').select('*')
-        .gte('clock_in', DH_FILTER.from+'T00:00:00').lte('clock_in', DH_FILTER.to+'T23:59:59')
+        .gte('clock_in', localDayStart(DH_FILTER.from)).lte('clock_in', localDayEnd(DH_FILTER.to))
         .order('clock_in',{ascending:false});
       if(DH_FILTER.emp) q1 = q1.eq('employee_id', DH_FILTER.emp);
       let q2 = db.from('hr_attendance').select('*')
@@ -11279,12 +11547,17 @@ try {
       const rows = [];
       logs.forEach((l,idx)=>{
         const hrs = l.clock_out ? (new Date(l.clock_out)-new Date(l.clock_in))/3600000 : null;
-        rows.push({ empKey: l.employee_id||l.employee_name, empName: l.employee_name||'—', date: l.clock_in, kind:'auto', logIdx:idx, clockIn:l.clock_in, clockOut:l.clock_out, hrs });
+        // 🚩 نفس قاعدة شاشة الرواتب: أي جلسة أطول من 16 ساعة متواصلة غالبًا نسيان تسجيل خروج، مش دوام
+        // حقيقي — منستبعدها من المجموع هون كمان (بس بتضل ظاهرة بالقائمة معلّم عليها مع زر اعتماد)
+        // عشان المجموع هون يطابق تمامًا مجموع "ساعات العمل" بشاشة الرواتب، لحد ما الأدمن يعتمدها
+        // (لو فعلًا شيفت طويل حقيقي) أو يصحح وقت الخروج
+        const suspicious = hrs!=null && hrs>16 && !l.reviewed_ok;
+        rows.push({ empKey: l.employee_id||l.employee_name, empName: l.employee_name||'—', date: l.clock_in, kind:'auto', logIdx:idx, clockIn:l.clock_in, clockOut:l.clock_out, hrs, suspicious, logId:l.id });
       });
       manual.forEach((m,idx)=>{
         rows.push({ empKey: m.employee_id||m.employee_name, empName: m.employee_name||'—', date: m.work_date+'T12:00:00', kind:'manual', attIdx:idx, hrs: parseFloat(m.hours||0), note:m.note });
       });
-      const totalHours = rows.reduce((a,r)=>a+(r.hrs||0),0);
+      const totalHours = rows.reduce((a,r)=>a+(r.suspicious?0:(r.hrs||0)),0);
       // تجميع حسب الموظف
       const byEmp = {};
       rows.forEach(r=>{ if(!byEmp[r.empKey]) byEmp[r.empKey] = { name:r.empName, rows:[] }; byEmp[r.empKey].rows.push(r); });
@@ -11294,8 +11567,9 @@ try {
       wrap.innerHTML = `
         <div class="panel">
           <div style="margin-bottom:14px;font-weight:800">إجمالي الساعات بالفترة: <span style="color:var(--red)">${totalHours.toFixed(1)} ساعة</span> — ${rows.length} سجل — ${empGroups.length} موظف</div>
+          <div style="color:var(--muted);font-size:.78rem;font-weight:600;margin-bottom:12px">💡 الجلسات الأطول من 16 ساعة متواصلة (⚠️ غالبًا نسيان تسجيل خروج) مستبعدة من المجموع هون تمامًا متل شاشة الرواتب — بس ظاهرة بالقائمة معلّم عليها عشان تراجعها وتصححها.</div>
           ${empGroups.map(g=>{
-            const empTotal = g.rows.reduce((a,r)=>a+(r.hrs||0),0);
+            const empTotal = g.rows.reduce((a,r)=>a+(r.suspicious?0:(r.hrs||0)),0);
             return `<div style="border:1.5px solid var(--line);border-radius:12px;margin-bottom:14px;overflow:hidden">
               <div style="background:var(--maroon);color:#fff;padding:10px 14px;display:flex;justify-content:space-between;align-items:center;font-weight:900">
                 <span>👤 ${esc(g.name)}</span>
@@ -11303,12 +11577,12 @@ try {
               </div>
               <table class="tbl" style="margin:0">
                 <tr><th>التاريخ</th><th>النوع</th><th>دخول</th><th>خروج</th><th>الساعات</th><th></th></tr>
-                ${g.rows.map(r=>`<tr class="${r.kind==='auto'&&!r.clockOut?'late':''}">
+                ${g.rows.map(r=>`<tr class="${r.kind==='auto'&&!r.clockOut?'late':''}" style="${r.suspicious?'background:#fff3e0':''}">
                   <td>${new Date(r.date).toLocaleDateString('ar-JO',{weekday:'short',day:'2-digit',month:'2-digit'})}</td>
                   <td>${r.kind==='auto'?'📍 ذاتي (بصمة)':'✍️ يدوي'}</td>
                   <td>${r.kind==='auto'?new Date(r.clockIn).toLocaleTimeString('ar-JO',{hour:'2-digit',minute:'2-digit'}):'—'}</td>
                   <td>${r.kind==='auto'?(r.clockOut?new Date(r.clockOut).toLocaleTimeString('ar-JO',{hour:'2-digit',minute:'2-digit'}):'<b style="color:var(--ok)">🟢 لسا مفتوح</b>'):'—'}</td>
-                  <td><b>${r.hrs!=null?r.hrs.toFixed(2):'...'}</b></td>
+                  <td><b>${r.hrs!=null?r.hrs.toFixed(2):'...'}</b>${r.suspicious?`<br><span style="color:var(--warn);font-size:.72rem;font-weight:800">⚠️ مستبعدة (أطول من 16س)</span> <button class="mini ok" style="padding:2px 8px;font-size:.72rem" onclick="approveSuspiciousLog('${r.logId}')">✅ اعتماد كدوام حقيقي</button>`:''}</td>
                   <td style="white-space:nowrap">
                     ${r.kind==='auto'?`
                       ${(logs[r.logIdx].lat_in||logs[r.logIdx].lat_out)?`<button class="mini ok" onclick="showDhMap(${r.logIdx})">🗺️</button>`:''}
@@ -11362,6 +11636,16 @@ try {
       const { error } = await db.from('hr_time_logs').delete().eq('id', l.id);
       if(error){ toast('✗ '+error.message); return; }
       toast('✓ انحذف السجل'); loadDutyHoursTable();
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
+  }
+  async function approveSuspiciousLog(logId){
+    // ✅ لبعض الموظفين شيفت أطول من 16 ساعة فعلًا وارد وحقيقي — هاد بيعتمدها يدويًا فترجع
+    // تنحسب بمجموع الساعات هون وبشاشة الرواتب مع بعض، بدل ما تضل مستبعدة تلقائيًا
+    if(!confirm('تأكيد إنه هاي الجلسة (أطول من 16 ساعة) دوام حقيقي وتترجع تنحسب بالمجموع؟')) return;
+    try{
+      const { error } = await db.from('hr_time_logs').update({ reviewed_ok:true }).eq('id', logId);
+      if(error){ toast('✗ '+error.message); return; }
+      toast('✓ اتعتمدت الجلسة'); loadDutyHoursTable();
     }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
   function showDhMap(idx){
@@ -11707,9 +11991,12 @@ try {
 
         ${reqs&&reqs.length?`<div style="background:#fff;border-radius:12px;padding:12px;margin-bottom:14px">
           <div style="font-weight:900;color:var(--maroon);margin-bottom:6px">طلبات السلف الأخيرة</div>
-          ${reqs.map(r=>`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line);font-size:.85rem">
-            <span>${fmt(r.amount)} ${CURRENCY} — ${new Date(r.created_at).toLocaleDateString('ar-JO')}</span>
-            <b style="color:${r.status==='pending'?'var(--warn)':r.status==='approved'?'var(--ok)':'var(--red)'}">${r.status==='pending'?'⏳ بانتظار':r.status==='approved'?'✅ موافق':'❌ مرفوض'}</b>
+          ${reqs.map(r=>`<div style="padding:6px 0;border-bottom:1px solid var(--line);font-size:.85rem">
+            <div style="display:flex;justify-content:space-between">
+              <span>${fmt(r.amount)} ${CURRENCY} — ${new Date(r.created_at).toLocaleDateString('ar-JO')}</span>
+              <b style="color:${r.status==='pending'?'var(--warn)':r.status==='approved'?'var(--ok)':'var(--red)'}">${r.status==='pending'?'⏳ بانتظار':r.status==='approved'?'✅ موافق':'❌ مرفوض'}</b>
+            </div>
+            ${r.note?`<div style="color:var(--muted);font-size:.78rem;margin-top:3px">${esc(r.note)}</div>`:''}
           </div>`).join('')}
         </div>`:''}
 
