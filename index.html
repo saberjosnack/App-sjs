@@ -11950,7 +11950,7 @@ try {
       ]);
       const logs = logsRes.data||[];
       // 🚩 نفس فحص الأمان: أي جلسة أطول من 16 ساعة متواصلة مستبعدة (غالبًا نسيان خروج) لحد ما الأدمن يراجعها
-      const closedLogs = logs.filter(l=>l.clock_out && ((new Date(l.clock_out)-new Date(l.clock_in))/3600000)<=16);
+      const closedLogs = logs.filter(l=>l.clock_out && (((new Date(l.clock_out)-new Date(l.clock_in))/3600000)<=16 || l.reviewed_ok));
       // 🔧 مهم: الساعات = المسجّلة ذاتيًا من البوابة + الساعات اليدوية يلي الأدمن دخّلها (كانت مفقودة تمامًا هون)
       const portalHours = closedLogs.reduce((a,l)=>a+((new Date(l.clock_out)-new Date(l.clock_in))/3600000),0);
       const manualHours = (attRes.data||[]).reduce((a,x)=>a+parseFloat(x.hours||0),0);
@@ -12157,7 +12157,7 @@ try {
     const linkedIds2 = (linkedStaffRows2||[]).map(s=>s.id);
     const [attRes, logsRes, advRes, mealsRes, shiftAdjRes, dedRes, rwdRes] = await Promise.all([
       db.from('hr_attendance').select('hours').eq('employee_id', empId).gte('work_date', fromIso.split('T')[0]),
-      db.from('hr_time_logs').select('clock_in,clock_out').eq('employee_id', empId).not('clock_out','is',null).gte('clock_in', fromIso),
+      db.from('hr_time_logs').select('clock_in,clock_out,reviewed_ok').eq('employee_id', empId).not('clock_out','is',null).gte('clock_in', fromIso),
       db.from('hr_advances').select('amount').eq('employee_id', empId).gte('created_at', fromIso),
       db.from('orders').select('total').or(`employee_meal_id.eq.${empId},employee_tab_name.eq."${empName}"`).neq('status','cancelled').gte('created_at', fromIso),
       linkedIds2.length
@@ -12167,7 +12167,7 @@ try {
       db.from('employee_rewards').select('amount').eq('employee_id', empId).gte('created_at', fromIso),
     ]);
     const manualHours = (attRes.data||[]).reduce((a,x)=>a+parseFloat(x.hours||0),0);
-    const portalHours = (logsRes.data||[]).filter(l=>((new Date(l.clock_out)-new Date(l.clock_in))/3600000)<=16).reduce((a,l)=>a+((new Date(l.clock_out)-new Date(l.clock_in))/3600000),0);
+    const portalHours = (logsRes.data||[]).filter(l=>((new Date(l.clock_out)-new Date(l.clock_in))/3600000)<=16 || l.reviewed_ok).reduce((a,l)=>a+((new Date(l.clock_out)-new Date(l.clock_in))/3600000),0);
     const hours = manualHours+portalHours;
     const gross = hours*(hourlyWage||0);
     const advOutstanding = (advRes.data||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
