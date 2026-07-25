@@ -3994,9 +3994,10 @@
   }
   async function markReady(id){
     try {
+      await db.from('orders').update({ status:'ready', updated_at: new Date().toISOString() }).eq('id', id);
       toast('✅ الطلب صار جاهز');
       loadDay(); checkOverdue();
-    } catch(e) { console.error(e); }
+    } catch(e) { console.error(e); toast('✗ صار خطأ — حاول تاني'); }
   }
   async function finishOrder(id){
     try {
@@ -12192,8 +12193,19 @@ try {
   }
 
   /* ================= PWA ================= */
-  if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
-    navigator.serviceWorker.register('sw.js').catch(()=>{});
+  // 🔧 مهم جدًا: شلنا تسجيل عامل الخدمة (Service Worker) نهائيًا — كان هو على الأغلب السبب
+  // الحقيقي وراء مشاكل "الملف القديم لسا طالع" المتكررة، لأنه بيخزّن نسخة من الموقع ويقدر
+  // يخدمها بدل النسخة الجديدة حتى بعد ما نرفع تحديث. وهلأ منشيل أي نسخة مثبتة مسبقًا عند
+  // أي مستخدم تلقائيًا أول ما يفتح الصفحة، بدون ما يحتاج يعمل شي بنفسه.
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.getRegistrations().then(regs=>{
+      regs.forEach(reg=>reg.unregister());
+    }).catch(()=>{});
+  }
+  if ('caches' in window) {
+    caches.keys().then(keys=>{
+      keys.forEach(k=>caches.delete(k));
+    }).catch(()=>{});
   }
   /* ---- زر "تحقق من تحديث" — يمسح أي نسخة قديمة محفوظة ويجيب أحدث نسخة فورًا ---- */
   window.checkForUpdate = async function(){
