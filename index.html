@@ -8151,9 +8151,12 @@
   function localDayEnd(dateStr){ return dateStr+'T23:59:59+03:00'; }
   // 🔧 مهم: نحسب "اليوم" و"أول الشهر" بتوقيت عمّان المحلي (+3)، مش UTC الخام — كان فيه خطأ هون
   // ممكن يخلي فلتر HR الافتراضي يبلش بتاريخ مختلف بيوم عن بوابة الموظف قرب منتصف الليل بالضبط
+  // 🔧 إصلاح: الطريقة الصحيحة لحساب توقيت عمّان (UTC+3) — بس نضيف 3 ساعات لطابع الوقت العالمي
+  // (Date.getTime() أصلًا عالمي دايمًا بغض النظر عن توقيت جهاز المستخدم، ما بيحتاج أي تصحيح إضافي
+  // — الطريقة القديمة كانت تضيف getTimezoneOffset() بالغلط فوق كمان، وهاد كان يعطي تاريخ غلط
+  // حسب توقيت جهاز المستخدم نفسه، فيستبعد آخر يوم دوام من حساب HR أحيانًا)
   function localTodayStr(){
-    const now = new Date();
-    const amman = new Date(now.getTime() + (3*60 - now.getTimezoneOffset())*60000);
+    const amman = new Date(Date.now() + 3*60*60000);
     return amman.toISOString().split('T')[0];
   }
   function localMonthStartStr(){
