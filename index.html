@@ -619,6 +619,7 @@
         <button data-a="violations" onclick="admTab('violations')" style="background:#ffcccc;border-color:#8b0000">🚩 المخالفات</button>
         <button data-a="deductions" onclick="admTab('deductions')" style="background:#ffe0e0;border-color:#c0392b">➖ جدول الخصومات</button>
         <button data-a="rewards" onclick="admTab('rewards')" style="background:#d4f7d4;border-color:#1a9c4b">🎁 جدول المكافآت</button>
+        <button data-a="activityLog" onclick="admTab('activityLog')" style="background:#2b2b2b;color:#fff;border-color:#000">📜 سجل الأحداث</button>
         <button data-a="sett" onclick="admTab('sett')">🔧 إعدادات</button>
         <button data-a="shifts" onclick="admTab('shifts')">🔄 شيفتات</button>
       </div>
@@ -1123,6 +1124,27 @@
       branches_manage: 'إدارة الفروع',
       devices_manage: 'إدارة الأجهزة',
       settings_manage: 'إدارة إعدادات النظام',
+    },
+    // 🆕 شاشات كانت مقفولة بالكامل على "المالك بس" (admin_only) وما كان ممكن نعطيها لأي دور مخصص إطلاقًا.
+    // هلأ صارت قابلة للتخصيص متل باقي الصلاحيات. ملاحظة أمان: شاشة "🛡️ الأدوار" نفسها استثناء متعمد
+    // وضلّت للمالك بس دائمًا — لأنه لو موظف بدور مخصص قدر يعدّل الأدوار، بيقدر يعطي حاله كل الصلاحيات.
+    // 💡 لإضافة شاشة جديدة بالمستقبل: ضيف سطر هون بنفس الاسم يلي حطيته بـADMIN_TAB_PERM تحت (tab_xxx)،
+    // وبتظهر تلقائيًا هون وبكل نماذج صلاحيات الموظفين/الأدوار بدون أي تعديل تاني.
+    '🗂️ شاشات إضافية': {
+      tab_warehouse: 'المستودع',
+      tab_treasury: 'المصاري',
+      tab_hr: 'HR',
+      tab_chats: 'المحادثات',
+      tab_hrLocations: 'مواقع الدخول',
+      tab_dutyHours: 'ساعات الدوام',
+      tab_hrClosures: 'كشوفات الأشهر',
+      tab_ordersScreen: 'الطلبيات',
+      tab_complaints: 'شكاوي العملاء',
+      tab_violations: 'المخالفات',
+      tab_deductions: 'جدول الخصومات',
+      tab_rewards: 'جدول المكافآت',
+      tab_dailyAudits: 'جرد الفرع اليومي',
+      tab_activityLog: 'سجل الأحداث (حساس — انتبهي قبل ما تعطيها لغير المالك)',
     },
   };
   const ROLE_DEFAULT_PERMS = {
@@ -4883,8 +4905,8 @@
   const ADMIN_TAB_PERM = {
     items:'items_manage', cats:'cats_manage', codes:'codes_manage', staff:'staff_manage', roles:'admin_only', branches:'branches_manage', sett:'settings_manage', devices:'devices_manage',
     ingredients:'inventory_view', recipes:'inventory_view',
-    inventory:'inventory_audit', transfers:'inventory_transfer', warehouse:'admin_only', treasury:'admin_only', hr:'admin_only', chats:'admin_only', dailyAudits:'admin_only', hrLocations:'admin_only', dutyHours:'admin_only', hrClosures:'admin_only', ordersScreen:'admin_only',
-    complaints:'admin_only', violations:'admin_only', deductions:'admin_only', rewards:'admin_only',
+    inventory:'inventory_audit', transfers:'inventory_transfer', warehouse:'tab_warehouse', treasury:'tab_treasury', hr:'tab_hr', chats:'tab_chats', dailyAudits:'tab_dailyAudits', hrLocations:'tab_hrLocations', dutyHours:'tab_dutyHours', hrClosures:'tab_hrClosures', ordersScreen:'tab_ordersScreen',
+    complaints:'tab_complaints', violations:'tab_violations', deductions:'tab_deductions', rewards:'tab_rewards', activityLog:'tab_activityLog',
     expenses:'expenses_view', purchases:'purchases_view',
     platforms:'platforms_view', empmeals:'empmeals_view', topcust:'topcust_view', waste:'waste_log', suppliers:'purchases_view',
   };
@@ -4962,6 +4984,7 @@
     if(admView==='hrLocations'){ renderHrLocations(); return; }
     if(admView==='dutyHours'){ renderDutyHours(); return; }
     if(admView==='hrClosures'){ renderHrMonthClosures(); return; }
+    if(admView==='activityLog'){ renderActivityLog(); return; }
     if(admView==='ordersScreen'){ renderOrdersScreen(); return; }
     if(admView==='platforms'){ renderPlatforms(); return; }
     if(admView==='devices'){ renderDevices(); return; }
@@ -5838,6 +5861,61 @@
         branch_id: ME.branch_id||null
       });
     } catch(e){ console.error('logActivity failed:', e); }
+  }
+  let ACTLOG_FILTER = { from:'', to:'', staff:'', q:'' };
+  async function renderActivityLog(){
+    if(!perm('tab_activityLog')){ toast('⛔ ما عندك صلاحية لهاي الشاشة'); return; }
+    const C = document.getElementById('admContent');
+    C.innerHTML = '<div class="empty-note">... جاري التحميل</div>';
+    if(!ACTLOG_FILTER.from){
+      const d = new Date(); d.setDate(d.getDate()-7);
+      ACTLOG_FILTER.from = d.toISOString().split('T')[0];
+      ACTLOG_FILTER.to = localTodayStr();
+    }
+    try{
+      let q = db.from('activity_log').select('*')
+        .gte('created_at', localDayStart(ACTLOG_FILTER.from)).lte('created_at', localDayEnd(ACTLOG_FILTER.to))
+        .order('created_at',{ascending:false}).limit(1000);
+      if(ACTLOG_FILTER.staff) q = q.eq('staff_id', ACTLOG_FILTER.staff);
+      const { data, error } = await q;
+      if(error){ C.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message||'الجدول activity_log غير موجود')}</div>`; return; }
+      window.__ACTLOG_ALL = data||[];
+      const staffOptions = STAFF.map(s=>`<option value="${s.id}" ${ACTLOG_FILTER.staff===s.id?'selected':''}>${esc(s.full_name)}</option>`).join('');
+      C.innerHTML = `
+        <div class="panel" style="margin-bottom:14px">
+          <h3>📜 سجل الأحداث — كل عملية صارت بالنظام</h3>
+          <div class="two" style="flex-wrap:wrap;gap:10px;margin:10px 0">
+            <div><label style="font-weight:700;font-size:.82rem">من تاريخ</label><br><input type="date" id="al_from" value="${ACTLOG_FILTER.from}" class="dfield"></div>
+            <div><label style="font-weight:700;font-size:.82rem">إلى تاريخ</label><br><input type="date" id="al_to" value="${ACTLOG_FILTER.to}" class="dfield"></div>
+            <div><label style="font-weight:700;font-size:.82rem">الموظف</label><br><select id="al_staff" class="dfield"><option value="">الكل</option>${staffOptions}</select></div>
+            <button class="mini ok" style="align-self:end" onclick="applyActivityLogFilter()">🔍 فلترة</button>
+          </div>
+          <input id="al_search" placeholder="🔍 بحث بنص الحدث أو التفاصيل..." oninput="filterActivityLogRows(this.value)" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:9px 12px;font-weight:700">
+        </div>
+        <div class="tbl-wrap"><table class="tbl">
+          <tr><th>الوقت</th><th>الموظف</th><th>الحدث</th><th>التفاصيل</th></tr>
+          <tbody id="al_rows">
+          ${(window.__ACTLOG_ALL).map(a=>`<tr class="al_row" data-q="${esc(((a.action||'')+' '+(a.details||'')+' '+(a.staff_name||'')).toLowerCase())}">
+            <td style="white-space:nowrap">${new Date(a.created_at).toLocaleString('ar-JO')}</td>
+            <td><b>${esc(a.staff_name||'—')}</b></td>
+            <td>${esc(a.action||'—')}</td>
+            <td>${esc(a.details||'—')}</td>
+          </tr>`).join('')||'<tr><td colspan="4" class="empty-note">ما في أحداث بهاي الفترة</td></tr>'}
+          </tbody>
+        </table></div>`;
+    }catch(e){ C.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
+  }
+  function applyActivityLogFilter(){
+    ACTLOG_FILTER.from = document.getElementById('al_from')?.value || ACTLOG_FILTER.from;
+    ACTLOG_FILTER.to = document.getElementById('al_to')?.value || ACTLOG_FILTER.to;
+    ACTLOG_FILTER.staff = document.getElementById('al_staff')?.value || '';
+    renderActivityLog();
+  }
+  function filterActivityLogRows(q){
+    q = (q||'').trim().toLowerCase();
+    document.querySelectorAll('.al_row').forEach(el=>{
+      el.style.display = !q || (el.dataset.q||'').includes(q) ? '' : 'none';
+    });
   }
 
   /* ================= المكونات والوصفات والمصاريف والمشتريات ================= */
@@ -7143,23 +7221,32 @@
     const blindCount = !isAdmin();
     modal(`<h3>📋 جرد احترافي — ${esc(branchName)}</h3>
       <div style="font-weight:700;color:var(--muted);font-size:.85rem;margin-bottom:10px">${blindCount ? '🙈 جرد أعمى — عدّ المخزون الفعلي واكتبه بدقة (النظام بيقارن تلقائيًا بعد الحفظ)' : 'النظام بيعرض الكمية المتوقعة (حسب المبيعات والمشتريات) — عدّ المخزون الفعلي واكتبه، وشوف الفرق تلقائيًا'}</div>
+      <input id="inv_audit_search" placeholder="🔍 بحث عن مادة..." oninput="filterInventoryAuditRows(this.value)" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:9px 12px;margin-bottom:8px;font-weight:700">
       <div style="max-height:380px;overflow-y:auto">
         <div class="two" style="font-weight:900;color:var(--maroon);font-size:.82rem;margin-bottom:4px">
           <span style="flex:2">المادة</span>${blindCount?'':'<span style="flex:1">المتوقع</span>'}<span style="flex:1">الفعلي (عدّه)</span>
         </div>
-        ${rows.map((r,idx)=>`<div class="two" style="margin-bottom:8px;align-items:center" id="audit_row_${idx}">
+        ${rows.map((r,idx)=>`<div class="audit_row_wrap" data-name="${esc((r.name||'').toLowerCase())}">
+        <div class="two" style="margin-bottom:8px;align-items:center" id="audit_row_${idx}">
           <span style="flex:2;font-weight:700">${esc(r.name)} <small style="color:var(--muted)">(${esc(r.unit)})</small></span>
           <span class="audit_expected" data-id="${r.id}" data-ingid="${r.ingId}" data-expected="${r.stock}" style="flex:1;font-weight:900;color:var(--muted)${blindCount?';display:none':''}">${blindCount?'':r.stock}</span>
           <input class="inv_qty" data-id="${r.id}" type="number" step="0.01" placeholder="عدّ..."
             oninput="updateAuditVariance(${idx})"
             style="flex:1;border:1.5px solid var(--line);border-radius:10px;padding:7px 10px;min-width:80px">
         </div>
-        <div id="audit_var_${idx}" style="font-size:.78rem;font-weight:800;margin:-4px 0 6px 0;padding-right:4px"></div>`).join('')||'<div class="empty-note">ما في مواد — اضغط "تهيئة مخزون الفروع" أولاً</div>'}
+        <div id="audit_var_${idx}" style="font-size:.78rem;font-weight:800;margin:-4px 0 6px 0;padding-right:4px"></div>
+        </div>`).join('')||'<div class="empty-note">ما في مواد — اضغط "تهيئة مخزون الفروع" أولاً</div>'}
       </div>
       <div class="m-act">
         <button class="save" onclick="saveInventoryAudit('${branchId}','${esc(branchName)}')">💾 حفظ الجرد وتسجيله</button>
         <button class="cancel" onclick="closeModal()">إلغاء</button>
       </div>`);
+  }
+  function filterInventoryAuditRows(q){
+    q = (q||'').trim().toLowerCase();
+    document.querySelectorAll('.audit_row_wrap').forEach(el=>{
+      el.style.display = !q || (el.dataset.name||'').includes(q) ? '' : 'none';
+    });
   }
   function updateAuditVariance(idx){
     if(!isAdmin()) return; // 🙈 جرد أعمى — الموظف العادي ما بيشوف الفرق أثناء العدّ إطلاقًا
@@ -8073,6 +8160,12 @@
     msg += `\nمشكورين على التعاون 🙏`;
     window.open(`https://wa.me/${phone}?text=${encodeURIComponent(msg)}`, '_blank');
   }
+  function filterWarehouseBalances(q){
+    q = (q||'').trim().toLowerCase();
+    document.querySelectorAll('.wh_bal_row').forEach(el=>{
+      el.style.display = !q || (el.dataset.name||'').includes(q) ? '' : 'none';
+    });
+  }
   async function renderWarehouse(){
     await loadIngredients();
     const C = document.getElementById('admContent');
@@ -8141,9 +8234,10 @@
 
       <div class="panel" style="margin-bottom:14px">
         <h4 style="color:var(--maroon);margin-bottom:8px">📦 الأرصدة الحالية <span style="font-weight:600;font-size:.82rem;color:var(--muted)">(القيمة الإجمالية: <b style="color:var(--red)">${fmt(totalValue)} ${CURRENCY}</b>)</span></h4>
+        <input id="wh_bal_search" placeholder="🔍 بحث عن مادة..." oninput="filterWarehouseBalances(this.value)" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:9px 12px;margin-bottom:8px;font-weight:700">
         <div class="tbl-wrap"><table class="tbl">
           <tr><th>الفرع</th><th>المادة</th><th>الرصيد</th><th>الوحدة</th><th>سعر الوحدة</th><th>القيمة</th></tr>
-          ${balances.map(b=>`<tr>
+          ${balances.map(b=>`<tr class="wh_bal_row" data-name="${esc((b.ingredients?.name||'').toLowerCase())}">
             <td>🏪 ${esc(b.branches?.name_ar||'—')}</td>
             <td><b>${esc(b.ingredients?.name||'—')}</b></td>
             <td><b style="color:${(b.stock||0)<=(b.min_stock||0)?'var(--red)':'var(--ok)'}">${b.stock||0}</b></td>
