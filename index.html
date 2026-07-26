@@ -1199,6 +1199,16 @@
     }
     const name = document.getElementById('rf_name')?.value.trim();
     if(!name){ toast('⚠️ اسم الدور مطلوب'); return; }
+    // 🔧 تحقق دفاعي: لو id موجود بس مش UUID سليم (زي "1")، نوقف فورًا برسالة واضحة
+    // بدل ما نخلي قاعدة البيانات ترفض التحديث برسالة غامضة "invalid input syntax for type uuid"
+    if(id){
+      const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if(!uuidPattern.test(id)){
+        toast('✗ خطأ بمعرف الدور ("'+id+'") — سكّر النموذج وافتحه من جديد من شاشة الأدوار');
+        console.error('Invalid role id detected before save:', id);
+        return;
+      }
+    }
     const rec = { name, permissions: perms, is_system:false };
     const r = id ? await db.from('roles').update(rec).eq('id',id) : await db.from('roles').insert(rec);
     if(r.error){ toast('✗ '+r.error.message); return; }
@@ -5142,6 +5152,7 @@
 
   /* ---- شكاوي العملاء ---- */
   async function renderComplaints(){
+    window.__lightboxImgs = [];
     const box = document.getElementById('complaintsBox'); if(!box) return;
     try{
       const { data, error } = await db.from('customer_complaints').select('*').order('created_at',{ascending:false});
@@ -5182,7 +5193,7 @@
               <div style="font-weight:800">الإجمالي: ${fmt(ord.total)} ${CURRENCY}</div>
             </div>`:(c.order_id?'<div style="color:var(--muted);font-size:.8rem">⚠️ ما قدرنا نجيب تفاصيل الطلب (ممكن اتحذف)</div>':'')}
             ${(c.images&&c.images.length)?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0">
-              ${c.images.map(url=>`<img src="${url}" onclick="window.open('${url}','_blank')" style="width:110px;height:110px;object-fit:cover;border-radius:8px;cursor:pointer;border:1.5px solid var(--line)">`).join('')}
+              ${renderImgThumbs(c.images)}
             </div>`:''}
             <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
               ${c.status!=='resolved'?`<button class="mini ok" onclick="resolveComplaint('${c.id}')">✅ تم إنهاء الخلاف</button>`:'<b style="color:var(--ok)">✅ متسوّى</b>'}
@@ -5230,6 +5241,8 @@
       <div class="m-act"><button class="cancel" onclick="closeModal()">إلغاء</button><button class="save" onclick="saveViolation()">🚩 إرسال</button></div>`);
   }
   async function saveViolation(){
+    if(!lockSubmit('saveViolation')) return;
+    setTimeout(()=>unlockSubmit('saveViolation'), 3000);
     const note = document.getElementById('vioNote')?.value?.trim();
     if(!note && !(window.__violationImgs||[]).length){ toast('⚠️ اكتب وصف أو أرفق صورة على الأقل'); return; }
     // 🔧 الزر متاح بمكانين: التطبيق الرئيسي (كاشير/أدمن — يستخدم ME) وبوابة الموظف الذاتية
@@ -5249,6 +5262,7 @@
     }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
   async function renderViolations(){
+    window.__lightboxImgs = [];
     const box = document.getElementById('violationsBox'); if(!box) return;
     try{
       const { data, error } = await db.from('violations').select('*').order('created_at',{ascending:false});
@@ -5267,7 +5281,7 @@
           <div style="padding:12px">
             <div style="margin-bottom:6px"><b>الوصف:</b> ${esc(v.note||'—')}</div>
             ${(v.images&&v.images.length)?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0">
-              ${v.images.map(url=>`<img src="${url}" onclick="window.open('${url}','_blank')" style="width:110px;height:110px;object-fit:cover;border-radius:8px;cursor:pointer;border:1.5px solid var(--line)">`).join('')}
+              ${renderImgThumbs(v.images)}
             </div>`:''}
             ${v.employee_name?`<div style="background:#fff8e1;border-radius:8px;padding:8px 12px;margin:8px 0"><b>المخالف المحدد:</b> ${esc(v.employee_name)}${v.deduction_id?' — <span style="color:var(--red)">✓ اتعمل خصم</span>':''}</div>`:''}
             <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
@@ -5385,6 +5399,7 @@
 
   /* ---- جدول الخصومات ---- */
   async function renderDeductionsLedger(){
+    window.__lightboxImgs = [];
     const box = document.getElementById('deductionsBox'); if(!box) return;
     try{
       const { data, error } = await db.from('employee_deductions').select('*').order('created_at',{ascending:false});
@@ -5401,7 +5416,7 @@
             <td>${esc(d.employee_name||'—')}</td>
             <td><b style="color:var(--red)">-${fmt(d.amount)}</b></td>
             <td>${esc(d.reason||'—')}${d.complaint_id?' <span style="color:var(--muted);font-size:.75rem">(من شكوى عميل)</span>':''}</td>
-            <td>${(d.images&&d.images.length)?d.images.map(url=>`<img src="${url}" onclick="window.open('${url}','_blank')" style="width:44px;height:44px;object-fit:cover;border-radius:6px;cursor:pointer;margin-inline-end:3px">`).join(''):'—'}</td>
+            <td>${(d.images&&d.images.length)?renderImgThumbs(d.images,44):'—'}</td>
             <td><button class="mini del" onclick="deleteDeduction('${d.id}')">🗑️</button></td>
           </tr>`).join('') || '<tr><td colspan="6" class="empty-note">ما في خصومات</td></tr>'}
         </table></div>`;
@@ -8777,6 +8792,8 @@
         <tr><td>قيمة الوجبات (تُخصم من الراتب)</td><td><b style="color:var(--warn)">${fmt(r.mealsTotal)} ${CURRENCY}</b></td></tr>
         <tr><td>مجموع السلف المسحوبة بالفترة</td><td><b style="color:var(--warn)">${fmt(r.advTotal)} ${CURRENCY}</b></td></tr>
         <tr><td>خصم عجز/زيادة الشيفتات (معتمد)</td><td><b style="color:var(--red)">${fmt(r.shiftDeduction)} ${CURRENCY}</b></td></tr>
+        ${r.deductionsTotal>0?`<tr><td>➖ خصومات (مخالفات/أخرى)</td><td><b style="color:var(--red)">${fmt(r.deductionsTotal)} ${CURRENCY}</b></td></tr>`:''}
+        ${r.rewardsTotal>0?`<tr><td>🎁 مكافآت</td><td><b style="color:var(--ok)">+${fmt(r.rewardsTotal)} ${CURRENCY}</b></td></tr>`:''}
         <tr><td>📒 رصيد سابق</td><td><b style="color:${r.opening<0?'var(--red)':'var(--ok)'}">${r.opening>0?'+':''}${fmt(r.opening)} ${CURRENCY}</b></td></tr>
         <tr><td><b>صافي المستحق له</b></td><td><b style="color:${r.net<0?'var(--red)':'var(--ok)'}">${fmt(r.net)} ${CURRENCY}</b></td></tr>
       </table></div>
@@ -8801,6 +8818,7 @@
         period_from: HR_FILTER.from, period_to: HR_FILTER.to,
         hours: r.hours, hourly_wage: r.emp.hourly_wage||0, gross: r.gross,
         advances: r.advTotal, meals: r.mealsTotal, shift_deduction: r.shiftDeduction,
+        deductions_total: r.deductionsTotal||0, rewards_total: r.rewardsTotal||0,
         opening_balance: r.opening||0, net: r.net, closed_by: ME.full_name
       });
       if(e1){ toast('✗ '+e1.message); console.error(e1); return; }
@@ -8860,6 +8878,8 @@
         <tr><td>السلف</td><td style="color:var(--warn)">${fmt(c.advances)} ${CURRENCY}</td></tr>
         <tr><td>الوجبات</td><td style="color:var(--warn)">${fmt(c.meals)} ${CURRENCY}</td></tr>
         <tr><td>خصم الشيفتات</td><td style="color:var(--red)">${fmt(c.shift_deduction)} ${CURRENCY}</td></tr>
+        ${c.deductions_total>0?`<tr><td>➖ خصومات (مخالفات/أخرى)</td><td style="color:var(--red)">${fmt(c.deductions_total)} ${CURRENCY}</td></tr>`:''}
+        ${c.rewards_total>0?`<tr><td>🎁 مكافآت</td><td style="color:var(--ok)">+${fmt(c.rewards_total)} ${CURRENCY}</td></tr>`:''}
         <tr><td><b>الصافي (ترحّل كرصيد للشهر الجاي)</b></td><td><b style="color:${c.net<0?'var(--red)':'var(--ok)'}">${fmt(c.net)} ${CURRENCY}</b></td></tr>
       </table></div>
       <div class="m-act">
@@ -8884,6 +8904,8 @@
         <tr><th>السلف</th><td>${fmt(c.advances)} ${CURRENCY}</td></tr>
         <tr><th>الوجبات</th><td>${fmt(c.meals)} ${CURRENCY}</td></tr>
         <tr><th>خصم الشيفتات</th><td>${fmt(c.shift_deduction)} ${CURRENCY}</td></tr>
+        ${c.deductions_total>0?`<tr><th>➖ خصومات (مخالفات/أخرى)</th><td>${fmt(c.deductions_total)} ${CURRENCY}</td></tr>`:''}
+        ${c.rewards_total>0?`<tr><th>🎁 مكافآت</th><td>+${fmt(c.rewards_total)} ${CURRENCY}</td></tr>`:''}
         <tr><th>الصافي (رصيد الشهر الجاي)</th><td class="tot">${fmt(c.net)} ${CURRENCY}</td></tr>
       </table>
       </body></html>`;
@@ -8930,6 +8952,8 @@
         <tr><td>قيمة الوجبات المخصومة</td><td><b>${fmt(r.mealsTotal)} ${CURRENCY}</b></td></tr>
         <tr><td>السلف المخصومة</td><td><b>${fmt(r.advTotal)} ${CURRENCY}</b></td></tr>
         <tr><td>خصم عجز/زيادة الشيفتات</td><td><b>${fmt(r.shiftDeduction)} ${CURRENCY}</b></td></tr>
+        ${r.deductionsTotal>0?`<tr><td>➖ خصومات (مخالفات/أخرى)</td><td><b>${fmt(r.deductionsTotal)} ${CURRENCY}</b></td></tr>`:''}
+        ${r.rewardsTotal>0?`<tr><td>🎁 مكافآت</td><td><b>+${fmt(r.rewardsTotal)} ${CURRENCY}</b></td></tr>`:''}
         <tr><td><b>صافي المستحق له</b></td><td><b class="tot">${fmt(r.net)} ${CURRENCY}</b></td></tr>
       </table>
 
@@ -9834,6 +9858,20 @@ window.__lastEmpMealsData = null;
     }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
 
+  // 🖼️ عرض صورة مكبّرة موثوق — window.open() مع صور base64 (data:) بيترفض/يطلع فاضي
+  // بمعظم المتصفحات لأسباب أمنية، فبنستخدم مودال عادي بدلها (نفس أداة المودال المستخدمة بكل مكان)
+  window.__lightboxImgs = [];
+  function showImageLightbox(idx){
+    const url = window.__lightboxImgs[idx]; if(!url) return;
+    modal(`<div style="text-align:center"><img src="${url}" style="max-width:100%;max-height:75vh;border-radius:10px"></div>
+      <div class="m-act"><button class="cancel" onclick="closeModal()">إغلاق</button></div>`);
+  }
+  function renderImgThumbs(images, size){
+    size = size||110;
+    const startIdx = window.__lightboxImgs.length;
+    window.__lightboxImgs.push(...(images||[]));
+    return (images||[]).map((url,i)=>`<img src="${url}" onclick="showImageLightbox(${startIdx+i})" style="width:${size}px;height:${size}px;object-fit:cover;border-radius:8px;cursor:pointer;border:1.5px solid var(--line);margin-inline-end:3px">`).join('');
+  }
   let TOP_CUST_DATA = [];
   let TOP_CUST_ALL = [];
   async function renderTopCustomers(){
@@ -11483,7 +11521,17 @@ try {
     }
     let roleVal = f_sr ? f_sr.value : 'cashier';
     let roleId = null;
-    if(roleVal.startsWith('custom:')){ roleId = roleVal.split(':')[1]; roleVal='custom'; }
+    if(roleVal.startsWith('custom:')){
+      roleId = roleVal.split(':')[1]; roleVal='custom';
+      // 🔧 تحقق دفاعي: لو roleId مش UUID سليم (زي "1" بدل رقم حقيقي)، نوقف فورًا برسالة واضحة
+      // بدل ما نخلي قاعدة البيانات ترفض الحفظ برسالة غامضة "invalid input syntax for type uuid"
+      const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if(!uuidPattern.test(roleId)){
+        toast('✗ خطأ بمعرف الدور المخصص ("'+roleId+'") — جرب تسكّر النموذج وتفتحه من جديد. لو تكررت، بلّغنا فورًا.');
+        console.error('Invalid role_id detected before save:', roleId, 'from roleVal:', roleVal);
+        return;
+      }
+    }
     const rec={full_name: f_sn ? f_sn.value.trim() : '', username: f_su ? f_su.value.trim() : '', pin: f_sp ? f_sp.value.trim() : '', role: roleVal, role_id: roleId, branch_id: f_sb ? f_sb.value||null : null, permissions, linked_hr_id: document.getElementById('f_hrLink')?.value || null};
     if(!rec.full_name||!rec.username||!/^\d{4}$/.test(rec.pin)){ toast('⚠️ جميع الحقول مطلوبة'); return; }
     if(rec.role==='cashier'&&!rec.branch_id){ toast('⚠️ الكاشير يحتاج فرع'); return; }
