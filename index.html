@@ -1408,7 +1408,8 @@
       return; // إيقاف كامل — ما بيكمل دخول التطبيق
     }
     const whoName = document.getElementById('whoName');
-    if (whoName) whoName.textContent = '👤 ' + ME.full_name + ' (' + (ROLE_AR[ME.role]||ME.role) + ')';
+    const roleLabel = ME.role==='custom' ? (CUSTOM_ROLES.find(r=>r.id===ME.role_id)?.name || 'دور مخصص') : (ROLE_AR[ME.role]||ME.role);
+    if (whoName) whoName.textContent = '👤 ' + ME.full_name + ' (' + roleLabel + ')';
     const whoBranch = document.getElementById('whoBranch');
     if (whoBranch) whoBranch.textContent = ME.branches ? '🏪 ' + ME.branches.name_ar : '🏪 كل الفروع';
     applyRoles();
@@ -1489,11 +1490,12 @@
     // فنعيد جلب بيانات الموظف الحقيقية من القاعدة بالخلفية ونحدّث الصلاحيات المعروضة، بدون ما ننتظر تسجيل خروج/دخول.
     // مفصولة تمامًا عن الـ try/catch فوق — أي فشل بالشبكة هون (نت ضعيف مثلًا) ما لازم يمسح جلسة شغالة أو يطلع المستخدم عالشاشة الرئيسية.
     if(ME && ME.id){
-      db.from('staff').select('*, branches(name_ar)').eq('id', ME.id).limit(1).then(({data,error})=>{
+      db.from('staff').select('*, branches(name_ar)').eq('id', ME.id).limit(1).then(async ({data,error})=>{
         if(error || !data || !data.length) return; // فشل الشبكة أو أي خطأ — نتجاهل ونضل عالجلسة المحفوظة، ما بنعمل logout أبدًا هون
         if(data[0].is_active === false){ sessionStorage.removeItem('sjs_me'); location.reload(); return; } // بس لو صراحة معطّل
         ME = data[0];
         sessionStorage.setItem('sjs_me', JSON.stringify(ME));
+        if(ME.role==='custom') await loadCustomRoles();
         applyRoles();
       }).catch(()=>{});
     }
@@ -1588,7 +1590,12 @@
       LATE_MIN = parseInt(SETTINGS.late_min); if(isNaN(LATE_MIN)||LATE_MIN<=0) LATE_MIN = 20;
       READY_WAIT_MIN = parseInt(SETTINGS.ready_wait_min); if(isNaN(READY_WAIT_MIN)||READY_WAIT_MIN<=0) READY_WAIT_MIN = 7;
       applyTheme();
-      if(ME && ME.role==='custom') await loadCustomRoles();
+      if(ME && ME.role==='custom'){
+        await loadCustomRoles();
+        applyRoles(); // 🔧 مهم: أول تطبيق كان بيصير قبل ما توصل صلاحيات الدور المخصص أصلًا، فكانت تنعرض أقل صلاحية (شكل كاشير) لحد ما يعمل المستخدم تحديث يدوي للصفحة
+        const whoName2 = document.getElementById('whoName');
+        if(whoName2) whoName2.textContent = '👤 ' + ME.full_name + ' (' + (CUSTOM_ROLES.find(r=>r.id===ME.role_id)?.name || 'دور مخصص') + ')';
+      }
       const branchSel = document.getElementById('branchSel');
       if (branchSel) branchSel.innerHTML = '<option value="">⚠️ اختر الفرع...</option>' + BRANCHES.map(x=>`<option value="${x.id}">🏪 ${esc(x.name_ar)}</option>`).join('');
       const salesBranch = document.getElementById('salesBranch');
@@ -6592,7 +6599,13 @@
       await addTreasuryTx(payStatus, -total, 'purchase', pur.id, 'فاتورة شراء — '+sup, isAllBranches ? null : window.__purchaseBranchId);
       await db.from('supplier_payments').insert({ supplier:sup, amount:total, account:payStatus, purchase_id:pur.id, branch_id: isAllBranches?null:window.__purchaseBranchId, note:'دفع كامل وقت الفاتورة', created_by: ME.full_name });
     }
-    await db.from('purchase_items').insert(items.map(x=>({...x,purchase_id:pur.id})));
+    const { error: itemsErr } = await db.from('purchase_items').insert(items.map(x=>({...x,purchase_id:pur.id})));
+    if(itemsErr){
+      console.error('purchase_items insert failed:', itemsErr);
+      toast('⚠️ انحفظت الفاتورة بس فشل حفظ تفاصيل المواد: '+itemsErr.message+' — احذف الفاتورة وأعد إدخالها');
+      closeModal(); renderPurchases();
+      return; // ⛔ ما نكمل تحديث المخزون لأن ما في مواد فعليًا انحفظت
+    }
     for(const it of items){
       const {data:ing}=await db.from('ingredients').select('stock').eq('id',it.ingredient_id).single();
       await db.from('ingredients').update({stock:(parseFloat(ing?.stock||0)+it.quantity),unit_cost:it.unit_cost}).eq('id',it.ingredient_id);
@@ -8779,9 +8792,15 @@
       toast('✓ اتسجلت الساعات'); loadAttendanceList(empId, empName); renderHrTable?.();
     }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
-  function hrStatement(empId){
+  async function hrStatement(empId){
     const r = (window.__HR_ROWS||[]).find(x=>x.emp.id===empId); if(!r) return;
-    modal(`<h3>📋 كشف — ${esc(r.emp.name)}</h3>
+    modal(`<h3>📋 كشف — ${esc(r.emp.name)}</h3><div id="hrStmtBody" class="empty-note">... جاري التحميل</div>`);
+    // 🔧 نجيب تفاصيل كل خصم (مخالفة/شكوى/يدوي) بسببه — قبل كان بيظهر رقم إجمالي بس بدون تفاصيل
+    const { data: dedList } = await db.from('employee_deductions').select('*').eq('employee_id', empId)
+      .gte('created_at', localDayStart(HR_FILTER.from)).lte('created_at', localDayEnd(HR_FILTER.to)).order('created_at',{ascending:false});
+    const deds = dedList||[];
+    const body = document.getElementById('hrStmtBody'); if(!body) return;
+    body.innerHTML = `
       <div style="color:var(--muted);font-weight:700;margin-bottom:10px">الفترة: ${HR_FILTER.from} → ${HR_FILTER.to}</div>
       <div class="tbl-wrap"><table class="tbl">
         <tr><td>سعر ساعة العمل</td><td><b>${fmt(r.emp.hourly_wage||0)} ${CURRENCY}</b></td></tr>
@@ -8797,12 +8816,22 @@
         <tr><td>📒 رصيد سابق</td><td><b style="color:${r.opening<0?'var(--red)':'var(--ok)'}">${r.opening>0?'+':''}${fmt(r.opening)} ${CURRENCY}</b></td></tr>
         <tr><td><b>صافي المستحق له</b></td><td><b style="color:${r.net<0?'var(--red)':'var(--ok)'}">${fmt(r.net)} ${CURRENCY}</b></td></tr>
       </table></div>
+      ${deds.length?`<div style="font-weight:900;color:var(--maroon);margin:14px 0 6px">➖ تفاصيل الخصومات (${deds.length})</div>
+      <div class="tbl-wrap"><table class="tbl">
+        <tr><th>التاريخ</th><th>المبلغ</th><th>السبب</th><th>الصور</th></tr>
+        ${deds.map(d=>`<tr>
+          <td>${new Date(d.created_at).toLocaleDateString('ar-JO')}</td>
+          <td><b style="color:var(--red)">-${fmt(d.amount)}</b></td>
+          <td>${esc(d.reason||'—')}</td>
+          <td>${(d.images&&d.images.length)?renderImgThumbs(d.images,40):'—'}</td>
+        </tr>`).join('')}
+      </table></div>`:''}
       <div class="m-act">
         <button class="save" onclick="hrAdvancesView('${empId}','${esc(r.emp.name)}')">💰 تفاصيل السلف</button>
         <button class="mini ok" style="background:var(--maroon);color:#fff" onclick="printHrEmployeePDF('${empId}')">📄 طباعة كشف مفصل</button>
         <button class="mini ok" style="background:#7b2cbf" onclick="closeEmployeeMonth('${empId}')">🔒 قفل هالشهر وترحيل الرصيد</button>
         <button class="cancel" onclick="closeModal()">إغلاق</button>
-      </div>`);
+      </div>`;
   }
   async function closeEmployeeMonth(empId){
     const r = (window.__HR_ROWS||[]).find(x=>x.emp.id===empId); if(!r) return;
@@ -8915,7 +8944,7 @@
   async function printHrEmployeePDF(empId){
     const r = (window.__HR_ROWS||[]).find(x=>x.emp.id===empId); if(!r) return;
     // جلب تفصيل الحضور والوجبات والسلف لهاد الموظف بالفترة المحددة
-    const [attRes, advRes, ordRes, shiftAdjRes] = await Promise.all([
+    const [attRes, advRes, ordRes, shiftAdjRes, dedRes] = await Promise.all([
       db.from('hr_attendance').select('work_date, hours, note').eq('employee_id', empId)
         .gte('work_date', HR_FILTER.from).lte('work_date', HR_FILTER.to).order('work_date'),
       db.from('hr_advances').select('created_at, amount, account, note, status').eq('employee_id', empId)
@@ -8924,8 +8953,10 @@
         .gte('created_at', localDayStart(HR_FILTER.from)).lte('created_at', localDayEnd(HR_FILTER.to)).order('created_at'),
       db.from('shift_adjustments').select('created_at, amount, note, staff_id, staff_name').eq('status','approved')
         .gte('created_at', localDayStart(HR_FILTER.from)).lte('created_at', localDayEnd(HR_FILTER.to)).order('created_at'),
+      db.from('employee_deductions').select('created_at, amount, reason').eq('employee_id', empId)
+        .gte('created_at', localDayStart(HR_FILTER.from)).lte('created_at', localDayEnd(HR_FILTER.to)).order('created_at'),
     ]);
-    const att = attRes.data||[], adv = advRes.data||[], meals = ordRes.data||[];
+    const att = attRes.data||[], adv = advRes.data||[], meals = ordRes.data||[], deds = dedRes.data||[];
     const linkedStaffIds = STAFF.filter(s=>s.linked_hr_id===empId).map(s=>s.id);
     const shiftAdj = (shiftAdjRes.data||[]).filter(a=> linkedStaffIds.length ? linkedStaffIds.includes(a.staff_id) : a.staff_name===r.emp.name);
     const html = `<html dir="rtl"><head><meta charset="UTF-8">
@@ -8975,6 +9006,11 @@
       <h2>🔻 تفصيل خصومات الشيفتات (${shiftAdj.length})</h2>
       <table><tr><th>التاريخ</th><th>المبلغ</th><th>السبب</th></tr>
       ${shiftAdj.map(a=>`<tr><td>${new Date(a.created_at).toLocaleDateString('ar-JO')}</td><td>${fmt(Math.abs(a.amount))}</td><td>${esc(a.note||'—')}</td></tr>`).join('')||'<tr><td colspan="3">لا شي</td></tr>'}
+      </table>
+
+      <h2>➖ تفصيل خصومات المخالفات/الأخرى (${deds.length})</h2>
+      <table><tr><th>التاريخ</th><th>المبلغ</th><th>السبب</th></tr>
+      ${deds.map(d=>`<tr><td>${new Date(d.created_at).toLocaleDateString('ar-JO')}</td><td>${fmt(d.amount)}</td><td>${esc(d.reason||'—')}</td></tr>`).join('')||'<tr><td colspan="3">لا شي</td></tr>'}
       </table>
       </body></html>`;
     const win = window.open('','_blank');
