@@ -353,6 +353,7 @@
     <div style="font-weight:900;font-size:1.1rem;color:var(--maroon)">👷 <span id="ep_name"></span></div>
     <div style="display:flex;gap:6px">
       <button onclick="loadEmpPortal()" style="background:rgba(0,0,0,.1);border:none;border-radius:10px;padding:8px 14px;font-weight:800">🔄 تحديث</button>
+      <button onclick="violationForm()" style="background:var(--red);color:#fff;border:none;border-radius:10px;padding:8px 14px;font-weight:800">🚩 مخالفة</button>
       <button onclick="empPortalLogout()" style="background:rgba(0,0,0,.1);border:none;border-radius:10px;padding:8px 14px;font-weight:800">خروج</button>
     </div>
   </div>
@@ -5229,11 +5230,16 @@
   async function saveViolation(){
     const note = document.getElementById('vioNote')?.value?.trim();
     if(!note && !(window.__violationImgs||[]).length){ toast('⚠️ اكتب وصف أو أرفق صورة على الأقل'); return; }
+    // 🔧 الزر متاح بمكانين: التطبيق الرئيسي (كاشير/أدمن — يستخدم ME) وبوابة الموظف الذاتية
+    // (تسجيل حضور — تستخدم EMP). نتأكد نستخدم المصدر الصحيح المتوفر فعليًا.
+    const isPortalCtx = typeof EMP!=='undefined' && EMP && !document.getElementById('empPortalApp')?.classList.contains('hidden');
+    const reporterName = isPortalCtx ? EMP.name : (typeof ME!=='undefined' && ME ? ME.full_name : 'غير معروف');
+    const branchId = isPortalCtx ? (getDeviceBranchId()||null) : (ME.branch_id||getDeviceBranchId()||null);
     try{
       const { error } = await db.from('violations').insert({
         note: note||null, images: window.__violationImgs||[],
-        branch_id: ME.branch_id||getDeviceBranchId()||null, branch_name: BRANCHES.find(b=>b.id===(ME.branch_id||getDeviceBranchId()))?.name_ar||null,
-        reported_by: ME.full_name, status:'open'
+        branch_id: branchId, branch_name: BRANCHES.find(b=>b.id===branchId)?.name_ar||null,
+        reported_by: reporterName, status:'open'
       });
       if(error){ toast('✗ '+error.message); return; }
       toast('✓ اترسلت المخالفة للإدارة'); window.__violationImgs=[]; closeModal();
@@ -6360,6 +6366,7 @@
   }
   async function purchaseForm(){
     piIdx=0; window.__purchaseBranchId=null;
+    await loadIngredients(); // 🔧 كان ناقص — القائمة كانت تطلع فاضية لو ما زرت شاشة المكونات قبلها بنفس الجلسة
     if(!SUPPLIERS_DATA.length){ const {data} = await db.from('suppliers').select('*').order('name'); SUPPLIERS_DATA = data||[]; }
     const today=new Date().toISOString().split('T')[0];
     modal(`<h3>فاتورة شراء جديدة</h3>
@@ -9680,12 +9687,16 @@ window.__lastEmpMealsData = null;
 
   /* ================= أفضل العملاء (أكثر طلبات + أفضل تقييم) ================= */
   let TOP_CUST_DATA = [];
+  let TOP_CUST_ALL = [];
   async function renderTopCustomers(){
     const C = document.getElementById('admContent');
     if(!C) return;
     C.innerHTML = '<div class="empty-note">... جاري التحميل</div>';
     try{
-      const { data: customers } = await db.from('customers').select('*').limit(500);
+      // 🔧 إصلاح مهم: كان محدد بـ500 عميل بدون أي ترتيب (limit عشوائي) — لو عندك أكتر من 500
+      // عميل، عملاء جداد أو محدّثين ممكن ما يطلعوا أصلًا لأنهم برا الـ500 يلي رجعت. شلنا الحد
+      // (أو رفعناه لرقم كبير جدًا كأمان) عشان كل العملاء يدخلوا بالحساب صح.
+      const { data: customers } = await db.from('customers').select('*').limit(20000);
       // العدد الحقيقي للطلبات من جدول الطلبات (بدل العداد المخزّن اللي ممكن ينزاح)
       const custIds = (customers||[]).map(c=>c.id);
       const orderCounts = await computeOrderCounts(custIds);
@@ -9697,32 +9708,50 @@ window.__lastEmpMealsData = null;
         ratingMap[o.customer_id].sum += o.customer_rating;
         ratingMap[o.customer_id].count++;
       });
-      TOP_CUST_DATA = (customers||[]).map(c=>{
+      TOP_CUST_ALL = (customers||[]).map(c=>{
         const r = ratingMap[c.id];
         return {...c, orders_count: orderCounts[c.id]||0, avgRating: r ? (r.sum/r.count) : null, ratingCount: r?.count||0};
-      }).sort((a,b)=>(b.orders_count||0)-(a.orders_count||0)).slice(0,100);
+      }).sort((a,b)=>(b.orders_count||0)-(a.orders_count||0));
+      TOP_CUST_DATA = TOP_CUST_ALL.slice(0,100);
       C.innerHTML = `
         <div style="color:var(--muted);font-weight:700;font-size:.85rem;margin-bottom:10px">مرتبين حسب عدد الطلبات — استخدم الفلتر لترتيب حسب التقييم بدل هيك.</div>
+        <input id="topCustSearch" placeholder="🔍 بحث بالاسم / الهاتف / العنوان (بكل العملاء مش بس أفضل 100)" oninput="searchTopCust(this.value)" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:10px">
         <div style="display:flex;gap:8px;margin-bottom:12px">
           <button class="mini ok" onclick="sortTopCust('orders')">🔢 الأكثر طلبات</button>
           <button class="mini edit" onclick="sortTopCust('rating')">⭐ الأفضل تقييم</button>
         </div>
-        <div class="tbl-wrap"><table class="tbl">
-          <tr><th></th><th>الاسم</th><th>الهاتف</th><th>عدد الطلبات</th><th>متوسط التقييم</th><th></th></tr>
-          ${TOP_CUST_DATA.map(c=>`<tr>
-            <td><input type="checkbox" onchange="toggleCustSelect('${c.id}',this.checked);updateCustBulkBarTop()" style="width:18px;height:18px"></td>
-            <td><b>${c.flagged?'🚩 ':''}${esc(c.name)}</b></td>
-            <td dir="ltr" style="text-align:right">${esc(c.phone)}</td>
-            <td><b style="color:var(--red)">${c.orders_count||0}</b></td>
-            <td>${c.avgRating?('⭐ '+c.avgRating.toFixed(1)+' ('+c.ratingCount+')'):'—'}</td>
-            <td><button class="mini ok" onclick="sendVipMessage('${c.id}')">🎁 رسالة VIP</button></td>
-          </tr>`).join('')||'<tr><td colspan="6" class="empty-note">ما في عملاء بعد</td></tr>'}
-        </table></div>
+        <div id="topCustTableWrap">${renderTopCustRows(TOP_CUST_DATA)}</div>
         <div id="topCustBulkBar" class="hidden" style="margin-top:10px;background:#e6f7ec;border:1.5px solid var(--ok);border-radius:10px;padding:8px 12px">
           <b id="topCustBulkCount" style="color:var(--ok)"></b>
           <button class="mini ok" onclick="openBulkWhatsapp()">📢 إرسال رسالة جماعية للمختارين</button>
         </div>`;
     }catch(e){ C.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
+  }
+  function renderTopCustRows(list){
+    return `<div class="tbl-wrap"><table class="tbl">
+      <tr><th></th><th>الاسم</th><th>الهاتف</th><th>العنوان</th><th>عدد الطلبات</th><th>متوسط التقييم</th><th></th></tr>
+      ${list.map(c=>`<tr>
+        <td><input type="checkbox" onchange="toggleCustSelect('${c.id}',this.checked);updateCustBulkBarTop()" style="width:18px;height:18px"></td>
+        <td><b>${c.flagged?'🚩 ':''}${esc(c.name)}</b></td>
+        <td dir="ltr" style="text-align:right">${esc(c.phone)}</td>
+        <td style="font-size:.82rem;color:var(--muted)">${esc(c.address||'—')}</td>
+        <td><b style="color:var(--red)">${c.orders_count||0}</b></td>
+        <td>${c.avgRating?('⭐ '+c.avgRating.toFixed(1)+' ('+c.ratingCount+')'):'—'}</td>
+        <td><button class="mini ok" onclick="sendVipMessage('${c.id}')">🎁 رسالة VIP</button></td>
+      </tr>`).join('')||'<tr><td colspan="7" class="empty-note">ما في نتائج</td></tr>'}
+    </table></div>`;
+  }
+  function searchTopCust(q){
+    const wrap = document.getElementById('topCustTableWrap'); if(!wrap) return;
+    q = (q||'').trim().toLowerCase();
+    if(!q){ wrap.innerHTML = renderTopCustRows(TOP_CUST_DATA); return; }
+    // 🔍 البحث بيدوّر بكل العملاء المحمّلين (مش بس أفضل 100 المعروضين)
+    const results = (TOP_CUST_ALL||[]).filter(c=>
+      (c.name||'').toLowerCase().includes(q) ||
+      (c.phone||'').toLowerCase().includes(q) ||
+      (c.address||'').toLowerCase().includes(q)
+    ).slice(0,200);
+    wrap.innerHTML = renderTopCustRows(results);
   }
   function updateCustBulkBarTop(){
     const bar = document.getElementById('topCustBulkBar');
@@ -9732,9 +9761,11 @@ window.__lastEmpMealsData = null;
     if(cnt) cnt.textContent = '✓ '+CUST_SELECTED.size+' عميل محدد';
   }
   function sortTopCust(mode){
-    if(mode==='orders') TOP_CUST_DATA.sort((a,b)=>(b.orders_count||0)-(a.orders_count||0));
-    else TOP_CUST_DATA.sort((a,b)=>(b.avgRating||0)-(a.avgRating||0));
-    renderTopCustomers(); // إعادة رسم بسيطة — بيانات محفوظة بالذاكرة فعليًا فما تكرار طلب فعلي
+    const sortFn = mode==='orders' ? (a,b)=>(b.orders_count||0)-(a.orders_count||0) : (a,b)=>(b.avgRating||0)-(a.avgRating||0);
+    TOP_CUST_ALL.sort(sortFn);
+    TOP_CUST_DATA = TOP_CUST_ALL.slice(0,100);
+    const wrap = document.getElementById('topCustTableWrap');
+    if(wrap) wrap.innerHTML = renderTopCustRows(TOP_CUST_DATA);
   }
   async function sendVipMessage(custId){
     const c = TOP_CUST_DATA.find(x=>x.id===custId) || CUSTOMERS.find(x=>x.id===custId);
