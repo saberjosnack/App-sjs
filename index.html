@@ -605,6 +605,7 @@
         <button data-a="hrClosures" onclick="admTab('hrClosures')" style="background:#e8d9ff;border-color:#7b2cbf">📜 كشوفات الأشهر</button>
         <button data-a="ingredients" onclick="admTab('ingredients')">🥩 المكونات</button>
         <button data-a="recipes" onclick="admTab('recipes')">📋 الوصفات</button>
+        <button data-a="manufacturing" onclick="admTab('manufacturing')" style="background:#ffe8b3;border-color:#c98a00">🏭 التصنيع</button>
         <button data-a="transfers" onclick="admTab('transfers')">🔄 نقل بضاعة</button>
         <button data-a="expenses" onclick="admTab('expenses')">💸 المصاريف</button>
         <button data-a="purchases" onclick="admTab('purchases')">🛒 المشتريات</button>
@@ -814,6 +815,15 @@
   // ⚠️ الاستثناء الوحيد المتعمّد: شاشة "🛡️ الأدوار" نفسها — محمية بشكل منفصل بدالة canAccessAdminTab
   // (حتى لو الدور معاه act_as_owner) عشان يمنع أي احتمال يعدّل حاله صلاحيات أكتر بنفسه.
   const isAdmin = () => !!(ME && (ME.role==='admin' || (ME.role==='custom' && ME.permissions?.act_as_owner) || (ME.role==='custom' && (window.CUSTOM_ROLES||[]).find(r=>r.id===ME.role_id)?.permissions?.act_as_owner)));
+  // 🔓 فئات دقيقة بديلة عن حزمة "act_as_owner" الشاملة — كل وحدة ممكن تتفعّل لحالها بدون الباقي.
+  // isAdmin() موجودة بكل فئة عمدًا: المالك الحقيقي أو صاحب act_as_owner بيقدر يعمل كل شي دايمًا،
+  // وفوقها أي حدا معاه الصلاحية الدقيقة المحددة بس (حتى لو ما معاه act_as_owner) بيقدر يعمل هاي الفئة بس.
+  function canFinApprove(){ return isAdmin() || perm('fin_approvals'); }
+  function canManageShiftAdj(){ return isAdmin() || perm('shift_adj_manage'); }
+  function canDeleteRecords(){ return isAdmin() || perm('delete_records'); }
+  function canRevealInventory(){ return isAdmin() || perm('inventory_reveal'); }
+  function canSeeAllBranches(){ return isAdmin() || perm('cross_branch_reports'); }
+  function canManageWaste(){ return isAdmin() || perm('waste_manage'); }
   const isCallCenter = () => ME && ME.role==='callcenter';
 
   /* ================= صوت التنبيه ================= */
@@ -1150,9 +1160,18 @@
       tab_rewards: 'جدول المكافآت',
       tab_dailyAudits: 'جرد الفرع اليومي',
       tab_activityLog: 'سجل الأحداث (حساس — انتبهي قبل ما تعطيها لغير المالك)',
+      tab_manufacturing: 'التصنيع',
+    },
+    '🔓 صلاحيات إدارية دقيقة (بدائل قابلة للاختيار لوحدها)': {
+      fin_approvals: 'الموافقات المالية (مصاريف، تسوية مشتريات، دفعات موردين، خصم يدوي حر، الخزينة)',
+      shift_adj_manage: 'إدارة تسويات الشيفت (عجز/زيادة الدرج) — اعتماد/رفض/حذف',
+      delete_records: 'حذف نهائي لسجلات حساسة (عملاء، أصناف، مكونات، جرد، نقل بضاعة)',
+      inventory_reveal: 'رؤية الفرق الحقيقي أثناء الجرد (مو جرد أعمى) + كل الفروع بالمخزون',
+      cross_branch_reports: 'رؤية كل الفروع (بحث الفواتير، سجل اليوم، التقارير) بدل فرعه بس',
+      waste_manage: 'إدارة الإتلاف',
     },
     '👑 صلاحيات خاصة (حساسة جدًا)': {
-      act_as_owner: '🔑 كل صلاحيات المالك تلقائيًا (فتح/إغلاق كل شي مالي، حذف نهائي، موافقات، إلخ) — ما عدا شاشة "الأدوار" نفسها',
+      act_as_owner: '🔑 كل صلاحيات المالك تلقائيًا (حزمة شاملة تغطي كل يلي فوق دفعة وحدة) — ما عدا "الأدوار" و"تصفير النظام"',
     },
   };
   const ROLE_DEFAULT_PERMS = {
@@ -2703,7 +2722,7 @@
       disc = appliedCode.kind==='percent' ? sub*appliedCode.value/100 : +appliedCode.value;
       lbl = '('+appliedCode.code+')';
     }
-    if(isAdmin() && !isEmpMeal){
+    if(canFinApprove() && !isEmpMeal){
       const discInput = document.getElementById('discInput');
       const manual = discInput ? parseFloat(discInput.value)||0 : 0;
       if(manual>0){ disc = manual; lbl='(يدوي)'; }
@@ -3652,7 +3671,7 @@
       // الطلب انحفظ بنجاح بقاعدة البيانات — أي خطأ من هون ورايح هو خطأ طباعة بس، مش خطأ حفظ
       toast(editingOrder ? `✓ تعدّل طلب #${ord.order_number}` : `✓ طلب #${ord.order_number} — انحفظ`);
       // ⭐ تقييم العميل بعد إرسال الطلب — بس لو في عميل مرتبط (customer_id) ونحن كول سنتر/مدير
-      if(customer_id && (isCallCenter()||isAdmin())){
+      if(customer_id && (isCallCenter()||canSeeAllBranches())){
         setTimeout(()=>askCustomerRating(customer_id, ord.id, custInfo.name||matchedCustomer?.name||''), 600);
       }
       // نطبع محليًا فقط لو هاد الجهاز فعليًا بنفس فرع الطلب — أي شخص بدون فرع ثابت (مدير/كول سنتر)
@@ -3685,7 +3704,7 @@
   let DAY = [];
   /* ---- بحث الفواتير (مدير) ---- */
   async function searchInvoices(){
-    if(!isAdmin() && !isCallCenter()){ toast('⛔ صلاحية المدير أو الكول سنتر فقط'); return; }
+    if(!canSeeAllBranches() && !isCallCenter()){ toast('⛔ صلاحية المدير أو الكول سنتر فقط'); return; }
     const q = document.getElementById('invSearch').value.trim();
     if(!q){ loadDay(); return; }
     const L = document.getElementById('dayList');
@@ -3750,7 +3769,7 @@
     }catch(e){ console.error('jumpToOrder failed:', e); toast('✗ خطأ بفتح الطلب'); }
   }
   function showInvoice(id){
-    if(!isAdmin() && !isCallCenter()) return;
+    if(!canSeeAllBranches() && !isCallCenter()) return;
     const o = DAY.find(x=>x.id===id); if(!o) return;
     modal(`<h3>🧾 فاتورة #${o.order_number}</h3>
       <table class="tbl" style="margin-bottom:12px">
@@ -3819,7 +3838,7 @@
   }
   async function loadDay(){
     try {
-      const adm = isAdmin();
+      const adm = canSeeAllBranches();
       const cc = isCallCenter();
       console.log('جاري تحميل الطلبات...');
 
@@ -4171,7 +4190,7 @@
     const orderNote = document.getElementById('orderNote');
     if (orderNote) orderNote.value = o.notes||'';
     const discInput = document.getElementById('discInput');
-    if (isAdmin() && discInput && !o.discount_code && +o.discount>0) discInput.value = o.discount;
+    if (canFinApprove() && discInput && !o.discount_code && +o.discount>0) discInput.value = o.discount;
     if(o.discount_code){
       const codeInput = document.getElementById('codeInput');
       if (codeInput) codeInput.value = o.discount_code;
@@ -4357,12 +4376,12 @@
         <td style="white-space:nowrap">
           <button class="mini edit" onclick="custForm('${c.id}')">تعديل</button>
           <button class="mini tog" onclick="showCustomerInvoices('${c.id}')">📋 فواتير</button>
-          ${isAdmin()?`<button class="mini del" onclick="deleteCustomer('${c.id}','${esc(c.name)}')">حذف</button>`:''}
+          ${canDeleteRecords()?`<button class="mini del" onclick="deleteCustomer('${c.id}','${esc(c.name)}')">حذف</button>`:''}
         </td></tr>`).join('')
       || '<tr><td colspan="6" class="empty-note">ما في عملاء</td></tr>'}</table>`;
   }
   async function deleteCustomer(id, name){
-    if(!isAdmin()){ toast('⛔ صلاحية المالك فقط'); return; }
+    if(!canDeleteRecords()){ toast('⛔ صلاحية المالك فقط'); return; }
     if(!confirm('⚠️ حذف العميل "'+name+'" نهائيًا؟\nالفواتير القديمة رح تضل موجودة بس بدون ربط بعميل.\nهاد الإجراء ما ينرجع.')) return;
     try{
       const { error } = await db.from('customers').delete().eq('id', id);
@@ -4799,7 +4818,7 @@
     }
   }
   async function loadSalesReport(){
-    if(!isAdmin()){ toast('⛔ صلاحية المدير فقط'); return; }
+    if(!perm('reports_view')){ toast('⛔ صلاحية المدير فقط'); return; }
     const range = getRepRange();
     const fromDate = new Date(range.from);
     const toDate   = new Date(range.to);
@@ -4829,7 +4848,7 @@
     try {
       let q = db.from('orders').select('*, order_items(*), customers(name), branches(name_ar)')
         .gte('created_at', fromDate.toISOString()).lte('created_at', toDate.toISOString()).order('created_at', {ascending:false});
-      if(ME.branch_id && !isAdmin()) q = q.eq('branch_id', ME.branch_id);
+      if(ME.branch_id && !canSeeAllBranches()) q = q.eq('branch_id', ME.branch_id);
       if(branchFilter) q = q.eq('branch_id', branchFilter);
       if(staffFilter) q = q.eq('created_by', staffFilter);
       const { data } = await q;
@@ -4914,7 +4933,7 @@
     items:'items_manage', cats:'cats_manage', codes:'codes_manage', staff:'staff_manage', roles:'admin_only', branches:'branches_manage', sett:'settings_manage', devices:'devices_manage',
     ingredients:'inventory_view', recipes:'inventory_view',
     inventory:'inventory_audit', transfers:'inventory_transfer', warehouse:'tab_warehouse', treasury:'tab_treasury', hr:'tab_hr', chats:'tab_chats', dailyAudits:'tab_dailyAudits', hrLocations:'tab_hrLocations', dutyHours:'tab_dutyHours', hrClosures:'tab_hrClosures', ordersScreen:'tab_ordersScreen',
-    complaints:'tab_complaints', violations:'tab_violations', deductions:'tab_deductions', rewards:'tab_rewards', activityLog:'tab_activityLog',
+    complaints:'tab_complaints', violations:'tab_violations', deductions:'tab_deductions', rewards:'tab_rewards', activityLog:'tab_activityLog', manufacturing:'tab_manufacturing',
     expenses:'expenses_view', purchases:'purchases_view',
     platforms:'platforms_view', empmeals:'empmeals_view', topcust:'topcust_view', waste:'waste_log', suppliers:'purchases_view',
   };
@@ -4996,6 +5015,7 @@
     if(admView==='dutyHours'){ renderDutyHours(); return; }
     if(admView==='hrClosures'){ renderHrMonthClosures(); return; }
     if(admView==='activityLog'){ renderActivityLog(); return; }
+    if(admView==='manufacturing'){ renderManufacturing(); return; }
     if(admView==='ordersScreen'){ renderOrdersScreen(); return; }
     if(admView==='platforms'){ renderPlatforms(); return; }
     if(admView==='devices'){ renderDevices(); return; }
@@ -5138,7 +5158,7 @@
         <div class="m-act"><button class="save" onclick="saveSettings()">💾 حفظ الإعدادات</button></div>
       </div>
 
-      ${isAdmin() ? `
+      ${(ME&&ME.role==='admin') ? `
       <div class="mbox" style="max-width:480px;margin-top:16px;border:2px solid var(--red)">
         <h3 style="color:var(--red)">⚠️ منطقة الخطر — للمالك فقط</h3>
         <div style="color:var(--muted);font-weight:700;font-size:.85rem;margin-bottom:12px">تصفير النظام بالكامل: بيمسح كل الطلبات، المشتريات، المصاريف، الشيفتات، والعملاء نهائيًا، ويرجّع المخزون لصفر. الفروع والموظفين والأصناف والأدوار بتبقى موجودة.</div>
@@ -5637,7 +5657,7 @@
   }
 
   async function approveShiftAdjustment(id){
-    if(!isAdmin()){ toast('⛔ صلاحية المالك فقط'); return; }
+    if(!canManageShiftAdj()){ toast('⛔ صلاحية المالك فقط'); return; }
     if(!confirm('تأكيد الموافقة على هاد التسوية؟')) return;
     try{
       const { error } = await db.from('shift_adjustments').update({ status:'approved', approved_by: ME.full_name, approved_at: new Date().toISOString() }).eq('id', id);
@@ -5646,7 +5666,7 @@
     }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
   async function rejectShiftAdjustment(id){
-    if(!isAdmin()){ toast('⛔ صلاحية المالك فقط'); return; }
+    if(!canManageShiftAdj()){ toast('⛔ صلاحية المالك فقط'); return; }
     if(!confirm('تأكيد رفض هاد التسوية؟ (بتقدر ترجعها لاحقًا)')) return;
     try{
       const { error } = await db.from('shift_adjustments').update({ status:'rejected', approved_by: ME.full_name, approved_at: new Date().toISOString() }).eq('id', id);
@@ -5655,7 +5675,7 @@
     }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
   async function restoreShiftAdjustment(id){
-    if(!isAdmin()){ toast('⛔ صلاحية المالك فقط'); return; }
+    if(!canManageShiftAdj()){ toast('⛔ صلاحية المالك فقط'); return; }
     try{
       const { error } = await db.from('shift_adjustments').update({ status:'pending', approved_by:null, approved_at:null }).eq('id', id);
       if(error){ toast('✗ '+error.message); console.error(error); return; }
@@ -5663,7 +5683,7 @@
     }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
   async function deleteShiftAdjustment(id){
-    if(!isAdmin()){ toast('⛔ صلاحية المالك فقط'); return; }
+    if(!canManageShiftAdj()){ toast('⛔ صلاحية المالك فقط'); return; }
     if(!confirm('⚠️ حذف طلب التسوية هاد نهائيًا؟ هاد الإجراء ما ينرجع.')) return;
     try{
       const { error } = await db.from('shift_adjustments').delete().eq('id', id);
@@ -5672,7 +5692,7 @@
     }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
   async function createAdjustmentManually(shiftId, staffName, diff){
-    if(!isAdmin()){ toast('⛔ صلاحية المالك فقط'); return; }
+    if(!canManageShiftAdj()){ toast('⛔ صلاحية المالك فقط'); return; }
     try{
       const { data: existing } = await db.from('shift_adjustments').select('id').eq('shift_id', shiftId).limit(1);
       if(existing && existing.length){ toast('⚠️ في طلب تسوية موجود أصلًا لهاد الشيفت — شوف شاشة "الشيفتات" فوق'); return; }
@@ -5686,7 +5706,7 @@
   }
 
   async function deleteShift(shiftId, staffName){
-    if(!isAdmin()){ toast('⛔ صلاحية المالك فقط'); return; }
+    if(!canManageShiftAdj()){ toast('⛔ صلاحية المالك فقط'); return; }
     if(!confirm('⚠️ حذف شيفت "'+staffName+'" نهائيًا؟\nهاد للشيفتات المسجلة غلط بس — الطلبات المرتبطة فيه بتضل موجودة بس بدون ربط بشيفت.\nهاد الإجراء ما ينرجع، متأكد؟')) return;
     try{
       // نحذف أي طلب تسوية مرتبط فيه أول (عجز/زيادة) عشان ما يضل سجل يتيم
@@ -5981,7 +6001,7 @@
       </table></div>`;
   }
   async function deleteIngredient(id, name){
-    if(!isAdmin()){ toast('⛔ صلاحية المالك فقط'); return; }
+    if(!canDeleteRecords()){ toast('⛔ صلاحية المالك فقط'); return; }
     if(!confirm('⚠️ حذف مكون "'+name+'" نهائيًا؟\nلو مستخدم بوصفة صنف أو بفاتورة شراء قديمة، رح نعرضلك خيار تحطله بديل قبل الحذف.\nمتابعة؟')) return;
     try{
       // نحذف الروابط الفرعية الآمنة أول (مخزون الفروع وربط الموردين) قبل محاولة حذف المكون نفسه
@@ -6144,6 +6164,214 @@
     closeModal();toast('✓ انحفظت الوصفة');renderRecipes();
   }
 
+  /* ================= 🏭 التصنيع (مواد خام ← منتج مصنّع) ================= */
+  let MFG_RECIPES = [];
+  let mfgRowIdx = 1;
+  async function renderManufacturing(){
+    await loadIngredients();
+    const C = document.getElementById('admContent');
+    C.innerHTML = '<div class="empty-note">... جاري التحميل</div>';
+    const [recRes, runRes] = await Promise.all([
+      db.from('manufacturing_recipes').select('*, ingredients(name,unit), manufacturing_recipe_items(*, ingredients(name,unit,unit_cost))').order('created_at',{ascending:false}),
+      db.from('manufacturing_runs').select('*, branches(name_ar)').order('created_at',{ascending:false}).limit(200),
+    ]);
+    if(recRes.error){ C.innerHTML = `<div class="alert-red">⚠️ ${esc(recRes.error.message||'الجداول غير موجودة — نفّذ SQL أولاً')}</div>`; return; }
+    MFG_RECIPES = recRes.data||[];
+    const runs = runRes.data||[];
+    C.innerHTML = `
+      <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">
+        <button class="add-btn" style="margin:0" onclick="mfgRecipeForm()">＋ وصفة تصنيع جديدة</button>
+      </div>
+      <div class="panel" style="margin-bottom:14px">
+        <h4 style="color:var(--maroon);margin-bottom:8px">📋 وصفات التصنيع المحفوظة</h4>
+        ${MFG_RECIPES.map(r=>{
+          const items = r.manufacturing_recipe_items||[];
+          const rawCost = items.reduce((a,i)=>a+(i.quantity||0)*(i.ingredients?.unit_cost||0),0);
+          return `<div style="border:1.5px solid var(--line);border-radius:12px;padding:12px;margin-bottom:10px">
+            <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;align-items:center">
+              <b>${esc(r.name)} ← يعطي ${r.output_quantity} ${esc(r.ingredients?.unit||'')} من "${esc(r.ingredients?.name||'—')}"</b>
+              <div style="white-space:nowrap">
+                <button class="mini ok" style="background:var(--maroon)" onclick="startManufacturing('${r.id}')">🏭 صنّع الآن</button>
+                <button class="mini edit" onclick="mfgRecipeForm('${r.id}')">تعديل</button>
+                <button class="mini del" onclick="deleteMfgRecipe('${r.id}')">حذف</button>
+              </div>
+            </div>
+            <div style="font-size:.82rem;color:var(--muted);margin-top:6px">
+              ${items.map(i=>`${i.quantity} ${esc(i.ingredients?.unit||'')} ${esc(i.ingredients?.name||'—')}`).join(' + ')||'ما في مواد خام'}
+              — تكلفة تقديرية حاليًا: <b style="color:var(--red)">${fmt(rawCost)} ${CURRENCY}</b> (${fmt(r.output_quantity>0?rawCost/r.output_quantity:0)} ${CURRENCY}/${esc(r.ingredients?.unit||'وحدة')})
+            </div>
+          </div>`;
+        }).join('')||'<div class="empty-note">ما في وصفات تصنيع بعد — دوسي "＋ وصفة تصنيع جديدة"</div>'}
+      </div>
+      <div class="panel">
+        <h4 style="color:var(--maroon);margin-bottom:8px">📜 سجل عمليات التصنيع (${runs.length})</h4>
+        <div class="tbl-wrap"><table class="tbl">
+          <tr><th>التاريخ</th><th>الوصفة</th><th>الفرع</th><th>الكمية المنتجة</th><th>التكلفة الكلية</th><th>تكلفة الوحدة</th><th>بواسطة</th></tr>
+          ${runs.map(r=>`<tr>
+            <td>${new Date(r.created_at).toLocaleString('ar-JO')}</td>
+            <td><b>${esc(r.recipe_name||'—')}</b> → ${esc(r.output_ingredient_name||'—')}</td>
+            <td>${esc(r.branches?.name_ar||'—')}</td>
+            <td>${r.output_quantity}</td>
+            <td><b style="color:var(--red)">${fmt(r.final_cost)}</b></td>
+            <td>${fmt(r.unit_cost)}</td>
+            <td>${esc(r.created_by||'—')}</td>
+          </tr>`).join('')||'<tr><td colspan="7" class="empty-note">ما في عمليات تصنيع مسجّلة بعد</td></tr>'}
+        </table></div>
+      </div>`;
+  }
+  function mfgRow(idx, ingId, qty){
+    return `<div class="two" style="margin-bottom:6px" id="mfg_row_${idx}">
+      <select class="mfg_ing" style="flex:2;border:1.5px solid var(--line);border-radius:10px;padding:7px 10px">
+        <option value="">المادة الخام...</option>
+        ${INGR.map(i=>`<option value="${i.id}" ${i.id===ingId?'selected':''}>${esc(i.name)} (${esc(i.unit)})</option>`).join('')}
+      </select>
+      <input class="mfg_qty" type="number" step="0.01" placeholder="الكمية" value="${qty||''}" style="flex:1;border:1.5px solid var(--line);border-radius:10px;padding:7px 10px">
+      <button type="button" class="mini del" onclick="document.getElementById('mfg_row_${idx}').remove()">✗</button></div>`;
+  }
+  function addMfgRow(){ document.getElementById('mfg_list').insertAdjacentHTML('beforeend', mfgRow(++mfgRowIdx,'','')); }
+  function mfgRecipeForm(id){
+    const r = id ? MFG_RECIPES.find(x=>x.id===id) : null;
+    const existItems = r?.manufacturing_recipe_items||[];
+    mfgRowIdx = Math.max(0, existItems.length-1);
+    modal(`<h3>${id?'تعديل وصفة تصنيع':'وصفة تصنيع جديدة'}</h3>
+      <div class="fld"><label>اسم الوصفة</label><input id="mfg_name" value="${esc(r?.name||'')}" placeholder="مثال: صلصة الثوم"></div>
+      <div class="fld"><label>المنتج الناتج</label>
+        <select id="mfg_out" onchange="document.getElementById('mfg_out_new').classList.toggle('hidden', this.value!=='__new__')">
+          <option value="">اختر مادة موجودة...</option>
+          ${INGR.map(i=>`<option value="${i.id}" ${r?.output_ingredient_id===i.id?'selected':''}>${esc(i.name)} (${esc(i.unit)})</option>`).join('')}
+          <option value="__new__">+ مادة جديدة (اكتب اسمها ووحدتها تحت)</option>
+        </select>
+        <div id="mfg_out_new" class="hidden two" style="margin-top:6px">
+          <input id="mfg_out_name" placeholder="اسم المادة الجديدة (مثلاً: صلصة الثوم)" style="flex:2">
+          <select id="mfg_out_unit" style="flex:1">${UNITS.map(u=>`<option value="${u}">${u}</option>`).join('')}</select>
+        </div>
+      </div>
+      <div class="fld"><label>الكمية الناتجة من هاي الوصفة (بوحدة المنتج)</label><input id="mfg_out_qty" type="number" step="0.01" value="${r?.output_quantity||1}"></div>
+      <div class="fld"><label>المواد الخام المستهلكة</label>
+        <div id="mfg_list">${existItems.map((i,idx)=>mfgRow(idx,i.ingredient_id,i.quantity)).join('')||mfgRow(0,'','')}</div>
+        <button type="button" class="mini ok" style="margin-top:6px" onclick="addMfgRow()">＋ إضافة مادة خام</button></div>
+      <div class="m-act"><button class="save" onclick="saveMfgRecipe('${id||''}')">حفظ ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
+  }
+  async function saveMfgRecipe(id){
+    if(!lockSubmit('saveMfgRecipe')) return;
+    setTimeout(()=>unlockSubmit('saveMfgRecipe'), 3000);
+    const name = document.getElementById('mfg_name')?.value.trim();
+    let outId = document.getElementById('mfg_out')?.value;
+    const outQty = parseFloat(document.getElementById('mfg_out_qty')?.value)||0;
+    if(!name){ toast('⚠️ اكتب اسم الوصفة'); return; }
+    if(!outId){ toast('⚠️ اختر أو أضف المنتج الناتج'); return; }
+    if(outQty<=0){ toast('⚠️ الكمية الناتجة لازم تكون أكبر من صفر'); return; }
+    if(outId==='__new__'){
+      const newName = document.getElementById('mfg_out_name')?.value.trim();
+      const newUnit = document.getElementById('mfg_out_unit')?.value;
+      if(!newName){ toast('⚠️ اكتب اسم المادة الجديدة'); return; }
+      const { data: newIng, error: ingErr } = await db.from('ingredients').insert({ name:newName, unit:newUnit, stock:0, unit_cost:0 }).select().single();
+      if(ingErr){ toast('✗ '+ingErr.message); return; }
+      INGR.push(newIng); outId = newIng.id;
+    }
+    const rows = [...document.querySelectorAll('#mfg_list .two')];
+    const items = rows.map(row=>({ ingredient_id: row.querySelector('.mfg_ing').value, quantity: parseFloat(row.querySelector('.mfg_qty').value)||0 })).filter(x=>x.ingredient_id&&x.quantity>0);
+    if(!items.length){ toast('⚠️ أضيفي مادة خام واحدة على الأقل'); return; }
+    if(items.some(x=>x.ingredient_id===outId)){ toast('⚠️ المنتج الناتج ما لازم يكون نفسه من ضمن المواد الخام'); return; }
+    try{
+      let rid = id;
+      if(!id){
+        const { data, error } = await db.from('manufacturing_recipes').insert({ name, output_ingredient_id: outId, output_quantity: outQty }).select().single();
+        if(error){ toast('✗ '+error.message); return; }
+        rid = data.id;
+      } else {
+        const { error } = await db.from('manufacturing_recipes').update({ name, output_ingredient_id: outId, output_quantity: outQty }).eq('id', id);
+        if(error){ toast('✗ '+error.message); return; }
+        await db.from('manufacturing_recipe_items').delete().eq('recipe_id', id);
+      }
+      await db.from('manufacturing_recipe_items').insert(items.map(x=>({...x, recipe_id: rid})));
+      await logActivity('mfg_recipe_save', 'وصفة تصنيع: '+name);
+      closeModal(); toast('✓ انحفظت وصفة التصنيع'); renderManufacturing();
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
+  }
+  async function deleteMfgRecipe(id){
+    const r = MFG_RECIPES.find(x=>x.id===id); if(!r) return;
+    if(!confirm('حذف وصفة تصنيع "'+r.name+'"؟')) return;
+    try{
+      await db.from('manufacturing_recipe_items').delete().eq('recipe_id', id);
+      await db.from('manufacturing_recipes').delete().eq('id', id);
+      await logActivity('mfg_recipe_delete', 'حذف وصفة تصنيع: '+r.name);
+      toast('✓ انحذفت الوصفة'); renderManufacturing();
+    }catch(e){ toast('✗ '+e.message); }
+  }
+  function startManufacturing(recipeId){
+    const r = MFG_RECIPES.find(x=>x.id===recipeId); if(!r) return;
+    const items = r.manufacturing_recipe_items||[];
+    const rawCost = items.reduce((a,i)=>a+(i.quantity||0)*(i.ingredients?.unit_cost||0),0);
+    modal(`<h3>🏭 تصنيع — ${esc(r.name)}</h3>
+      <div class="fld"><label>الفرع (وين رح تنخصم المواد الخام وتنضاف الكمية المنتجة)</label>
+        <select id="mfg_run_branch"><option value="">اختر الفرع...</option>${BRANCHES.map(b=>`<option value="${b.id}">${esc(b.name_ar)}</option>`).join('')}</select></div>
+      <div class="fld"><label>الكمية المطلوب تصنيعها الآن (بوحدة المنتج — الوصفة الأساسية بتنتج ${r.output_quantity})</label>
+        <input id="mfg_run_qty" type="number" step="0.01" value="${r.output_quantity}" oninput="updateMfgRunPreview('${recipeId}')"></div>
+      <div id="mfg_run_preview" style="background:#fff8e1;border-radius:10px;padding:10px 12px;margin:10px 0;font-size:.85rem"></div>
+      <div class="fld">
+        <label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="mfg_run_manual" onchange="document.getElementById('mfg_run_manual_wrap').classList.toggle('hidden', !this.checked)"> كتابة سعر تكلفة يدوي بدل الحساب التلقائي</label>
+        <div id="mfg_run_manual_wrap" class="hidden" style="margin-top:6px"><input id="mfg_run_manual_cost" type="number" step="0.01" placeholder="التكلفة الكلية الفعلية"></div>
+      </div>
+      <div class="fld"><label>ملاحظة (اختياري)</label><input id="mfg_run_note" placeholder="مثال: دفعة اليوم..."></div>
+      <div class="m-act"><button class="save" onclick="saveManufacturingRun('${recipeId}')">💾 تنفيذ التصنيع</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
+    updateMfgRunPreview(recipeId);
+  }
+  function updateMfgRunPreview(recipeId){
+    const r = MFG_RECIPES.find(x=>x.id===recipeId); if(!r) return;
+    const items = r.manufacturing_recipe_items||[];
+    const rawCostBase = items.reduce((a,i)=>a+(i.quantity||0)*(i.ingredients?.unit_cost||0),0);
+    const qty = parseFloat(document.getElementById('mfg_run_qty')?.value)||0;
+    const scale = r.output_quantity>0 ? qty/r.output_quantity : 0;
+    const scaledCost = rawCostBase*scale;
+    const prev = document.getElementById('mfg_run_preview'); if(!prev) return;
+    prev.innerHTML = `المواد الخام المطلوبة فعليًا:<br>${items.map(i=>`${(i.quantity*scale).toFixed(2)} ${esc(i.ingredients?.unit||'')} ${esc(i.ingredients?.name||'—')}`).join(' + ')}<br>
+      <b>التكلفة التلقائية المحسوبة: <span style="color:var(--red)">${fmt(scaledCost)} ${CURRENCY}</span> (${fmt(qty>0?scaledCost/qty:0)} ${CURRENCY}/وحدة)</b>`;
+  }
+  async function saveManufacturingRun(recipeId){
+    if(!lockSubmit('saveManufacturingRun')) return;
+    setTimeout(()=>unlockSubmit('saveManufacturingRun'), 3000);
+    const r = MFG_RECIPES.find(x=>x.id===recipeId); if(!r) return;
+    const branchId = document.getElementById('mfg_run_branch')?.value;
+    const qty = parseFloat(document.getElementById('mfg_run_qty')?.value)||0;
+    const manual = document.getElementById('mfg_run_manual')?.checked;
+    const manualCost = parseFloat(document.getElementById('mfg_run_manual_cost')?.value);
+    const note = document.getElementById('mfg_run_note')?.value.trim();
+    if(!branchId){ toast('⚠️ اختري الفرع'); return; }
+    if(qty<=0){ toast('⚠️ الكمية لازم تكون أكبر من صفر'); return; }
+    if(manual && (isNaN(manualCost)||manualCost<0)){ toast('⚠️ اكتبي تكلفة يدوية صحيحة'); return; }
+    const items = r.manufacturing_recipe_items||[];
+    const scale = r.output_quantity>0 ? qty/r.output_quantity : 0;
+    const scaledItems = items.map(i=>({ ingredient_id:i.ingredient_id, name:i.ingredients?.name, unit:i.ingredients?.unit, quantity: (i.quantity||0)*scale, unit_cost: i.ingredients?.unit_cost||0 }));
+    const rawCost = scaledItems.reduce((a,i)=>a+i.quantity*i.unit_cost,0);
+    const finalCost = manual ? manualCost : rawCost;
+    const unitCost = qty>0 ? finalCost/qty : 0;
+    try{
+      // 1) خصم المواد الخام من مخزون الفرع + تسجيل الحركة
+      for(const it of scaledItems){
+        const { data: bi } = await db.from('branch_inventory').select('id,stock').eq('branch_id',branchId).eq('ingredient_id',it.ingredient_id).maybeSingle();
+        const newStock = Math.max(0,(bi?.stock||0)-it.quantity);
+        if(bi) await db.from('branch_inventory').update({ stock:newStock }).eq('id', bi.id);
+        else await db.from('branch_inventory').insert({ branch_id:branchId, ingredient_id:it.ingredient_id, stock:-it.quantity, min_stock:0 });
+        logMovement(branchId, it.ingredient_id, -it.quantity, 'manufacture_consume', 'تصنيع "'+r.name+'" — استهلاك مادة خام');
+      }
+      // 2) إضافة المنتج الناتج لمخزون نفس الفرع + تحديث سعر التكلفة العام للمادة
+      const { data: outBi } = await db.from('branch_inventory').select('id,stock').eq('branch_id',branchId).eq('ingredient_id',r.output_ingredient_id).maybeSingle();
+      if(outBi) await db.from('branch_inventory').update({ stock:(outBi.stock||0)+qty }).eq('id', outBi.id);
+      else await db.from('branch_inventory').insert({ branch_id:branchId, ingredient_id:r.output_ingredient_id, stock:qty, min_stock:0 });
+      await db.from('ingredients').update({ unit_cost: unitCost }).eq('id', r.output_ingredient_id);
+      logMovement(branchId, r.output_ingredient_id, qty, 'manufacture_produce', 'تصنيع "'+r.name+'" — منتج ناتج (تكلفة الوحدة '+fmt(unitCost)+')');
+      // 3) تسجيل عملية التصنيع بسجل دائم
+      await db.from('manufacturing_runs').insert({
+        recipe_id: r.id, recipe_name: r.name, output_ingredient_id: r.output_ingredient_id, output_ingredient_name: r.ingredients?.name||'—',
+        branch_id: branchId, output_quantity: qty, raw_cost: rawCost, final_cost: finalCost, unit_cost: unitCost,
+        items: scaledItems, notes: note||null, created_by: ME.full_name
+      });
+      await logActivity('manufacturing_run', 'تصنيع '+qty+' من "'+(r.ingredients?.name||r.name)+'" — تكلفة '+fmt(finalCost));
+      closeModal(); toast('✓ اتنفّذ التصنيع وتحدّث المخزون'); renderManufacturing();
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
+  }
+
   /* ---- المصاريف ---- */
   const EXP_CATS=['إيجار','كهرباء وماء','رواتب','إعلانات وتسويق','صيانة','توصيل','تغليف','نظافة','مشتريات متنوعة','أخرى'];
   async function renderExpenses(){
@@ -6184,7 +6412,7 @@
           <td><b style="color:var(--red)">${fmt(e.amount)} ${CURRENCY}</b></td>
           <td>${esc(BRANCHES.find(b=>b.id===e.branch_id)?.name_ar||'كل الفروع')}</td>
           <td>
-            ${e.approval_status==='pending'&&isAdmin()?`<button class="mini ok" onclick="approveExpense('${e.id}',true)">✅ موافقة</button><button class="mini del" onclick="approveExpense('${e.id}',false)">✗ رفض</button>`:''}
+            ${e.approval_status==='pending'&&canFinApprove()?`<button class="mini ok" onclick="approveExpense('${e.id}',true)">✅ موافقة</button><button class="mini del" onclick="approveExpense('${e.id}',false)">✗ رفض</button>`:''}
             <button class="mini edit" onclick="expenseForm('${e.id}')">تعديل</button> <button class="mini del" onclick="deleteExpense('${e.id}')">حذف</button>
           </td>
         </tr>`).join('')||'<tr><td colspan="6" class="empty-note">ما في مصاريف</td></tr>'}
@@ -6314,7 +6542,7 @@
       </table></div>`;
   }
   function settlePurchase(id){
-    if(!isAdmin()){ toast('⛔ صلاحية المالك فقط — الدفع قرارك إنت'); return; }
+    if(!canFinApprove()){ toast('⛔ صلاحية المالك فقط — الدفع قرارك إنت'); return; }
     const p = PURCHASES_DATA.find(x=>x.id===id); if(!p) return;
     const paid = parseFloat(p.paid_amount||0);
     const remain = parseFloat(p.total||0) - paid;
@@ -6331,7 +6559,7 @@
   async function confirmSettlePurchase(id){
     if(!lockSubmit('confirmSettlePurchase')) return;
     setTimeout(()=>unlockSubmit('confirmSettlePurchase'), 3000);
-    if(!isAdmin()){ toast('⛔ صلاحية المالك فقط — الموظف يقدر يدخل الفاتورة بس، الدفع قرارك إنت'); return; }
+    if(!canFinApprove()){ toast('⛔ صلاحية المالك فقط — الموظف يقدر يدخل الفاتورة بس، الدفع قرارك إنت'); return; }
     const p = PURCHASES_DATA.find(x=>x.id===id); if(!p) return;
     const acc = document.getElementById('settle_acc')?.value||'cash';
     const note = document.getElementById('settle_note')?.value.trim();
@@ -6351,7 +6579,7 @@
     }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
   function supplierGeneralPaymentForm(supplierName, totalDebt){
-    if(!isAdmin()){ toast('⛔ صلاحية المالك فقط'); return; }
+    if(!canFinApprove()){ toast('⛔ صلاحية المالك فقط'); return; }
     modal(`<h3>💰 دفعة عامة — ${esc(supplierName)}</h3>
       <div style="color:var(--muted);font-weight:700;margin-bottom:10px">إجمالي المستحق حاليًا: <b style="color:var(--red)">${fmt(totalDebt)} ${CURRENCY}</b></div>
       <div style="font-size:.78rem;color:var(--muted);font-weight:600;margin-bottom:10px">💡 المبلغ رح يتوزّع تلقائيًا على أقدم الفواتير المستحقة أول شي، وهيك دواليك.</div>
@@ -6364,7 +6592,7 @@
   async function confirmSupplierGeneralPayment(supplierName){
     if(!lockSubmit('confirmSupplierGeneralPayment')) return;
     setTimeout(()=>unlockSubmit('confirmSupplierGeneralPayment'), 3000);
-    if(!isAdmin()){ toast('⛔ صلاحية المالك فقط'); return; }
+    if(!canFinApprove()){ toast('⛔ صلاحية المالك فقط'); return; }
     const acc = document.getElementById('sgp_acc')?.value||'cash';
     const note = document.getElementById('sgp_note')?.value.trim();
     let amt = parseFloat(normalizeDigits(document.getElementById('sgp_amt')?.value));
@@ -6511,7 +6739,7 @@
         <option value="">اختر الفرع...</option>
         <option value="__all__">🌐 توزيع على كل الفروع</option>
         ${BRANCHES.map(b=>`<option value="${b.id}">${esc(b.name_ar)}</option>`).join('')}</select></div>
-      <div class="fld" id="fp_paystatus_wrap" style="${isAdmin()?'':'display:none'}"><label>💰 حالة الدفع</label>
+      <div class="fld" id="fp_paystatus_wrap" style="${canFinApprove()?'':'display:none'}"><label>💰 حالة الدفع</label>
         <select id="fp_paystatus" onchange="document.getElementById('fp_payacc_wrap').classList.toggle('hidden', this.value==='unpaid')">
           <option value="unpaid">🔴 غير مدفوعة (دين على المطعم)</option>
           <option value="cash">✅ مدفوعة — كاش (من مصاري الفرع)</option>
@@ -6519,7 +6747,7 @@
           <option value="capital">🏦 مدفوعة — من رأس المال</option>
         </select>
       </div>
-      ${isAdmin()?'':'<div style="font-size:.78rem;color:var(--muted);font-weight:600;margin-bottom:8px">💡 الفاتورة رح تنسجل كدين — المالك بيقرر الدفع لاحقًا من شاشة المشتريات</div>'}
+      ${canFinApprove()?'':'<div style="font-size:.78rem;color:var(--muted);font-weight:600;margin-bottom:8px">💡 الفاتورة رح تنسجل كدين — المالك بيقرر الدفع لاحقًا من شاشة المشتريات</div>'}
       <div class="fld" id="fp_payacc_wrap" style="background:#fff8e1;border-radius:10px;padding:10px 12px">
         <div style="font-size:.8rem;color:var(--muted);font-weight:700">💡 المبلغ رح ينخصم تلقائيًا (من مصاري الفرع أو رأس المال حسب اختيارك)</div>
       </div>
@@ -7229,7 +7457,7 @@
     }));
     // 🙈 جرد أعمى: الموظف العادي ما بيشوف الكمية المتوقعة إطلاقًا (عشان يعدّ فعليًا مش ينسخ الرقم)
     // المالك بس (isAdmin) بيشوف المتوقع والفرق مباشرة أثناء الجرد
-    const blindCount = !isAdmin();
+    const blindCount = !canRevealInventory();
     modal(`<h3>📋 جرد احترافي — ${esc(branchName)}</h3>
       <div style="font-weight:700;color:var(--muted);font-size:.85rem;margin-bottom:10px">${blindCount ? '🙈 جرد أعمى — عدّ المخزون الفعلي واكتبه بدقة (النظام بيقارن تلقائيًا بعد الحفظ)' : 'النظام بيعرض الكمية المتوقعة (حسب المبيعات والمشتريات) — عدّ المخزون الفعلي واكتبه، وشوف الفرق تلقائيًا'}</div>
       <input id="inv_audit_search" placeholder="🔍 بحث عن مادة..." oninput="filterInventoryAuditRows(this.value)" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:9px 12px;margin-bottom:8px;font-weight:700">
@@ -7260,7 +7488,7 @@
     });
   }
   function updateAuditVariance(idx){
-    if(!isAdmin()) return; // 🙈 جرد أعمى — الموظف العادي ما بيشوف الفرق أثناء العدّ إطلاقًا
+    if(!canRevealInventory()) return; // 🙈 جرد أعمى — الموظف العادي ما بيشوف الفرق أثناء العدّ إطلاقًا
     const row = document.getElementById('audit_row_'+idx);
     const expected = parseFloat(row.querySelector('.audit_expected').dataset.expected)||0;
     const actualInput = row.querySelector('.inv_qty');
@@ -7431,7 +7659,7 @@
   async function renderInventory(){
     await loadIngredients();
     const C = document.getElementById('admContent');
-    const admin = isAdmin();
+    const admin = canRevealInventory();
     // جلب مخزون الفروع
     const {data:invAll} = await db.from('branch_inventory')
       .select('*, ingredients(name,unit), branches(name_ar)')
@@ -7738,7 +7966,7 @@
   }
   async function deleteDaAudit(idx){
     const a = (window.__DA_LIST||[])[idx]; if(!a) return;
-    if(!isAdmin()){ toast('⛔ صلاحية المالك فقط'); return; }
+    if(!canDeleteRecords()){ toast('⛔ صلاحية المالك فقط'); return; }
     if(!confirm('⚠️ حذف سجل هاد الجرد نهائيًا؟\nملاحظة: هاد بيحذف السجل التاريخي بس — ما بيرجّع أرقام المخزون الحالية لقيمها قبل الجرد (هي أصلًا محدّثة وماشية طبيعي). لو بدك تصحح رقم غلط، استخدم "✏️ تعديل" بدلها.\nمتابعة؟')) return;
     try{
       const { error } = await db.from('inventory_audits').delete().eq('id', a.id);
@@ -7748,7 +7976,7 @@
   }
   function editDaAudit(idx){
     const a = (window.__DA_LIST||[])[idx]; if(!a) return;
-    if(!isAdmin()){ toast('⛔ صلاحية المالك فقط'); return; }
+    if(!canDeleteRecords()){ toast('⛔ صلاحية المالك فقط'); return; }
     const details = a.details||[];
     modal(`<h3>✏️ تعديل الجرد — ${esc(a.branches?.name_ar||'—')}</h3>
       <div style="color:var(--muted);font-weight:700;margin-bottom:10px">${new Date(a.created_at).toLocaleString('ar-JO')} — ${esc(a.staff_name||'—')}</div>
@@ -7967,7 +8195,7 @@
       </table></div>`;
   }
   async function deleteTransferRecord(id){
-    if(!isAdmin()){ toast('⛔ صلاحية المالك فقط'); return; }
+    if(!canDeleteRecords()){ toast('⛔ صلاحية المالك فقط'); return; }
     const t = TRANSFERS_DATA.find(x=>x.id===id); if(!t) return;
     if(!confirm(`⚠️ حذف عملية نقل "${esc(t.ingredients?.name||'—')}" (${t.quantity})؟\nهاد بيرجّع الكمية للمصدر (${t.from_branch_name}) ويخصمها من الوجهة (${t.to_branch_name}) — مفيد لو تكررت العملية بالغلط.\nمتأكد؟`)) return;
     try{
@@ -9192,7 +9420,7 @@
   }
 
   async function sweepBranchesToCapital(){
-    if(!isAdmin()){ toast('⛔ صلاحية المالك فقط'); return; }
+    if(!canFinApprove()){ toast('⛔ صلاحية المالك فقط'); return; }
     if(!confirm('🔁 هاد بيصفّر رصيد كل فرع (كاش وبنك) وينقل المبلغ كامل لـ"رأس المال" — مناسب تعمله آخر اليوم بعد إغلاق كل الشيفتات.\nمتأكد؟')) return;
     try{
       const { data: allTx, error } = await db.from('treasury_transactions').select('*');
@@ -9387,7 +9615,7 @@
     window.__TR_ALL = all; window.__TR_FILTERED = filtered;
   }
   async function deleteTreasuryTx(id){
-    if(!isAdmin()){ toast('⛔ صلاحية المالك فقط'); return; }
+    if(!canFinApprove()){ toast('⛔ صلاحية المالك فقط'); return; }
     if(!confirm('⚠️ حذف هاي الحركة نهائيًا من مصاري الفرع؟ هاد بيغيّر الرصيد المحسوب.\nمتابعة؟')) return;
     try{
       const { error } = await db.from('treasury_transactions').delete().eq('id', id);
@@ -9396,7 +9624,7 @@
     }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
   async function deleteCapitalTx(id){
-    if(!isAdmin()){ toast('⛔ صلاحية المالك فقط'); return; }
+    if(!canFinApprove()){ toast('⛔ صلاحية المالك فقط'); return; }
     if(!confirm('⚠️ حذف هاي الحركة نهائيًا من رأس المال؟ هاد بيغيّر الرصيد المحسوب.\nمتابعة؟')) return;
     try{
       const { error } = await db.from('capital_transactions').delete().eq('id', id);
@@ -10176,7 +10404,7 @@ window.__lastEmpMealsData = null;
   }
   async function renderWaste(){
     // موظف عنده صلاحية الإتلاف بس (مو مدير عام) — بيشوف نموذج التسجيل بس، بدون سجل الإتلاف القديم
-    if(!isAdmin()){
+    if(!canManageWaste()){
       const C = document.getElementById('admContent');
       C.innerHTML = `<div style="color:var(--muted);font-weight:700;font-size:.85rem;margin-bottom:14px">تسجيل إتلاف مادة — بينخصم تلقائيًا من مخزون الفرع.</div>
         <button class="add-btn" onclick="wasteForm()">+ تسجيل إتلاف جديد</button>`;
@@ -10284,7 +10512,7 @@ window.__lastEmpMealsData = null;
         await saveWasteForIngredient(ingId, ingQty, branchId, reason, (note?note+' — ':'')+'من إتلاف صنف: '+(item?.name_ar||'—')+' ×'+qty, true);
       }
       toast('✓ اتسجل إتلاف "'+(item?.name_ar||'الصنف')+'" وانخصمت كل مكوناته من المخزون'); closeModal();
-      if(isAdmin()) renderWaste();
+      if(canManageWaste()) renderWaste();
     }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
   async function saveWasteForIngredient(ingId, qty, branchId, reason, note, silent){
@@ -10308,7 +10536,7 @@ window.__lastEmpMealsData = null;
       if(!silent){
         closeModal(); toast('✓ اتسجل الإتلاف وانخصم من المخزون');
         printWasteReceipt(ingId, qty, branchId, reason, note);
-        if(isAdmin()) renderWaste(); else wasteForm();
+        if(canManageWaste()) renderWaste(); else wasteForm();
       }
     }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
@@ -10349,7 +10577,7 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
       window.__lastWasteData = { from, to, staffRows, branchRows, totalCost, count: WASTE_DATA.length };
       setTimeout(()=>{
         const btnHolder = document.querySelector('#wl_result');
-        if(btnHolder && isAdmin() && !document.getElementById('wl_print_btn')){
+        if(btnHolder && canManageWaste() && !document.getElementById('wl_print_btn')){
           const btn = document.createElement('button');
           btn.id = 'wl_print_btn'; btn.className='mini edit'; btn.style.cssText='width:100%;margin-top:10px';
           btn.textContent = '🖨️ طباعة تقرير الإتلاف';
@@ -11226,7 +11454,7 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
 
   /* ================= تصفير النظام (المالك فقط) ================= */
   async function doFullReset(){
-    if(!isAdmin()){ toast('⛔ صلاحية المالك فقط'); return; }
+    if(!(ME&&ME.role==='admin')){ toast('⛔ صلاحية المالك الحقيقي فقط — هاي العملية ما بتنفوّض حتى لو معك كل صلاحيات المالك'); return; }
     const confirmTxt = document.getElementById('f_resetConfirm')?.value.trim();
     if(confirmTxt !== 'تصفير'){ toast('⚠️ اكتب "تصفير" بالضبط للتأكيد'); return; }
     if(!confirm('⚠️ تأكيد أخير: هذا سيمسح كل البيانات نهائيًا ولا يمكن التراجع. متابع؟')) return;
@@ -11474,7 +11702,7 @@ try {
 
   async function toggleItem(id,v){ try { const r=await db.from('menu_items').update({is_available:v}).eq('id',id); if(r.error){toast('✗ '+r.error.message);console.error(r.error);return;} toast(v?'✓ ظاهر':'✓ مخفي'); renderAdmin(); bootData(); } catch(e) { toast('✗ '+e.message); console.error(e); } }
   async function deleteMenuItem(id, name){
-    if(!isAdmin()){ toast('⛔ صلاحية المالك فقط'); return; }
+    if(!canDeleteRecords()){ toast('⛔ صلاحية المالك فقط'); return; }
     if(!confirm('⚠️ حذف "'+name+'" نهائيًا؟\nإذا الصنف له طلبات سابقة، الأفضل تستخدم "إخفاء (أرشفة)" بدل الحذف عشان التقارير القديمة تضل سليمة.\nمتابعة الحذف النهائي؟')) return;
     try{
       const { error } = await db.from('menu_items').delete().eq('id', id);
@@ -11749,7 +11977,7 @@ try {
     loadDashboard();
   }
   async function loadDashboard(){
-    if(!isAdmin()) return;
+    if(!perm('reports_view')) return;
     const now = new Date();
     let t0, tEnd;
     if(window.__dashFrom && window.__dashTo){
