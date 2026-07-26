@@ -5291,7 +5291,7 @@
               </select>
               <button class="mini ok" onclick="assignViolationEmployee('${v.id}')">✓ تثبيت المخالف</button>
               ${v.employee_id && !v.deduction_id ? `<button class="mini del" onclick="deductFromViolation('${v.id}','${v.employee_id}','${esc(v.employee_name||'')}')">➖ تعيين خصم</button>`:''}
-              ${v.status!=='resolved'?`<button class="mini ok" style="background:var(--ok)" onclick="resolveViolation('${v.id}')">✅ تم الحل</button>`:'<b style="color:var(--ok)">✅ متسوّى</b>'}
+              ${v.status!=='resolved'?`<button class="mini ok" style="background:var(--ok)" onclick="resolveViolation('${v.id}')">✅ تم الحل</button>`:`<b style="color:var(--ok)">✅ ${v.deduction_id?'متسوّى (اتعمل خصم)':'متسوّى'}</b>`}
             </div>
           </div>
         </div>`).join('') || '<div class="empty-note">ما في مخالفات مسجّلة</div>'}`;
@@ -5334,8 +5334,8 @@
         images: window.__dedImgs||[], created_by: ME.full_name
       }).select().single();
       if(error){ toast('✗ '+error.message); return; }
-      await db.from('violations').update({ deduction_id: data.id, employee_id: empId, employee_name: empName }).eq('id', violationId);
-      toast('✓ اتسجّل الخصم وارتبط بالمخالفة'); window.__dedImgs=[]; closeModal();
+      await db.from('violations').update({ deduction_id: data.id, employee_id: empId, employee_name: empName, status:'resolved', resolved_at: new Date().toISOString() }).eq('id', violationId);
+      toast('✓ اتسجّل الخصم وارتبط بالمخالفة — وانحلّت المخالفة تلقائيًا'); window.__dedImgs=[]; closeModal();
       renderViolations();
       if(document.getElementById('deductionsBox')) renderDeductionsLedger();
     }catch(e){ toast('✗ '+e.message); }
