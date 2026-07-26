@@ -10,6 +10,7 @@
   <meta name="theme-color" content="#F60100">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/esc-pos-encoder@1.2.4/dist/esc-pos-encoder.min.js"></script>
   <style>
@@ -519,6 +520,7 @@
         <input id="custSearch" placeholder="🔍 ابحث بالاسم أو رقم الهاتف..." oninput="renderCustomers()">
         <button class="add-btn" style="margin:0" onclick="custForm()">＋ عميل جديد</button>
         <button class="mini ok" style="padding:10px 18px" onclick="selectAllCustomers()">☑️ تحديد الكل</button>
+        <button class="mini ok" style="padding:10px 18px;background:#1D6F42" onclick="exportCustomersExcel()">📥 تصدير Excel</button>
       </div>
       <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
         <label style="font-size:.82rem;font-weight:700;color:var(--muted)">🔢 عدد الطلبات (على الأقل):</label>
@@ -4888,7 +4890,7 @@
       try {
         const {data}=await db.from('menu_items').select('*').order('sort_order');
         ITEMS=data||[];
-        C.innerHTML=`<button class="add-btn" onclick="itemForm()">＋ إضافة صنف</button><div class="tbl-wrap"><table class="tbl"><tr><th>الصنف</th><th>التصنيف</th><th>السعر</th><th>الحالة</th><th></th></tr>${ITEMS.map(i=>`<tr class="${i.is_available?'':'off'}"><td>${esc(i.name_ar)}${i.item_type==='composite'?' 🧩':''}</td><td>${esc(i.category||'—')}</td><td>${fmt(i.price)}</td><td>${i.is_available?'✅ ظاهر':'🚫 مخفي'}</td><td style="white-space:nowrap"><button class="mini edit" onclick="itemForm('${i.id}')">تعديل</button><button class="mini tog" onclick="toggleItem('${i.id}',${!i.is_available})">${i.is_available?'إخفاء (أرشفة)':'إظهار'}</button><button class="mini del" onclick="deleteMenuItem('${i.id}','${esc(i.name_ar)}')">حذف نهائي</button></td></tr>`).join('')||'<tr><td colspan="5" class="empty-note">ما في أصناف</td></tr>'}</table></div>`;
+        C.innerHTML=`<button class="add-btn" onclick="itemForm()">＋ إضافة صنف</button><button class="mini ok" style="background:#1D6F42;margin-bottom:10px" onclick="exportItemsExcel()">📥 تصدير Excel</button><div class="tbl-wrap"><table class="tbl"><tr><th>الصنف</th><th>التصنيف</th><th>السعر</th><th>الحالة</th><th></th></tr>${ITEMS.map(i=>`<tr class="${i.is_available?'':'off'}"><td>${esc(i.name_ar)}${i.item_type==='composite'?' 🧩':''}</td><td>${esc(i.category||'—')}</td><td>${fmt(i.price)}</td><td>${i.is_available?'✅ ظاهر':'🚫 مخفي'}</td><td style="white-space:nowrap"><button class="mini edit" onclick="itemForm('${i.id}')">تعديل</button><button class="mini tog" onclick="toggleItem('${i.id}',${!i.is_available})">${i.is_available?'إخفاء (أرشفة)':'إظهار'}</button><button class="mini del" onclick="deleteMenuItem('${i.id}','${esc(i.name_ar)}')">حذف نهائي</button></td></tr>`).join('')||'<tr><td colspan="5" class="empty-note">ما في أصناف</td></tr>'}</table></div>`;
       } catch(e) { console.error(e); }
     }
     if(admView==='cats'){
@@ -5943,6 +5945,7 @@
     RECIPES_DATA=data||[];
     const C=document.getElementById('admContent');
     C.innerHTML=`<button class="add-btn" onclick="recipeForm()">＋ وصفة جديدة</button>
+      <button class="mini ok" style="background:#1D6F42;margin-bottom:10px" onclick="exportRecipesExcel()">📥 تصدير Excel</button>
       <div class="tbl-wrap"><table class="tbl">
         <tr><th>الصنف</th><th>التكلفة</th><th>سعر البيع</th><th>Food Cost%</th><th>الربح</th><th></th></tr>
         ${RECIPES_DATA.map(r=>{
@@ -6161,6 +6164,7 @@
     const C=document.getElementById('admContent');
     C.innerHTML=`<div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
       <button class="add-btn" style="margin:0" onclick="purchaseForm()">＋ فاتورة شراء</button>
+      <button class="mini ok" style="background:#1D6F42" onclick="exportPurchasesExcel()">📥 تصدير Excel</button>
       <div class="stat">إجمالي المشتريات (بعد الفلترة)<b>${fmt(total)} ${CURRENCY}</b></div></div>
       <div class="two" style="margin-bottom:10px">
         <select id="pur_filter_sup" style="flex:1;border:1.5px solid var(--line);border-radius:10px;padding:8px" onchange="window.__purFilterSup=this.value;renderPurchases()">
@@ -9686,6 +9690,150 @@ window.__lastEmpMealsData = null;
   }
 
   /* ================= أفضل العملاء (أكثر طلبات + أفضل تقييم) ================= */
+  // ============ 📥 تصدير Excel — دالة عامة + دوال مخصصة لكل شاشة ============
+  function exportToExcel(rows, filename, sheetName){
+    if(!window.XLSX){ toast('⚠️ مكتبة الإكسل ما تحمّلت — تأكد من الاتصال بالإنترنت وحاول تاني'); return; }
+    if(!rows || !rows.length){ toast('⚠️ ما في بيانات نصدرها'); return; }
+    try{
+      const ws = XLSX.utils.json_to_sheet(rows);
+      // عرض أعمدة تلقائي حسب أطول محتوى بكل عمود (بدل أعمدة ضيقة افتراضية)
+      const colWidths = Object.keys(rows[0]).map(key=>{
+        const maxLen = Math.max(key.length, ...rows.map(r=>String(r[key]??'').length));
+        return { wch: Math.min(Math.max(maxLen+2, 10), 45) };
+      });
+      ws['!cols'] = colWidths;
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, sheetName||'Sheet1');
+      XLSX.writeFile(wb, filename+'.xlsx');
+      toast('✓ اتصدّر ملف الإكسل');
+    }catch(e){ toast('✗ فشل التصدير — '+e.message); console.error(e); }
+  }
+
+  async function exportRecipesExcel(){
+    try{
+      toast('⏳ جاري تجهيز الملف...');
+      const { data: recipes } = await db.from('recipes').select('menu_item_id, recipe_items(quantity, ingredients(name, unit, unit_cost))');
+      const rows = [];
+      (recipes||[]).forEach(r=>{
+        const item = ITEMS.find(i=>i.id===r.menu_item_id);
+        const itemName = item?.name_ar || '—';
+        const price = item?.price || 0;
+        const items = r.recipe_items||[];
+        const totalCost = items.reduce((a,ri)=>a+parseFloat(ri.quantity||0)*parseFloat(ri.ingredients?.unit_cost||0),0);
+        if(!items.length){
+          rows.push({ 'اسم الصنف':itemName, 'سعر البيع':price, 'المكوّن':'— بدون وصفة —', 'الكمية':'', 'الوحدة':'', 'سعر وحدة المكوّن':'', 'تكلفة السطر':'', 'تكلفة الوصفة الكلية':0, 'هامش الربح':price, 'نسبة الهامش %':'100%' });
+          return;
+        }
+        items.forEach((ri,idx)=>{
+          const lineCost = parseFloat(ri.quantity||0)*parseFloat(ri.ingredients?.unit_cost||0);
+          rows.push({
+            'اسم الصنف': idx===0?itemName:'',
+            'سعر البيع': idx===0?price:'',
+            'المكوّن': ri.ingredients?.name||'—',
+            'الكمية': ri.quantity,
+            'الوحدة': ri.ingredients?.unit||'',
+            'سعر وحدة المكوّن': ri.ingredients?.unit_cost||0,
+            'تكلفة السطر': lineCost.toFixed(3),
+            'تكلفة الوصفة الكلية': idx===0?totalCost.toFixed(3):'',
+            'هامش الربح': idx===0?(price-totalCost).toFixed(3):'',
+            'نسبة الهامش %': idx===0?(price>0?Math.round((price-totalCost)/price*100)+'%':'—'):'',
+          });
+        });
+      });
+      exportToExcel(rows, 'وصفات_الأصناف_'+new Date().toISOString().split('T')[0], 'الوصفات');
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
+  }
+
+  async function exportCustomersExcel(){
+    try{
+      toast('⏳ جاري تجهيز الملف...');
+      const { data: customers } = await db.from('customers').select('*').limit(20000);
+      const custIds = (customers||[]).map(c=>c.id);
+      const orderCounts = await computeOrderCounts(custIds);
+      const { data: ratedOrders } = custIds.length ? await db.from('orders').select('customer_id, customer_rating, total').in('customer_id', custIds) : {data:[]};
+      const statsMap = {};
+      (ratedOrders||[]).forEach(o=>{
+        if(!statsMap[o.customer_id]) statsMap[o.customer_id] = {sum:0,count:0,spend:0};
+        if(o.customer_rating){ statsMap[o.customer_id].sum += o.customer_rating; statsMap[o.customer_id].count++; }
+        statsMap[o.customer_id].spend += parseFloat(o.total||0);
+      });
+      const rows = (customers||[]).map(c=>{
+        const s = statsMap[c.id];
+        return {
+          'الاسم': c.name||'—',
+          'الهاتف': c.phone||'—',
+          'العنوان': c.address||'—',
+          'عدد الطلبات': orderCounts[c.id]||0,
+          'إجمالي ما أنفقه': s?fmt(s.spend):'0.00',
+          'متوسط التقييم': s?.count ? (s.sum/s.count).toFixed(1) : '—',
+          'عدد التقييمات': s?.count||0,
+          'مميّز (VIP)': c.flagged?'نعم':'لا',
+          'تاريخ الإضافة': c.created_at ? new Date(c.created_at).toLocaleDateString('ar-JO') : '—',
+        };
+      });
+      exportToExcel(rows, 'العملاء_'+new Date().toISOString().split('T')[0], 'العملاء');
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
+  }
+
+  async function exportItemsExcel(){
+    try{
+      toast('⏳ جاري تجهيز الملف...');
+      const { data: items } = await db.from('menu_items').select('*').order('sort_order');
+      const itemIds = (items||[]).map(i=>i.id);
+      const { data: recipesData } = itemIds.length ? await db.from('recipes').select('menu_item_id, recipe_items(quantity, ingredients(unit_cost))').in('menu_item_id', itemIds) : {data:[]};
+      const costMap = {};
+      (recipesData||[]).forEach(r=>{
+        costMap[r.menu_item_id] = (r.recipe_items||[]).reduce((a,ri)=>a+parseFloat(ri.quantity||0)*parseFloat(ri.ingredients?.unit_cost||0),0);
+      });
+      const rows = (items||[]).map(i=>{
+        const cost = costMap[i.id];
+        return {
+          'اسم الصنف': i.name_ar,
+          'التصنيف': i.category||'—',
+          'النوع': i.item_type==='composite'?'مركّب 🧩':'عادي',
+          'سعر البيع': fmt(i.price),
+          'تكلفة الوصفة': cost!=null?fmt(cost):'بدون وصفة',
+          'هامش الربح': cost!=null?fmt(i.price-cost):'—',
+          'نسبة الهامش %': (cost!=null && i.price>0)?Math.round((i.price-cost)/i.price*100)+'%':'—',
+          'الحالة': i.is_available?'ظاهر ✅':'مخفي 🚫',
+        };
+      });
+      exportToExcel(rows, 'الأصناف_'+new Date().toISOString().split('T')[0], 'الأصناف');
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
+  }
+
+  async function exportPurchasesExcel(){
+    try{
+      toast('⏳ جاري تجهيز الملف...');
+      const { data: purchases } = await db.from('purchases').select('*, branches(name_ar), purchase_items(quantity, unit_cost, ingredients(name, unit))').order('purchase_date',{ascending:false}).limit(5000);
+      const rows = [];
+      (purchases||[]).forEach(p=>{
+        const items = p.purchase_items||[];
+        const payStatusAr = {unpaid:'غير مدفوعة', partial:'مدفوعة جزئيًا', paid:'مدفوعة', capital:'مدفوعة من رأس المال'};
+        if(!items.length){
+          rows.push({ 'رقم الفاتورة':p.id?.slice(0,8)||'—', 'التاريخ':p.purchase_date, 'المورد':p.supplier, 'الفرع':p.branches?.name_ar||'كل الفروع', 'المادة':'—', 'الكمية':'', 'سعر الوحدة':'', 'تكلفة السطر':'', 'إجمالي الفاتورة':fmt(p.total), 'المدفوع':fmt(p.paid_amount||0), 'حالة الدفع':payStatusAr[p.payment_status]||p.payment_status });
+          return;
+        }
+        items.forEach((it,idx)=>{
+          rows.push({
+            'رقم الفاتورة': idx===0?(p.id?.slice(0,8)||'—'):'',
+            'التاريخ': idx===0?p.purchase_date:'',
+            'المورد': idx===0?p.supplier:'',
+            'الفرع': idx===0?(p.branches?.name_ar||'كل الفروع'):'',
+            'المادة': it.ingredients?.name||'—',
+            'الكمية': it.quantity,
+            'سعر الوحدة': it.unit_cost,
+            'تكلفة السطر': (it.quantity*it.unit_cost).toFixed(3),
+            'إجمالي الفاتورة': idx===0?fmt(p.total):'',
+            'المدفوع': idx===0?fmt(p.paid_amount||0):'',
+            'حالة الدفع': idx===0?(payStatusAr[p.payment_status]||p.payment_status):'',
+          });
+        });
+      });
+      exportToExcel(rows, 'المشتريات_'+new Date().toISOString().split('T')[0], 'المشتريات');
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
+  }
+
   let TOP_CUST_DATA = [];
   let TOP_CUST_ALL = [];
   async function renderTopCustomers(){
@@ -9876,10 +10024,22 @@ window.__lastEmpMealsData = null;
   }
   function wasteForm(){
     modal(`<h3>🗑️ تسجيل إتلاف</h3>
-      <div class="fld"><label>المادة</label><select id="wf_ing">
+      <div class="fld"><label>نوع الإتلاف</label>
+        <div style="display:flex;gap:8px">
+          <button type="button" id="wf_type_ing" class="mini ok" onclick="setWasteType('ing')" style="flex:1">🔴 مكوّن خام</button>
+          <button type="button" id="wf_type_item" class="mini tog" onclick="setWasteType('item')" style="flex:1">🍔 صنف جاهز (وجبة)</button>
+        </div>
+      </div>
+      <div id="wf_ing_wrap" class="fld"><label>المادة</label><select id="wf_ing">
         <option value="">اختر المادة...</option>
         ${INGR.map(i=>`<option value="${i.id}">${esc(i.name)} (${esc(i.unit)})</option>`).join('')}
       </select></div>
+      <div id="wf_item_wrap" class="fld hidden"><label>الصنف</label><select id="wf_item">
+        <option value="">اختر الصنف...</option>
+        ${ITEMS.map(i=>`<option value="${i.id}">${esc(i.name_ar)}${i.item_type==='composite'?' 🧩':''}</option>`).join('')}
+      </select>
+      <div style="font-size:.75rem;color:var(--muted);font-weight:600;margin-top:4px">💡 بينخصم تلقائيًا كل المكونات يلي بوصفة الصنف من المخزون. للأصناف المركّبة 🧩، بينخصم المكونات الثابتة بس (مش الاختيارات المتغيّرة).</div>
+      </div>
       <div class="fld"><label>الكمية المتلفة</label><input id="wf_qty" type="number" step="0.01" placeholder="مثال: 2.5"></div>
       <div class="fld"><label>الفرع</label>
         ${ME.branch_id ? `<input type="text" readonly value="${esc(BRANCHES.find(b=>b.id===ME.branch_id)?.name_ar||'')}" style="border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;width:100%;background:#f0f0f0">
@@ -9893,21 +10053,66 @@ window.__lastEmpMealsData = null;
       <div class="fld"><label>ملاحظة إضافية (اختياري)</label><input id="wf_note" placeholder="تفاصيل إضافية..."></div>
       <div class="m-act"><button class="save" onclick="saveWaste()">تسجيل ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
   }
+  function setWasteType(type){
+    document.getElementById('wf_type_ing').className = type==='ing' ? 'mini ok' : 'mini tog';
+    document.getElementById('wf_type_item').className = type==='item' ? 'mini ok' : 'mini tog';
+    document.getElementById('wf_ing_wrap').classList.toggle('hidden', type!=='ing');
+    document.getElementById('wf_item_wrap').classList.toggle('hidden', type!=='item');
+  }
   async function saveWaste(){
     if(!lockSubmit('saveWaste')) return;
     setTimeout(()=>unlockSubmit('saveWaste'), 3000);
-    const ingId = document.getElementById('wf_ing').value;
+    const isItemMode = !document.getElementById('wf_item_wrap').classList.contains('hidden');
     const qty = parseFloat(document.getElementById('wf_qty').value);
     const branchId = document.getElementById('wf_branch').value;
     const reason = document.getElementById('wf_reason').value;
     const note = document.getElementById('wf_note').value.trim();
-    if(!ingId){ toast('⚠️ اختر المادة'); return; }
     if(isNaN(qty)||qty<=0){ toast('⚠️ اكتب كمية صحيحة'); return; }
     if(!branchId){ toast('⚠️ اختر الفرع'); return; }
+    if(isItemMode){
+      const itemId = document.getElementById('wf_item').value;
+      if(!itemId){ toast('⚠️ اختر الصنف'); return; }
+      await saveWasteForItem(itemId, qty, branchId, reason, note);
+      return;
+    }
+    const ingId = document.getElementById('wf_ing').value;
+    if(!ingId){ toast('⚠️ اختر المادة'); return; }
+    await saveWasteForIngredient(ingId, qty, branchId, reason, note);
+  }
+  async function saveWasteForItem(itemId, qty, branchId, reason, note){
+    try{
+      const item = ITEMS.find(i=>i.id===itemId);
+      const [{ data: recipeRows }, { data: fixedRows }] = await Promise.all([
+        db.from('recipes').select('recipe_items(quantity, ingredient_id)').eq('menu_item_id', itemId),
+        db.from('composite_fixed').select('component_item_id, qty').eq('menu_item_id', itemId),
+      ]);
+      let lines = []; // {ingredient_id, qty}
+      (recipeRows||[]).forEach(r=>(r.recipe_items||[]).forEach(ri=>lines.push({ ingredient_id: ri.ingredient_id, qty: parseFloat(ri.quantity||0)*qty })));
+      // لو صنف مركّب، نضيف مكونات كل مكوّن ثابت من وصفته هو (مش بس وصفة الصنف الأساسية)
+      if(fixedRows && fixedRows.length){
+        const fixedIds = fixedRows.map(f=>f.component_item_id);
+        const { data: subRecipes } = await db.from('recipes').select('menu_item_id, recipe_items(quantity, ingredient_id)').in('menu_item_id', fixedIds);
+        fixedRows.forEach(f=>{
+          const sub = subRecipes?.find(r=>r.menu_item_id===f.component_item_id);
+          (sub?.recipe_items||[]).forEach(ri=>lines.push({ ingredient_id: ri.ingredient_id, qty: parseFloat(ri.quantity||0)*(f.qty||1)*qty }));
+        });
+      }
+      if(!lines.length){ toast('⚠️ هاد الصنف ما إله وصفة معرّفة — ما في مكونات نخصمها'); return; }
+      // نجمع الكميات لكل مكوّن (لو تكرر بأكتر من سطر)
+      const merged = {};
+      lines.forEach(l=>{ merged[l.ingredient_id] = (merged[l.ingredient_id]||0) + l.qty; });
+      for(const [ingId, ingQty] of Object.entries(merged)){
+        await saveWasteForIngredient(ingId, ingQty, branchId, reason, (note?note+' — ':'')+'من إتلاف صنف: '+(item?.name_ar||'—')+' ×'+qty, true);
+      }
+      toast('✓ اتسجل إتلاف "'+(item?.name_ar||'الصنف')+'" وانخصمت كل مكوناته من المخزون'); closeModal();
+      if(isAdmin()) renderWaste();
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
+  }
+  async function saveWasteForIngredient(ingId, qty, branchId, reason, note, silent){
     try{
       // خصم من مخزون الفرع
       const {data:bi} = await db.from('branch_inventory').select('id,stock').eq('branch_id',branchId).eq('ingredient_id',ingId).maybeSingle();
-      if(!bi || (bi.stock||0) < qty){
+      if(!silent && (!bi || (bi.stock||0) < qty)){
         if(!confirm('⚠️ المخزون المتاح ('+((bi?.stock)||0)+') أقل من الكمية المتلفة — تكمل بالتسجيل؟ (المخزون رح ينزل تحت الصفر لحد ما تنزل فاتورة شراء جديدة تصححه)')) return;
       }
       const newStock = (bi?.stock||0) - qty;
@@ -9921,9 +10126,11 @@ window.__lastEmpMealsData = null;
       if(error){ toast('✗ '+error.message); console.error(error); return; }
       logMovement(branchId, ingId, -qty, 'waste', 'إتلاف — '+reason+(note?' — '+note:''));
       await logActivity('waste_log', 'إتلاف: '+qty+' — '+reason);
-      closeModal(); toast('✓ اتسجل الإتلاف وانخصم من المخزون');
-      printWasteReceipt(ingId, qty, branchId, reason, note);
-      if(isAdmin()) renderWaste(); else wasteForm();
+      if(!silent){
+        closeModal(); toast('✓ اتسجل الإتلاف وانخصم من المخزون');
+        printWasteReceipt(ingId, qty, branchId, reason, note);
+        if(isAdmin()) renderWaste(); else wasteForm();
+      }
     }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
   async function runWasteReport(){
