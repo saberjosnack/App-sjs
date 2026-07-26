@@ -808,7 +808,12 @@
     }
     if(typeof renderCart === 'function') renderCart();
   }
-  const isAdmin = () => ME && ME.role==='admin';
+  // 🔑 isAdmin() هي المرجع الأساسي لعشرات الفحوصات بكل أنحاء الكود (موافقات، حذف نهائي، أمور مالية...).
+  // بدل ما نلاحق كل استخدام لحاله، خلينا صلاحية "act_as_owner" (بدور مخصص) تخلي isAdmin() ترجع true —
+  // هيك أي دور معاه هاي الصلاحية بياخد فعليًا كل صلاحيات المالك بضربة وحدة، بدون ما نلمس أي كود تاني.
+  // ⚠️ الاستثناء الوحيد المتعمّد: شاشة "🛡️ الأدوار" نفسها — محمية بشكل منفصل بدالة canAccessAdminTab
+  // (حتى لو الدور معاه act_as_owner) عشان يمنع أي احتمال يعدّل حاله صلاحيات أكتر بنفسه.
+  const isAdmin = () => !!(ME && (ME.role==='admin' || (ME.role==='custom' && ME.permissions?.act_as_owner) || (ME.role==='custom' && (window.CUSTOM_ROLES||[]).find(r=>r.id===ME.role_id)?.permissions?.act_as_owner)));
   const isCallCenter = () => ME && ME.role==='callcenter';
 
   /* ================= صوت التنبيه ================= */
@@ -1146,6 +1151,9 @@
       tab_dailyAudits: 'جرد الفرع اليومي',
       tab_activityLog: 'سجل الأحداث (حساس — انتبهي قبل ما تعطيها لغير المالك)',
     },
+    '👑 صلاحيات خاصة (حساسة جدًا)': {
+      act_as_owner: '🔑 كل صلاحيات المالك تلقائيًا (فتح/إغلاق كل شي مالي، حذف نهائي، موافقات، إلخ) — ما عدا شاشة "الأدوار" نفسها',
+    },
   };
   const ROLE_DEFAULT_PERMS = {
     cashier:    ['shift_open','shift_close','shift_report','drawer_open','order_create','order_takeaway','order_reprint','discount_code'],
@@ -1265,9 +1273,9 @@
     const hasAnyAdminAccess = adm || Object.values(ADMIN_TAB_PERM).some(k=>k!=='admin_only' && perm(k));
     if (adminBtn) adminBtn.style.display = hasAnyAdminAccess ? '' : 'none';
     if (custBtn) custBtn.style.display = perm('customers_view') ? '' : 'none';
-    if (salesBtn) salesBtn.style.display = adm ? '' : 'none';
+    if (salesBtn) salesBtn.style.display = perm('reports_view') ? '' : 'none';
     const dashBtn = document.querySelector('[data-v="dash"]');
-    if (dashBtn) dashBtn.style.display = adm ? '' : 'none';
+    if (dashBtn) dashBtn.style.display = perm('reports_view') ? '' : 'none';
     const invBar = document.getElementById('invSearchBar');
     if (invBar) invBar.classList.toggle('hidden', !(adm || cc));
     // التوصيل حسب الصلاحية
@@ -4911,6 +4919,9 @@
     platforms:'platforms_view', empmeals:'empmeals_view', topcust:'topcust_view', waste:'waste_log', suppliers:'purchases_view',
   };
   function canAccessAdminTab(tabKey){
+    // 🔒 استثناء دائم: شاشة "الأدوار" للمالك الحقيقي بس، حتى لو الدور المخصص معاه "كل صلاحيات المالك" —
+    // وإلا صار ممكن يعدّل حاله صلاحيات أكتر وأكتر بنفسه بدون حدود.
+    if(tabKey==='roles' && (!ME || ME.role!=='admin')) return false;
     if(isAdmin()) return true;
     const req = ADMIN_TAB_PERM[tabKey];
     if(req==='admin_only' || !req) return false;
@@ -11900,7 +11911,7 @@ try {
     const adm = isAdmin();
     const cc = ME && ME.role==='callcenter';
     const hasAnyAdminAccess = adm || Object.values(ADMIN_TAB_PERM).some(k=>k!=='admin_only' && perm(k));
-    if((v==='dash' || v==='sales') && !adm){ toast('⛔ صلاحية المدير فقط'); v='pos'; }
+    if((v==='dash' || v==='sales') && !perm('reports_view')){ toast('⛔ ما عندك صلاحية الوصول'); v='pos'; }
     if(v==='admin' && !hasAnyAdminAccess){ toast('⛔ ما عندك صلاحية الوصول'); v='pos'; }
     if(v==='cust' && !perm('customers_view')){ toast('⛔ غير مصرح'); v='pos'; }
     ['pos','day','cust','dash','sales','admin'].forEach(x=>{
