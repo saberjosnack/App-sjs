@@ -3034,12 +3034,13 @@
           <hr style="border-top:2px solid #ccc">
           <div style="font-weight:700;padding:4px 0">
             <div style="display:flex;justify-content:space-between"><span>المجموع</span><span>${t.sub.toFixed(2)}</span></div>
-            ${t.disc > 0 ? `<div style="display:flex;justify-content:space-between;color:green"><span>خصم</span><span>-${t.disc.toFixed(2)}</span></div>` : ''}
+            ${t.disc > 0 ? `<div style="display:flex;justify-content:space-between;color:green"><span>خصم</span><span>-${t.disc.toFixed(2)}</span></div><div style="display:flex;justify-content:space-between"><span>الصافي بعد الخصم</span><span>${(t.sub-t.disc).toFixed(2)}</span></div>` : ''}
             ${t.del > 0 ? `<div style="display:flex;justify-content:space-between"><span>توصيل</span><span>${t.del.toFixed(2)}</span></div>` : ''}
             <div style="display:flex;justify-content:space-between;font-size:18px;color:var(--red);border-top:2px solid var(--red);padding-top:4px;margin-top:4px">
               <span>الإجمالي</span>
               <span>${t.total.toFixed(2)} ${CURRENCY}</span>
             </div>
+            ${ord.order_type==='delivery' ? `<div style="display:flex;justify-content:space-between;background:#FDE507;border-radius:6px;padding:4px 8px;margin-top:6px;font-weight:900"><span>🛵 المطلوب من المندوب</span><span>${(t.sub-t.disc).toFixed(2)} ${CURRENCY}</span></div>` : ''}
           </div>
           ${ord.notes?`<div style="background:#fff8e1;border-radius:8px;padding:6px 10px;margin-top:6px;font-size:12px">📝 ${esc(ord.notes)}</div>`:''}
           <div style="text-align:center;padding-top:8px;border-top:1px dashed #ccc;font-size:12px;color:#999">
@@ -3072,11 +3073,12 @@
           <hr style="border-top:1px dashed #000">
           <div style="font-size:12px">
             <div style="display:flex;justify-content:space-between">المجموع: ${t.sub.toFixed(2)}</div>
-            ${t.disc > 0 ? `<div style="display:flex;justify-content:space-between">خصم: -${t.disc.toFixed(2)}</div>` : ''}
+            ${t.disc > 0 ? `<div style="display:flex;justify-content:space-between">خصم: -${t.disc.toFixed(2)}</div><div style="display:flex;justify-content:space-between">الصافي بعد الخصم: ${(t.sub-t.disc).toFixed(2)}</div>` : ''}
             ${t.del > 0 ? `<div style="display:flex;justify-content:space-between">توصيل: ${t.del.toFixed(2)}</div>` : ''}
             <div style="display:flex;justify-content:space-between;font-weight:900;font-size:14px;border-top:1px solid #000;padding-top:4px">
               الإجمالي: ${t.total.toFixed(2)} ${CURRENCY}
             </div>
+            ${ord.order_type==='delivery' ? `<div style="display:flex;justify-content:space-between;font-weight:900;border:1px dashed #000;padding:3px;margin-top:4px">🛵 المطلوب من المندوب: ${(t.sub-t.disc).toFixed(2)} ${CURRENCY}</div>` : ''}
           </div>
           ${ord.notes?`<div style="font-size:12px;border-top:1px dashed #000;padding-top:4px;margin-top:4px">📝 ${esc(ord.notes)}</div>`:''}
           <div style="text-align:center;font-size:10px;border-top:1px dashed #000;padding-top:6px;margin-top:6px">
@@ -3105,6 +3107,7 @@
           <div style="border-top:1px solid #ddd;padding:4px 0;font-size:12px;font-weight:900">
             ${t.total.toFixed(2)} ${CURRENCY}
           </div>
+          ${ord.order_type==='delivery' ? `<div style="font-size:11px;font-weight:900;background:#FDE507;padding:3px 6px;margin-top:4px">🛵 من المندوب: ${(t.sub-t.disc).toFixed(2)} ${CURRENCY}</div>` : ''}
           ${ord.notes?`<div style="font-size:10px;background:#fff8e1;padding:4px 6px;margin-top:4px">📝 ${esc(ord.notes)}</div>`:''}
           <div style="font-size:9px;text-align:center;color:#999;padding-top:4px">شكراً</div>
         </div>
@@ -3187,10 +3190,17 @@
     });
     text += '─'.repeat(32) + '\n';
     text += `المجموع`.padEnd(24) + `${t.sub.toFixed(2)}\n`;
-    if (t.disc > 0) text += `خصم`.padEnd(24) + `-${t.disc.toFixed(2)}\n`;
+    if (t.disc > 0) {
+      text += `خصم`.padEnd(24) + `-${t.disc.toFixed(2)}\n`;
+      text += `الصافي بعد الخصم`.padEnd(24) + `${(t.sub-t.disc).toFixed(2)}\n`;
+    }
     if (t.del > 0) text += `توصيل`.padEnd(24) + `${t.del.toFixed(2)}\n`;
     text += '═'.repeat(32) + '\n';
     text += `الإجمالي`.padEnd(24) + `${t.total.toFixed(2)} ${CURRENCY}\n`;
+    if (ord.order_type === 'delivery') {
+      text += '═'.repeat(32) + '\n';
+      text += `🛵 المطلوب من المندوب: ${(t.sub-t.disc).toFixed(2)} ${CURRENCY}\n`;
+    }
     if (ord.notes) {
       text += '─'.repeat(32) + '\n';
       text += `📝 ملاحظة: ${ord.notes}\n`;
