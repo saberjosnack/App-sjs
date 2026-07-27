@@ -9214,6 +9214,7 @@
             <button class="mini edit" onclick="mealNameForm('${r.emp.id}')">✏️ تعديل</button>
             <button class="mini edit" onclick="attendanceForm('${r.emp.id}','${esc(r.emp.name)}')">🕐 ساعات يدوي</button>
             <button class="mini tog" onclick="hrTimeLogsView('${r.emp.id}','${esc(r.emp.name)}')">📍 سجل الحضور (بوابة)</button>
+            <button class="mini tog" style="background:#0d6efd;color:#fff" onclick="hrBreaksView('${r.emp.id}','${esc(r.emp.name)}')">☕ البريكات${r.breakExcessHours>0?' ⚠️':''}</button>
             <button class="mini ok" onclick="hrAdvancesView('${r.emp.id}','${esc(r.emp.name)}')">💰 سلف</button>
             <button class="mini tog" onclick="hrStatement('${r.emp.id}')">📋 كشف</button>
             <button class="mini ok" style="background:var(--maroon)" onclick="printHrEmployeePDF('${r.emp.id}')">📄 طباعة كشف</button>
@@ -9349,6 +9350,45 @@
   }
 
   /* ---- سجل الحضور (بوابة الموظف) — عرض وتعديل من الأدمن بس ---- */
+  async function hrBreaksView(empId, empName){
+    modal(`<h3>☕ البريكات — ${esc(empName)}</h3><div id="hrBrBody" class="empty-note">... جاري التحميل</div>`);
+    try{
+      const { data, error } = await db.from('hr_breaks').select('*').eq('employee_id', empId)
+        .gte('started_at', localDayStart(HR_FILTER.from)).lte('started_at', localDayEnd(HR_FILTER.to))
+        .order('started_at',{ascending:false});
+      const body = document.getElementById('hrBrBody'); if(!body) return;
+      if(error){ body.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message||'الجدول hr_breaks غير موجود — نفّذ SQL البريك أولاً')}</div>`; return; }
+      const breaks = data||[];
+      // تجميع حسب اليوم لعرض الإجمالي والزيادة بوضوح
+      const byDay = {};
+      breaks.forEach(b=>{
+        const day = new Date(b.started_at).toLocaleDateString('en-CA');
+        if(!byDay[day]) byDay[day] = [];
+        byDay[day].push(b);
+      });
+      const days = Object.keys(byDay).sort((a,b)=>b.localeCompare(a));
+      body.innerHTML = `
+        <div style="font-size:.82rem;color:var(--muted);font-weight:700;margin-bottom:10px">الفترة: ${HR_FILTER.from} → ${HR_FILTER.to} — المسموح 60 دقيقة/يوم</div>
+        <div style="max-height:420px;overflow-y:auto">
+        ${days.map(day=>{
+          const items = byDay[day];
+          const totalMin = items.reduce((a,b)=>a+(b.ended_at ? (new Date(b.ended_at)-new Date(b.started_at))/60000 : ((new Date()-new Date(b.started_at))/60000)),0);
+          const excess = Math.max(0, totalMin-60);
+          return `<div style="border:1.5px solid ${excess>0?'var(--red)':'var(--line)'};border-radius:10px;padding:10px 12px;margin-bottom:8px">
+            <div style="display:flex;justify-content:space-between;font-weight:800">
+              <span>${new Date(day).toLocaleDateString('ar-JO',{weekday:'short',day:'numeric',month:'short'})}</span>
+              <span style="color:${excess>0?'var(--red)':'var(--ok)'}">${Math.round(totalMin)} د${excess>0?' — ⚠️ زيادة '+Math.round(excess)+' د':''}</span>
+            </div>
+            <div style="font-size:.82rem;color:var(--muted);margin-top:4px">
+              ${items.map(b=>`• ${new Date(b.started_at).toLocaleTimeString('ar-JO',{hour:'2-digit',minute:'2-digit'})} → ${b.ended_at?new Date(b.ended_at).toLocaleTimeString('ar-JO',{hour:'2-digit',minute:'2-digit'}):'🔴 لسا مفتوح'}
+                (${b.ended_at?Math.round((new Date(b.ended_at)-new Date(b.started_at))/60000):Math.round((new Date()-new Date(b.started_at))/60000)} د)</span></br>`).join('')}
+            </div>
+          </div>`;
+        }).join('') || '<div class="empty-note">ما في بريكات مسجّلة بهاي الفترة</div>'}
+        </div>
+        <div class="m-act"><button class="cancel" onclick="closeModal()">إغلاق</button></div>`;
+    }catch(e){ const body=document.getElementById('hrBrBody'); if(body) body.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; }
+  }
   async function hrTimeLogsView(empId, empName){
     modal(`<h3>📍 سجل الحضور — ${esc(empName)}</h3><div id="hrTlBody" class="empty-note">... جاري التحميل</div>`);
     try{
@@ -10306,6 +10346,9 @@
       <div class="fld"><label>💰 سعر ساعة العمل (${CURRENCY})</label><input id="mn_wage" type="number" step="0.01" min="0" value="${n.hourly_wage||''}" placeholder="مثال: 1.5"></div>
       <div class="fld"><label>📒 رصيد سابق (اختياري)</label><input id="mn_opening" type="number" step="0.01" value="${n.opening_balance||0}">
         <div style="font-size:.78rem;color:var(--muted);font-weight:700;margin-top:2px">رقم موجب = له عندنا، رقم سالب (بإشارة −) = عليه لنا — بينضاف لصافي المستحق تلقائيًا</div></div>
+      <div class="fld"><label>🏪 الفرع</label><select id="mn_branch"><option value="">— بدون تحديد —</option>
+        ${BRANCHES.map(b=>`<option value="${b.id}" ${n.branch_id===b.id?'selected':''}>${esc(b.name_ar)}</option>`).join('')}</select>
+        <div style="font-size:.78rem;color:var(--muted);font-weight:600;margin-top:4px">مهم عشان نظام "ممنوع أكتر من موظف ياخد بريك بنفس الوقت بنفس الفرع" يشتغل صح.</div></div>
       <div class="fld"><label>🚦 أقصى نسبة سلفة مسموحة % (من صافي المستحق)</label><input id="mn_maxadv" type="number" step="1" min="1" max="100" value="${n.max_advance_percent??30}"></div>
       <div class="fld" style="background:#fff8e1;border-radius:10px;padding:10px 12px">
         <label>⏰ وقت الدوام المحدد (اختياري)</label>
@@ -10361,7 +10404,7 @@
     const pin = document.getElementById('mn_pin')?.value.trim()||null;
     if(!name){ toast('⚠️ الاسم مطلوب'); return; }
     if(isNaN(disc)||disc<0||disc>100){ toast('⚠️ نسبة الخصم يجب أن تكون بين 0 و100'); return; }
-    const rec = { name, discount_percent: disc, hourly_wage: wage, opening_balance, max_advance_percent, username, pin, shift_window_from: document.getElementById('mn_swf')?.value||null, shift_window_to: document.getElementById('mn_swt')?.value||null };
+    const rec = { name, discount_percent: disc, hourly_wage: wage, opening_balance, max_advance_percent, username, pin, shift_window_from: document.getElementById('mn_swf')?.value||null, shift_window_to: document.getElementById('mn_swt')?.value||null, branch_id: document.getElementById('mn_branch')?.value||null };
     if(id) rec.is_active = document.getElementById('mn_active')?.checked ?? true;
     const r = id ? await db.from('meal_names').update(rec).eq('id',id) : await db.from('meal_names').insert(rec).select().single();
     if(r.error){ toast('✗ '+r.error.message+(r.error.message.includes('username')?' — اسم المستخدم هاد مستخدم لموظف تاني':'')); return; }
@@ -13387,6 +13430,12 @@ try {
       const usedMin = (data||[]).reduce((a,b)=>a+((new Date(b.ended_at)-new Date(b.started_at))/60000),0);
       const remaining = 60 - usedMin;
       if(remaining<=0){ toast('⛔ خلصت الساعة المسموحة للبريك اليوم'); return; }
+      // 🚫 ممنوع أكتر من موظف ياخد بريك بنفس الوقت بنفس الفرع
+      if(EMP.branch_id){
+        const { data: activeBreaks } = await db.from('hr_breaks').select('employee_id, meal_names(name, branch_id)').is('ended_at', null);
+        const conflict = (activeBreaks||[]).find(b=>b.employee_id!==EMP.id && b.meal_names?.branch_id===EMP.branch_id);
+        if(conflict){ toast('⛔ '+(conflict.meal_names?.name||'موظف تاني')+' عم ياخد بريك هلأ من نفس فرعك — استنى يرجع أول'); return; }
+      }
       const { error } = await db.from('hr_breaks').insert({ time_log_id: EMP_OPEN_LOG.id, employee_id: EMP.id });
       if(error){ toast('✗ '+error.message); return; }
       toast('☕ بلّشت البريك — دوس نفس الزر لما ترجع');
