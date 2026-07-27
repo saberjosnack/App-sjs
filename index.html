@@ -5107,6 +5107,7 @@
         if(document.getElementById('hrAdvReqBox')) renderHrAdvanceRequests();
         if(document.getElementById('hrOpenAdvBox')) renderOpenAdvancesPanel();
         if(document.getElementById('hrDeviceReqBox')) renderHrDeviceRequests();
+        if(document.getElementById('hrClockinReqBox')) renderHrClockinRequests();
       }, 15000);
     }
   }
@@ -9146,6 +9147,7 @@
       <div id="hrAdvReqBox"></div>
       <div id="hrOpenAdvBox"></div>
       <div id="hrDeviceReqBox"></div>
+      <div id="hrClockinReqBox"></div>
       <div class="panel" style="margin-bottom:14px">
         <h3>🧑‍💼 HR — الرواتب والدوام والوجبات والسلف</h3>
         <div class="two" style="flex-wrap:wrap;gap:10px;margin-bottom:8px">
@@ -9169,6 +9171,7 @@
     renderHrAdvanceRequests();
     renderOpenAdvancesPanel();
     renderHrDeviceRequests();
+    renderHrClockinRequests();
   }
   function renderHrTable(){
     const wrap = document.getElementById('hrTableWrap'); if(!wrap) return;
@@ -9294,6 +9297,37 @@
     if(!confirm('تأكيد رفض هالطلب؟')) return;
     await db.from('hr_device_requests').update({ status:'rejected', approved_by: ME.full_name, approved_at: new Date().toISOString() }).eq('id', reqId);
     toast('✓ اترفض الطلب'); renderHR();
+  }
+  async function renderHrClockinRequests(){
+    const box = document.getElementById('hrClockinReqBox'); if(!box) return;
+    try{
+      const { data, error } = await db.from('hr_clockin_requests').select('*').eq('status','pending').order('created_at',{ascending:false});
+      if(error){ box.innerHTML=''; return; }
+      const list = data||[];
+      if(!list.length){ box.innerHTML=''; return; }
+      box.innerHTML = `<div class="panel" style="margin-bottom:14px;border:2px solid var(--warn)">
+        <h4 style="color:var(--warn);margin-bottom:8px">⏰ طلبات تسجيل دخول برّه الدوام المحدد (${list.length})</h4>
+        <div class="tbl-wrap"><table class="tbl">
+          <tr><th>الموظف</th><th>التاريخ</th><th></th></tr>
+          ${list.map(r=>`<tr>
+            <td><b>${esc(r.employee_name)}</b></td>
+            <td>${new Date(r.created_at).toLocaleString('ar-JO')}</td>
+            <td style="white-space:nowrap">
+              <button class="mini ok" onclick="approveHrClockinRequest('${r.id}')">✅ موافقة</button>
+              <button class="mini del" onclick="rejectHrClockinRequest('${r.id}')">❌ رفض</button>
+            </td>
+          </tr>`).join('')}
+        </table></div>
+      </div>`;
+    }catch(e){ console.error(e); }
+  }
+  async function approveHrClockinRequest(id){
+    await db.from('hr_clockin_requests').update({ status:'approved', approved_by: ME.full_name, approved_at: new Date().toISOString() }).eq('id', id);
+    toast('✓ اتوافق — الموظف يقدر يسجل دخول هلأ'); renderHrClockinRequests();
+  }
+  async function rejectHrClockinRequest(id){
+    await db.from('hr_clockin_requests').update({ status:'rejected', approved_by: ME.full_name, approved_at: new Date().toISOString() }).eq('id', id);
+    toast('✓ اترفض الطلب'); renderHrClockinRequests();
   }
 
   /* ---- سجل الحضور (بوابة الموظف) — عرض وتعديل من الأدمن بس ---- */
@@ -10255,6 +10289,14 @@
       <div class="fld"><label>📒 رصيد سابق (اختياري)</label><input id="mn_opening" type="number" step="0.01" value="${n.opening_balance||0}">
         <div style="font-size:.78rem;color:var(--muted);font-weight:700;margin-top:2px">رقم موجب = له عندنا، رقم سالب (بإشارة −) = عليه لنا — بينضاف لصافي المستحق تلقائيًا</div></div>
       <div class="fld"><label>🚦 أقصى نسبة سلفة مسموحة % (من صافي المستحق)</label><input id="mn_maxadv" type="number" step="1" min="1" max="100" value="${n.max_advance_percent??30}"></div>
+      <div class="fld" style="background:#fff8e1;border-radius:10px;padding:10px 12px">
+        <label>⏰ وقت الدوام المحدد (اختياري)</label>
+        <div class="two">
+          <div style="flex:1"><small>يدخل من الساعة</small><input id="mn_swf" type="time" value="${esc(n.shift_window_from||'')}"></div>
+          <div style="flex:1"><small>لازم يطلع مع الساعة</small><input id="mn_swt" type="time" value="${esc(n.shift_window_to||'')}"></div>
+        </div>
+        <div style="font-size:.78rem;color:var(--muted);font-weight:600;margin-top:4px">لو حطيت وقتين، بيبيّنوله ببوابته، وما رح يقدر يسجل دخول إلا بهاي الفترة (أو بموافقتك)، وبينسجل خروجه تلقائيًا لو تجاوز وقت الطلوع المحدد.</div>
+      </div>
       <hr style="margin:10px 0"><div style="font-weight:800;color:var(--maroon);margin-bottom:6px">👷 دخول بوابة الموظف (اختياري)</div>
       <div class="fld"><label>اسم المستخدم</label><input id="mn_user" value="${esc(n.username||'')}" placeholder="بدون فراغات، بالإنجليزي مثلًا"></div>
       <div class="fld"><label>الرقم السري</label><input id="mn_pin" inputmode="numeric" value="${esc(n.pin||'')}" placeholder="مثال: 1234"></div>
@@ -10301,7 +10343,7 @@
     const pin = document.getElementById('mn_pin')?.value.trim()||null;
     if(!name){ toast('⚠️ الاسم مطلوب'); return; }
     if(isNaN(disc)||disc<0||disc>100){ toast('⚠️ نسبة الخصم يجب أن تكون بين 0 و100'); return; }
-    const rec = { name, discount_percent: disc, hourly_wage: wage, opening_balance, max_advance_percent, username, pin };
+    const rec = { name, discount_percent: disc, hourly_wage: wage, opening_balance, max_advance_percent, username, pin, shift_window_from: document.getElementById('mn_swf')?.value||null, shift_window_to: document.getElementById('mn_swt')?.value||null };
     if(id) rec.is_active = document.getElementById('mn_active')?.checked ?? true;
     const r = id ? await db.from('meal_names').update(rec).eq('id',id) : await db.from('meal_names').insert(rec).select().single();
     if(r.error){ toast('✗ '+r.error.message+(r.error.message.includes('username')?' — اسم المستخدم هاد مستخدم لموظف تاني':'')); return; }
@@ -13133,12 +13175,31 @@ try {
       const { data: reqs } = await db.from('hr_advance_requests').select('*').eq('employee_id', EMP.id).order('created_at',{ascending:false}).limit(10);
       const allAdvances = adv.slice().sort((a,b)=>new Date(b.created_at)-new Date(a.created_at));
 
+      // ☕ بيانات البريك للجلسة المفتوحة حاليًا (لو في جلسة مفتوحة)
+      let activeBreak = null, breakRemaining = 60;
+      if(EMP_OPEN_LOG){
+        try{
+          const { data: brData, error: brErr } = await db.from('hr_breaks').select('*').eq('time_log_id', EMP_OPEN_LOG.id).order('started_at',{ascending:false});
+          if(!brErr){
+            const breaks = brData||[];
+            activeBreak = breaks.find(b=>!b.ended_at) || null;
+            const usedMin = breaks.filter(b=>b.ended_at).reduce((a,b)=>a+((new Date(b.ended_at)-new Date(b.started_at))/60000),0);
+            breakRemaining = Math.max(0, 60 - usedMin);
+          }
+        }catch(e){ console.error('load breaks failed:', e); }
+      }
+      window.__empActiveBreak = activeBreak;
+
       body.innerHTML = `
+        ${(EMP.shift_window_from && EMP.shift_window_to) ? `<div style="background:#fff8e1;border-radius:12px;padding:10px 14px;text-align:center;margin-bottom:10px;font-weight:800;color:#8a6d00">🕐 دوامك المحدد: من ${EMP.shift_window_from} لغاية ${EMP.shift_window_to}</div>` : ''}
         <div style="background:#fff;border-radius:16px;padding:18px;text-align:center;margin-bottom:14px;box-shadow:var(--shadow)">
           ${EMP_OPEN_LOG ? `
             <div style="font-weight:800;color:var(--ok);margin-bottom:10px">🟢 مسجل دخول من الساعة ${new Date(EMP_OPEN_LOG.clock_in).toLocaleTimeString('ar-JO',{hour:'2-digit',minute:'2-digit'})}</div>
             <button onclick="empClockOut()" style="width:100%;background:var(--red);color:#fff;border:none;border-radius:14px;padding:18px;font-weight:900;font-size:1.1rem;cursor:pointer">⏹️ تسجيل خروج</button>
             <div style="font-size:.72rem;color:var(--muted);font-weight:700;margin-top:8px">💡 لو خرجت من منطقة العمل، رح تنسجل خروج تلقائي — بس بشرط تخلي الصفحة مفتوحة وشاشة الموبايل مضوية</div>
+            <button onclick="empToggleBreak()" style="width:100%;background:${activeBreak?'var(--red)':'#0d6efd'};color:#fff;border:none;border-radius:14px;padding:14px;font-weight:900;font-size:1rem;cursor:pointer;margin-top:10px">
+              ${activeBreak ? '🔴 إنهاء البريك ('+Math.floor((new Date()-new Date(activeBreak.started_at))/60000)+' د)' : '☕ بريك ('+Math.round(breakRemaining)+' د متبقية)'}
+            </button>
           ` : `
             <div style="font-weight:800;color:var(--muted);margin-bottom:10px">⚪ مش مسجل دخول هلأ</div>
             <button onclick="empClockIn()" style="width:100%;background:var(--ok);color:#fff;border:none;border-radius:14px;padding:18px;font-weight:900;font-size:1.1rem;cursor:pointer">▶️ تسجيل دخول</button>
@@ -13221,6 +13282,20 @@ try {
     __geoIntervalId = setInterval(async ()=>{
       if(!EMP_OPEN_LOG || !EMP) return;
       try{
+        // ⏰ إغلاق تلقائي لو تجاوز وقت الطلوع المحدد
+        if(EMP.shift_window_to){
+          const now = new Date(); const nowMin = now.getHours()*60+now.getMinutes();
+          const [th,tm] = EMP.shift_window_to.split(':').map(Number); const toMin = th*60+tm;
+          const [fh,fm] = (EMP.shift_window_from||'00:00').split(':').map(Number); const fromMin = fh*60+fm;
+          const pastCloseTime = fromMin<=toMin ? (nowMin>toMin) : (nowMin>toMin && nowMin<fromMin);
+          if(pastCloseTime){
+            await db.from('hr_time_logs').update({ clock_out: new Date().toISOString() }).eq('id', EMP_OPEN_LOG.id);
+            stopGeofenceWatch();
+            alert('⏰ سُجّل خروجك تلقائيًا لأنك تجاوزت وقت دوامك المحدد ('+EMP.shift_window_to+').');
+            loadEmpPortal();
+            return;
+          }
+        }
         const geo = await getGeo();
         const fence = await checkGeofence(geo.lat, geo.lng, EMP.id);
         if(!fence.ok){
@@ -13278,8 +13353,46 @@ try {
     return { ok:false, name:null };
   }
 
+  async function empToggleBreak(){
+    if(!EMP_OPEN_LOG){ toast('⚠️ لازم تكون مسجل دخول'); return; }
+    try{
+      if(window.__empActiveBreak){
+        const { error } = await db.from('hr_breaks').update({ ended_at: new Date().toISOString() }).eq('id', window.__empActiveBreak.id);
+        if(error){ toast('✗ '+error.message); return; }
+        toast('✓ رجعت من البريك'); loadEmpPortal();
+        return;
+      }
+      const { data } = await db.from('hr_breaks').select('started_at, ended_at').eq('time_log_id', EMP_OPEN_LOG.id).not('ended_at','is',null);
+      const usedMin = (data||[]).reduce((a,b)=>a+((new Date(b.ended_at)-new Date(b.started_at))/60000),0);
+      const remaining = 60 - usedMin;
+      if(remaining<=0){ toast('⛔ خلصت الساعة المسموحة للبريك اليوم'); return; }
+      const { error } = await db.from('hr_breaks').insert({ time_log_id: EMP_OPEN_LOG.id, employee_id: EMP.id });
+      if(error){ toast('✗ '+error.message); return; }
+      toast('☕ بلّشت البريك — دوس نفس الزر لما ترجع');
+      loadEmpPortal();
+    }catch(e){ toast('✗ '+e.message); }
+  }
   async function empClockIn(){
     try{
+      if(EMP.shift_window_from && EMP.shift_window_to && !isWithinShiftWindow(EMP.shift_window_from, EMP.shift_window_to)){
+        const { data: approved } = await db.from('hr_clockin_requests').select('*').eq('employee_id', EMP.id).eq('status','approved').is('used_at', null).order('created_at',{ascending:false}).limit(1).maybeSingle();
+        if(approved){
+          await db.from('hr_clockin_requests').update({ used_at: new Date().toISOString() }).eq('id', approved.id);
+          toast('✓ استخدمت موافقة المدير');
+        } else {
+          const { data: existing } = await db.from('hr_clockin_requests').select('id').eq('employee_id', EMP.id).eq('status','pending').maybeSingle();
+          if(existing){ toast('⏳ عندك طلب موافقة معلّق أصلًا — استني رد المدير'); return; }
+          if(!confirm('⛔ دوامك المحدد من '+EMP.shift_window_from+' لغاية '+EMP.shift_window_to+'. بدك تبعت طلب موافقة للمدير تسجّل دخول هلأ؟')) return;
+          await db.from('hr_clockin_requests').insert({ employee_id: EMP.id, employee_name: EMP.name });
+          const { data: admins } = await db.from('staff').select('id, full_name').eq('role','admin');
+          for(const adm of (admins||[])){
+            await db.from('staff_messages').insert({ from_id: null, from_name: 'النظام', to_id: adm.id, to_name: adm.full_name,
+              body: '⏰ '+EMP.name+' طلب تسجيل دخول برّه دوامه المحدد — بانتظار موافقتك بشاشة HR' });
+          }
+          toast('✓ انبعت الطلب للمدير — جرب تسجل دخول تاني بعد الموافقة');
+          return;
+        }
+      }
       // 🔒 فحص أمان: نتأكد إنه ما في جلسة دخول مفتوحة أصلًا قبل ما نسمح بواحدة جديدة —
       // هاد بيمنع تسجيل دخول مزدوج (نقرة مضاعفة، صفحة قديمة، جهاز تاني...) يلي كان ممكن يضاعف ساعاته بالغلط
       const { data: openCheck } = await db.from('hr_time_logs').select('id, clock_in').eq('employee_id', EMP.id).is('clock_out', null).limit(1).maybeSingle();
