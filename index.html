@@ -3900,9 +3900,17 @@
       else toast('⚠️ ما لقيت الطلب');
     }catch(e){ console.error('jumpToOrder failed:', e); toast('✗ خطأ بفتح الطلب'); }
   }
-  function showInvoice(id){
+  async function showInvoice(id){
     if(!canSeeAllBranches() && !isCallCenter()) return;
     const o = DAY.find(x=>x.id===id); if(!o) return;
+    if(isAdmin() && !STAFF.length){ const {data} = await db.from('staff').select('id, full_name, role').order('full_name'); STAFF = data||[]; }
+    let existingRating = null;
+    if(isAdmin()){
+      const { data: rdata } = await db.from('employee_ratings').select('*').eq('order_id', id).order('created_at',{ascending:false}).limit(1).maybeSingle();
+      existingRating = rdata||null;
+    }
+    const currentAssignedId = existingRating?.employee_id || o.created_by;
+    const currentAssignedName = existingRating?.employee_name || o.created_by_name;
     modal(`<h3>🧾 فاتورة #${o.order_number}</h3>
       <table class="tbl" style="margin-bottom:12px">
         <tr><td><b>التاريخ</b></td><td>${new Date(o.created_at).toLocaleString('ar-JO')}</td></tr>
@@ -3922,10 +3930,20 @@
       ${+o.discount>0?`<div class="trow"><span>خصم ${o.discount_code?'('+esc(o.discount_code)+')':''}</span><span>− ${fmt(o.discount)}</span></div>`:''}
       ${+o.delivery_fee>0?`<div class="trow"><span>توصيل</span><span>${fmt(o.delivery_fee)}</span></div>`:''}
       <div class="trow total"><span>الإجمالي</span><span>${fmt(o.total)} ${CURRENCY}</span></div>
+      ${isAdmin() ? `
+      <div style="background:#e8f5ff;border-radius:10px;padding:10px 12px;margin-top:10px">
+        <label style="font-weight:800;font-size:.85rem">👤 الموظف المسؤول عن الطلب (تعديل — للمالك بس)</label>
+        <select id="ratingEmpSel_${o.id}" style="width:100%;margin-top:4px">
+          <option value="">— بدون تحديد —</option>
+          ${STAFF.map(s=>`<option value="${s.id}" data-name="${esc(s.full_name)}" ${s.id===currentAssignedId?'selected':''}>${esc(s.full_name)}</option>`).join('')}
+        </select>
+        ${existingRating?`<div style="font-size:.76rem;color:var(--muted);font-weight:600;margin-top:4px">✓ الطلب هاد اتقيّم أصلًا: ${existingRating.rating==='positive'?'😊 راضي':'😐 مو راضي'} — أي تقييم جديد بيضيفلها تقييم إضافي، مش يبدّلها</div>`:''}
+      </div>` : ''}
       <div class="m-act">
         <button class="save" onclick="reprintDay('${o.id}');closeModal()">🖨️ طباعة</button>
-        <button class="mini ok" style="background:#0d6efd" onclick="rateOrderSatisfaction('${o.id}',${o.order_number},'${o.created_by||''}','${esc(o.created_by_name||'')}','positive')">😊 عميل راضي (+3 نقاط)</button>
-        <button class="mini" onclick="rateOrderSatisfaction('${o.id}',${o.order_number},'${o.created_by||''}','${esc(o.created_by_name||'')}','negative')">😐 مو راضي</button>
+        ${o.customers?.phone?`<button class="mini ok" style="background:#25D366" onclick="sendFeedbackRequest('${esc(o.customers?.name||'')}','${esc(o.customers.phone)}')">📩 اطلب فيدباك من العميل</button>`:''}
+        <button class="mini ok" style="background:#0d6efd" onclick="rateOrderSatisfactionSel('${o.id}',${o.order_number},'${currentAssignedId||''}','${esc(currentAssignedName||'')}','positive')">😊 عميل راضي (+3 نقاط)</button>
+        <button class="mini" onclick="rateOrderSatisfactionSel('${o.id}',${o.order_number},'${currentAssignedId||''}','${esc(currentAssignedName||'')}','negative')">😐 مو راضي (-4 نقاط)</button>
         <button class="mini del" onclick="complaintForm('${o.id}','${esc(o.order_number)}','${o.branch_id||''}','${esc(o.branches?.name_ar||'')}','${o.created_by||''}','${esc(o.created_by_name||'')}')">😠 تسجيل شكوى عميل</button>
         <button class="cancel" onclick="closeModal()">إغلاق</button>
       </div>`);
@@ -3935,14 +3953,14 @@
     try{
       const { error } = await db.from('employee_ratings').insert({
         order_id: orderId, order_number: orderNumber, employee_id: empId, employee_name: empName,
-        rating, points: rating==='positive'?3:0, created_by: ME.full_name
+        rating, points: rating==='positive'?POINTS_PER_RATING:POINTS_PER_NEGATIVE, created_by: ME.full_name
       });
       if(error){ toast('✗ '+error.message); return; }
       if(rating==='positive'){
-        toast('✓ سجّلت! +3 نقاط لـ'+empName);
+        toast('✓ سجّلت! +'+POINTS_PER_RATING+' نقاط لـ'+empName);
         await maybeAutoRedeemPoints(empId, empName);
       } else {
-        toast('✓ اتسجّل التقييم');
+        toast('✓ اتسجّل — خصم '+Math.abs(POINTS_PER_NEGATIVE)+' نقاط من '+empName);
       }
       closeModal();
     }catch(e){ toast('✗ '+e.message); }
@@ -3952,10 +3970,10 @@
   async function maybeAutoRedeemPoints(empId, empName){
     try{
       const [ratingsRes, redRes] = await Promise.all([
-        db.from('employee_ratings').select('id').eq('employee_id', empId).eq('rating','positive'),
+        db.from('employee_ratings').select('points, rating').eq('employee_id', empId),
         db.from('point_redemptions').select('points_used').eq('employee_id', empId),
       ]);
-      const totalPoints = (ratingsRes.data||[]).length * POINTS_PER_RATING;
+      const totalPoints = (ratingsRes.data||[]).reduce((a,r)=>a+(r.points!=null?r.points:(r.rating==='positive'?POINTS_PER_RATING:POINTS_PER_NEGATIVE)),0);
       const redeemed = (redRes.data||[]).reduce((a,x)=>a+x.points_used,0);
       let available = totalPoints - redeemed;
       while(available >= POINTS_PER_REDEMPTION){
@@ -4206,12 +4224,12 @@
         <button class="cancel" onclick="closeModal()">إغلاق</button>
         ${o.customers?.phone?`<button class="mini ok" style="background:#25D366" onclick="sendFeedbackRequest('${esc(o.customers?.name||'')}','${esc(o.customers.phone)}')">📩 اطلب فيدباك من العميل</button>`:''}
         <button class="mini ok" style="background:#0d6efd" onclick="rateOrderSatisfactionSel('${o.id}',${o.order_number},'${currentAssignedId||''}','${esc(existingRating?.employee_name||o.created_by_name||'')}','positive')">😊 عميل راضي (+3 نقاط)</button>
-        <button class="mini" onclick="rateOrderSatisfactionSel('${o.id}',${o.order_number},'${currentAssignedId||''}','${esc(existingRating?.employee_name||o.created_by_name||'')}','negative')">😐 مو راضي</button>
+        <button class="mini" onclick="rateOrderSatisfactionSel('${o.id}',${o.order_number},'${currentAssignedId||''}','${esc(existingRating?.employee_name||o.created_by_name||'')}','negative')">😐 مو راضي (-4 نقاط)</button>
         <button class="mini del" onclick="complaintForm('${o.id}','${esc(o.order_number)}','${o.branch_id||''}','${esc(o.branches?.name_ar||'')}','${o.created_by||''}','${esc(o.created_by_name||'')}')">😠 تسجيل شكوى عميل</button>
       </div>`);
   }
   function sendFeedbackRequest(custName, custPhone){
-    const template = SETTINGS.feedback_msg_template || 'مرحبا، شو رأيك بطلبك الأخير من صابر جو سناك؟ رأيك بهمنا كتير وبساعدنا نتحسن 🙏';
+    const template = SETTINGS.feedback_msg_template || 'مرحبا [الاسم] 🙏 شو رأيك بطلبك الأخير من صابر جو سناك؟ رأيك بهمنا كتير وبيساعدنا نتحسّن. لو عندك دقيقة، تقييمك على خرائط جوجل بفرحنا كتير 🌟 https://www.google.com/maps/place/Saber+Jo+Snack/@32.0186841,35.8578738,15.33z/data=!4m8!3m7!1s0x151c9f2da3f2b8e9:0xe10b35d58f8bc73!8m2!3d32.0225298!4d35.8554483!9m1!1b1!16s%2Fg%2F11yww9mzpw?entry=ttu&g_ep=EgoyMDI2MDcyMi4wIKXMDSoASAFQAw%3D%3D شكرًا إلك 💛';
     const msg = template.replace(/\[الاسم\]/g, custName||'');
     let phone = (custPhone||'').replace(/\D/g,'');
     if(phone.startsWith('0')) phone = '962'+phone.slice(1);
@@ -4469,7 +4487,7 @@
   let __bulkWaQueue = [];
   function openBulkWhatsapp(){
     if(!CUST_SELECTED.size){ toast('⚠️ حدد عميل واحد على الأقل'); return; }
-    const defaultMsg = SETTINGS.feedback_msg_template || 'مرحبا، شو رأيك بطلبك الأخير من صابر جو سناك؟ رأيك بهمنا كتير وبساعدنا نتحسن 🙏';
+    const defaultMsg = SETTINGS.feedback_msg_template || 'مرحبا [الاسم] 🙏 شو رأيك بطلبك الأخير من صابر جو سناك؟ رأيك بهمنا كتير وبيساعدنا نتحسّن. لو عندك دقيقة، تقييمك على خرائط جوجل بفرحنا كتير 🌟 https://www.google.com/maps/place/Saber+Jo+Snack/@32.0186841,35.8578738,15.33z/data=!4m8!3m7!1s0x151c9f2da3f2b8e9:0xe10b35d58f8bc73!8m2!3d32.0225298!4d35.8554483!9m1!1b1!16s%2Fg%2F11yww9mzpw?entry=ttu&g_ep=EgoyMDI2MDcyMi4wIKXMDSoASAFQAw%3D%3D شكرًا إلك 💛';
     modal(`<h3>📢 رسالة واتساب جماعية</h3>
       <div style="color:var(--muted);font-size:.82rem;font-weight:700;margin-bottom:10px">هيك بتحدد لكل عميل واحد لحاله (واتساب ما بيسمح إرسال جماعي تلقائي بدون تطبيق رسمي) — بس هي أسرع طريقة: رسالة جاهزة، تفتح واتساب لكل عميل، تضغط إرسال، وننتقل للتالي.</div>
       <div class="fld"><label>نص الرسالة</label>
@@ -5274,7 +5292,7 @@
         <div class="fld"><label>📱 رقم واتساب التوصيل</label><input id="f_wanum" inputmode="tel" value="${esc(SETTINGS.delivery_whatsapp||'')}"></div>
         <div class="fld"><label>📦 رقم واتساب "توريدات" عام (احتياطي لو المورد ماله رقم محدد)</label><input id="f_procWa" inputmode="tel" value="${esc(SETTINGS.procurement_whatsapp||'')}" placeholder="مثال: 962791234567"></div>
         <div class="fld"><label>💬 نص رسالة "جربتوا الأكل؟" الافتراضي (للعملاء)</label>
-          <textarea id="f_feedbackMsg" rows="4" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;font-family:inherit;font-size:1rem" placeholder="مرحبا [الاسم]، شو رأيك بطلبك الأخير...">${esc(SETTINGS.feedback_msg_template||'مرحبا، شو رأيك بطلبك الأخير من صابر جو سناك؟ رأيك بهمنا كتير وبساعدنا نتحسن 🙏')}</textarea>
+          <textarea id="f_feedbackMsg" rows="4" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;font-family:inherit;font-size:1rem" placeholder="مرحبا [الاسم]، شو رأيك بطلبك الأخير...">${esc(SETTINGS.feedback_msg_template||'مرحبا [الاسم] 🙏 شو رأيك بطلبك الأخير من صابر جو سناك؟ رأيك بهمنا كتير وبيساعدنا نتحسّن. لو عندك دقيقة، تقييمك على خرائط جوجل بفرحنا كتير 🌟 https://www.google.com/maps/place/Saber+Jo+Snack/@32.0186841,35.8578738,15.33z/data=!4m8!3m7!1s0x151c9f2da3f2b8e9:0xe10b35d58f8bc73!8m2!3d32.0225298!4d35.8554483!9m1!1b1!16s%2Fg%2F11yww9mzpw?entry=ttu&g_ep=EgoyMDI2MDcyMi4wIKXMDSoASAFQAw%3D%3D شكرًا إلك 💛')}</textarea>
           <div style="color:var(--muted);font-size:.78rem;margin-top:4px">💡 اكتب <b>[الاسم]</b> بأي مكان وبينحط اسم كل عميل تلقائيًا وقت الإرسال — هاد النص هو يلي بيطلع افتراضيًا كل مرة تفتح "رسالة واتساب جماعية"</div>
         </div>
 
@@ -5797,6 +5815,7 @@
 
   /* ---- ⭐ نقاط رضا العملاء ---- */
   const POINTS_PER_RATING = 3;
+  const POINTS_PER_NEGATIVE = -4; // 💔 كل "مو راضي" = خصم 4 نقاط من الموظف
   const POINTS_PER_REDEMPTION = 140;
   const REDEMPTION_VALUE = 10; // د.أ لكل 140 نقطة
   async function renderSatisfaction(){
@@ -5814,7 +5833,8 @@
       const byEmp = {};
       ratings.forEach(r=>{
         if(!byEmp[r.employee_id]) byEmp[r.employee_id] = { name:r.employee_name, positive:0, negative:0, points:0 };
-        if(r.rating==='positive'){ byEmp[r.employee_id].positive++; byEmp[r.employee_id].points += (r.points||POINTS_PER_RATING); }
+        byEmp[r.employee_id].points += (r.points!=null ? r.points : (r.rating==='positive'?POINTS_PER_RATING:POINTS_PER_NEGATIVE));
+        if(r.rating==='positive') byEmp[r.employee_id].positive++;
         else byEmp[r.employee_id].negative++;
       });
       const redeemedByEmp = {};
@@ -5829,7 +5849,7 @@
       C.innerHTML = `
         <div class="panel" style="margin-bottom:14px">
           <h3>⭐ نقاط رضا العملاء</h3>
-          <div style="font-size:.85rem;color:var(--muted);font-weight:700;margin-top:6px">كل تقييم "عميل راضي" = ${POINTS_PER_RATING} نقاط. كل ${POINTS_PER_REDEMPTION} نقطة = ${REDEMPTION_VALUE} ${CURRENCY} (بتنضاف تلقائيًا لجدول المكافآت عند الاستبدال).</div>
+          <div style="font-size:.85rem;color:var(--muted);font-weight:700;margin-top:6px">كل تقييم "عميل راضي" = +${POINTS_PER_RATING} نقاط. كل تقييم "مو راضي" = ${POINTS_PER_NEGATIVE} نقاط (خصم). كل ${POINTS_PER_REDEMPTION} نقطة = ${REDEMPTION_VALUE} ${CURRENCY} (بتنضاف تلقائيًا لجدول المكافآت عند الاستبدال).</div>
         </div>
         <div class="tbl-wrap"><table class="tbl">
           <tr><th>الموظف</th><th>راضي 😊</th><th>مو راضي 😐</th><th>نسبة الرضا</th><th>مجموع النقاط</th><th>مستبدلة</th><th>متاحة</th><th></th></tr>
@@ -5838,9 +5858,9 @@
             <td style="color:var(--ok)">${r.positive}</td>
             <td style="color:var(--muted)">${r.negative}</td>
             <td><b style="color:${r.satisfactionPct>=80?'var(--ok)':r.satisfactionPct>=50?'var(--warn)':'var(--red)'}">${r.satisfactionPct}%</b></td>
-            <td>${r.points}</td>
+            <td><b style="color:${r.points<0?'var(--red)':'inherit'}">${r.points}</b></td>
             <td>${r.redeemed}</td>
-            <td><b style="color:var(--maroon)">${r.available}</b></td>
+            <td><b style="color:${r.available<0?'var(--red)':'var(--maroon)'}">${r.available}</b></td>
             <td>
               ${r.available>=POINTS_PER_REDEMPTION?`<button class="mini ok" style="background:var(--maroon)" onclick="redeemPoints('${r.empId}','${esc(r.name)}')">🎁 استبدال ${POINTS_PER_REDEMPTION} نقطة = ${REDEMPTION_VALUE} ${CURRENCY}</button>`:`<span style="color:var(--muted);font-size:.78rem">محتاج ${POINTS_PER_REDEMPTION-r.available} نقطة كمان</span>`}
               <button class="mini edit" onclick="showRatingsDetail('${r.empId}')">📋 تفاصيل التقييمات</button>
@@ -5856,7 +5876,7 @@
       <div style="max-height:420px;overflow-y:auto">
       ${myRatings.map(r=>`<div style="border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
         <div>
-          <b style="color:${r.rating==='positive'?'var(--ok)':'var(--muted)'}">${r.rating==='positive'?'😊 راضي (+'+r.points+' نقاط)':'😐 مو راضي'}</b>
+          <b style="color:${r.rating==='positive'?'var(--ok)':'var(--red)'}">${r.rating==='positive'?'😊 راضي (+'+r.points+' نقاط)':'😐 مو راضي ('+(r.points!=null?r.points:POINTS_PER_NEGATIVE)+' نقاط)'}</b>
           <div style="font-size:.78rem;color:var(--muted)">طلب #${r.order_number||'—'} — ${new Date(r.created_at).toLocaleString('ar-JO')}</div>
         </div>
         <div style="white-space:nowrap">
@@ -13408,7 +13428,7 @@ try {
         db.from('employee_deductions').select('amount, reason, created_at').eq('employee_id', EMP.id).gte('created_at', monthStart.toISOString()),
         db.from('employee_rewards').select('amount, reason, created_at').eq('employee_id', EMP.id).gte('created_at', monthStart.toISOString()),
         db.from('hr_breaks').select('started_at, ended_at').eq('employee_id', EMP.id).not('ended_at','is',null).gte('started_at', monthStart.toISOString()),
-        linkedIds.length ? db.from('employee_ratings').select('rating').in('employee_id', linkedIds) : Promise.resolve({data:[]}),
+        linkedIds.length ? db.from('employee_ratings').select('rating, points').in('employee_id', linkedIds) : Promise.resolve({data:[]}),
         linkedIds.length ? db.from('point_redemptions').select('points_used').in('employee_id', linkedIds) : Promise.resolve({data:[]}),
       ]);
       const logs = logsRes.data||[];
@@ -13421,7 +13441,7 @@ try {
       const hoursThisMonth = Math.max(0, portalHours + manualHours - monthBreakExcessHours);
       const positiveRatings = (ratingsRes.data||[]).filter(r=>r.rating==='positive').length;
       const negativeRatings = (ratingsRes.data||[]).filter(r=>r.rating==='negative').length;
-      const totalPointsEarned = positiveRatings * POINTS_PER_RATING;
+      const totalPointsEarned = (ratingsRes.data||[]).reduce((a,r)=>a+(r.points!=null?r.points:(r.rating==='positive'?POINTS_PER_RATING:POINTS_PER_NEGATIVE)),0);
       const pointsRedeemed = (redRes.data||[]).reduce((a,x)=>a+x.points_used,0);
       const pointsAvailable = totalPointsEarned - pointsRedeemed;
       const adv = advRes.data||[];
@@ -13466,7 +13486,7 @@ try {
             <div><span style="color:var(--maroon);font-weight:900;font-size:1.3rem">${pointsAvailable}</span><br><small>نقطتك المتاحة</small></div>
           </div>
           <div style="font-size:.76rem;color:var(--muted);font-weight:700;line-height:1.6">
-            كل مرة العميل يكون مبسوط من خدمتك = ${POINTS_PER_RATING} نقاط. لما توصل ${POINTS_PER_REDEMPTION} نقطة، بتتحول تلقائيًا لمكافأة ${REDEMPTION_VALUE} ${CURRENCY} تنضاف لحسابك (بتشوفها بقسم المكافآت تحت). باقيلك <b>${Math.max(0,POINTS_PER_REDEMPTION-pointsAvailable)}</b> نقطة على أقرب مكافأة.
+            كل مرة العميل يكون مبسوط من خدمتك = +${POINTS_PER_RATING} نقاط. كل شكوى/عدم رضا = ${POINTS_PER_NEGATIVE} نقاط (خصم). لما توصل ${POINTS_PER_REDEMPTION} نقطة، بتتحول تلقائيًا لمكافأة ${REDEMPTION_VALUE} ${CURRENCY} تنضاف لحسابك (بتشوفها بقسم المكافآت تحت). باقيلك <b>${Math.max(0,POINTS_PER_REDEMPTION-pointsAvailable)}</b> نقطة على أقرب مكافأة.
           </div>
         </div>` : ''}
         <div style="background:#fff;border-radius:16px;padding:18px;text-align:center;margin-bottom:14px;box-shadow:var(--shadow)">
