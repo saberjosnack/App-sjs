@@ -368,6 +368,7 @@
     <div class="brand">S<em>J</em>S <span style="font-weight:600;font-size:.85rem">POS</span></div>
     <div id="shiftBadge" class="hidden" onclick="if(!currentShift)startShift()">🔴 لا يوجد شيفت مفتوح - اضغط لفتح</div>
     <button id="drawerBtn" class="hidden" onclick="openDrawerRequest()" style="background:var(--yellow);color:var(--maroon);border-radius:999px;padding:4px 12px;font-weight:900;font-size:.85rem">🔓 فتح الدرج</button>
+    <button id="breakBtn" class="hidden" onclick="toggleBreak()" style="background:#0d6efd;color:#fff;border-radius:999px;padding:4px 12px;font-weight:900;font-size:.85rem;border:none">☕ بريك</button>
     <div id="overdueBadge" class="hidden">⏰ طلبات متأخرة!</div>
     <div id="readyBadge" class="hidden" style="background:var(--warn);color:#fff;border-radius:999px;padding:4px 12px;font-weight:900;font-size:.85rem;animation:blink 1s infinite">📦 طلبات جاهزة!</div>
     <div class="who"><span id="whoName"></span><br><span id="whoBranch"></span></div>
@@ -1721,9 +1722,24 @@
         .order('start_time', {ascending:false})
         .limit(1);
       currentShift = (data && data.length) ? data[0] : null;
+      // ⏰ إغلاق تلقائي لو تجاوز الموظف وقت السكر المسموح له (يترك السماعية كل 30 ثانية عن طريق نفس هالفحص)
+      if(currentShift && !isAdmin() && ME.shift_window_to && !isWithinShiftWindow(ME.shift_window_from||'00:00', ME.shift_window_to)){
+        // نتأكد إنه فعلًا تجاوز وقت *الإغلاق* (مش قبل وقت الفتح لسا) — أي لو الوقت الحالي بعد shift_window_to
+        const now = new Date(); const nowMin = now.getHours()*60+now.getMinutes();
+        const [th,tm] = ME.shift_window_to.split(':').map(Number); const toMin = th*60+tm;
+        const [fh,fm] = (ME.shift_window_from||'00:00').split(':').map(Number); const fromMin = fh*60+fm;
+        const pastCloseTime = fromMin<=toMin ? (nowMin>toMin) : (nowMin>toMin && nowMin<fromMin);
+        if(pastCloseTime){
+          toast('⏰ تجاوزت وقت الشيفت المسموح — رح ينسكر تلقائيًا الآن');
+          await logActivity('auto_close_shift', 'إغلاق تلقائي لتجاوز وقت الشيفت المسموح ('+ME.shift_window_to+')');
+          await doEndShift(0,0,0,true);
+          return;
+        }
+      }
       const badge = document.getElementById('shiftBadge');
       const drawerBtn = document.getElementById('drawerBtn');
       if (drawerBtn) drawerBtn.classList.toggle('hidden', !currentShift || !perm('drawer_open'));
+      await updateBreakButton();
       if (badge) {
         if(currentShift){
           badge.classList.remove('hidden');
@@ -1754,9 +1770,77 @@
     }
   }
 
+  // ⏰ هل الوقت الحالي جوا نافذة الشيفت المسموحة لهاد الموظف؟ بيتعامل صح مع نوافذ عابرة لمنتصف الليل (مثلاً 6م → 3ص)
+  function isWithinShiftWindow(fromStr, toStr){
+    if(!fromStr || !toStr) return true; // ما في تقييد أصلًا
+    const now = new Date();
+    const nowMin = now.getHours()*60 + now.getMinutes();
+    const [fh,fm] = fromStr.split(':').map(Number);
+    const [th,tm] = toStr.split(':').map(Number);
+    const fromMin = fh*60+fm, toMin = th*60+tm;
+    return fromMin<=toMin ? (nowMin>=fromMin && nowMin<=toMin) : (nowMin>=fromMin || nowMin<=toMin);
+  }
+  // ☕ نظام البريك: ساعة وحدة (60 دقيقة) لكل شيفت، يقدر الموظف يقسمها براحته لأكتر من بريك
+  const BREAK_TOTAL_MIN = 60;
+  let __activeBreak = null;
+  async function updateBreakButton(){
+    const btn = document.getElementById('breakBtn');
+    if(!btn) return;
+    if(!currentShift){ btn.classList.add('hidden'); return; }
+    try{
+      const { data, error } = await db.from('shift_breaks').select('*').eq('shift_id', currentShift.id).order('started_at',{ascending:false});
+      if(error){ btn.classList.add('hidden'); return; } // الجدول لسا مش موجود
+      btn.classList.remove('hidden');
+      const breaks = data||[];
+      __activeBreak = breaks.find(b=>!b.ended_at) || null;
+      const usedMin = breaks.filter(b=>b.ended_at).reduce((a,b)=>a+((new Date(b.ended_at)-new Date(b.started_at))/60000),0);
+      const remaining = Math.max(0, BREAK_TOTAL_MIN - usedMin);
+      if(__activeBreak){
+        const elapsed = Math.floor((new Date()-new Date(__activeBreak.started_at))/60000);
+        btn.innerHTML = '🔴 إنهاء البريك ('+elapsed+' د)';
+        btn.style.background = 'var(--red)';
+      } else {
+        btn.innerHTML = '☕ بريك ('+Math.round(remaining)+' د متبقية)';
+        btn.style.background = remaining<=0 ? '#999' : '#0d6efd';
+      }
+    }catch(e){ console.error('updateBreakButton failed:', e); }
+  }
+  async function toggleBreak(){
+    if(!currentShift){ toast('⚠️ لازم يكون في شيفت مفتوح'); return; }
+    if(__activeBreak){
+      const { error } = await db.from('shift_breaks').update({ ended_at: new Date().toISOString() }).eq('id', __activeBreak.id);
+      if(error){ toast('✗ '+error.message); return; }
+      toast('✓ رجعت من البريك'); __activeBreak = null; await updateBreakButton();
+      return;
+    }
+    try{
+      const { data } = await db.from('shift_breaks').select('started_at, ended_at').eq('shift_id', currentShift.id).not('ended_at','is',null);
+      const usedMin = (data||[]).reduce((a,b)=>a+((new Date(b.ended_at)-new Date(b.started_at))/60000),0);
+      const remaining = BREAK_TOTAL_MIN - usedMin;
+      if(remaining<=0){ toast('⛔ خلصت الساعة المسموحة للبريك — ما ضل وقت'); return; }
+      if(!confirm('☕ تبدأ بريك هلأ؟ عندك '+Math.round(remaining)+' دقيقة متبقية من أصل 60 لهالشيفت.')) return;
+      const { error } = await db.from('shift_breaks').insert({ shift_id: currentShift.id, staff_id: ME.id });
+      if(error){ toast('✗ '+error.message); return; }
+      toast('☕ بلّشت البريك — رجّع نفسك بنفس الزر لما تخلص');
+      await updateBreakButton();
+    }catch(e){ toast('✗ '+e.message); }
+  }
   window.startShift = async function(){
     if(!perm('shift_open')){ toast('⛔ ما عندك صلاحية فتح شيفت'); return; }
     if(currentShift){ toast('⚠️ يوجد شيفت مفتوح حالياً'); return; }
+    if(!isAdmin() && (ME.shift_window_from && ME.shift_window_to) && !isWithinShiftWindow(ME.shift_window_from, ME.shift_window_to)){
+      // 🔍 فيه موافقة معتمدة وما استخدمناها بعد؟ (المدير وافق على طلب سابق) — نستهلكها ونسمح
+      const { data: approved } = await db.from('shift_open_requests').select('*').eq('staff_id', ME.id).eq('status','approved').is('used_at', null).order('created_at',{ascending:false}).limit(1).maybeSingle();
+      if(approved){
+        await db.from('shift_open_requests').update({ used_at: new Date().toISOString() }).eq('id', approved.id);
+        toast('✓ استخدمت موافقة المدير — تقدر تفتح شيفتك هلأ');
+      } else {
+        modal(`<h3>⛔ برّه وقتك المسموح</h3>
+          <div style="font-weight:700;margin-bottom:12px">وقتك المسموح لفتح الشيفت من <b>${ME.shift_window_from}</b> لغاية <b>${ME.shift_window_to}</b>. لو بدك تفتح هلأ لازم موافقة المدير.</div>
+          <div class="m-act"><button class="save" onclick="requestShiftOpenApproval()">📨 طلب موافقة من المدير</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
+        return;
+      }
+    }
     if(ME.role === 'callcenter'){
       if(!confirm('▶️ فتح شيفت جديد؟')) return;
       return doStartShift(0,0,0);
@@ -1768,6 +1852,51 @@
       <div class="fld"><label>📱 كليك</label><input id="os_cliq" inputmode="decimal" placeholder="0"></div>
       <div class="m-act"><button class="save" onclick="confirmStartShift()">فتح الشيفت ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
   };
+  async function requestShiftOpenApproval(){
+    try{
+      const { data: existing } = await db.from('shift_open_requests').select('id').eq('staff_id', ME.id).eq('status','pending').maybeSingle();
+      if(existing){ toast('⏳ عندك طلب معلّق أصلًا — استني موافقة المدير'); closeModal(); return; }
+      await db.from('shift_open_requests').insert({ staff_id: ME.id, staff_name: ME.full_name, branch_id: ME.branch_id||null });
+      const { data: admins } = await db.from('staff').select('id, full_name').eq('role','admin');
+      for(const adm of (admins||[])){
+        await db.from('staff_messages').insert({ from_id: null, from_name: 'النظام', to_id: adm.id, to_name: adm.full_name,
+          body: '⏰ '+ME.full_name+' طلب فتح شيفت برّه وقته المسموح — بانتظار موافقتك بشاشة الموظفين' });
+      }
+      toast('✓ انبعت الطلب للمدير — استني الموافقة وجرب تفتح الشيفت تاني');
+      closeModal();
+    }catch(e){ toast('✗ '+e.message); }
+  }
+  async function renderShiftOpenRequests(){
+    const box = document.getElementById('shiftOpenReqBox'); if(!box) return;
+    try{
+      const { data, error } = await db.from('shift_open_requests').select('*').eq('status','pending').order('created_at',{ascending:false});
+      if(error){ box.innerHTML=''; return; }
+      const list = data||[];
+      if(!list.length){ box.innerHTML=''; return; }
+      box.innerHTML = `<div class="panel" style="margin-bottom:14px;border:2px solid var(--warn)">
+        <h4 style="color:var(--warn);margin-bottom:8px">⏰ طلبات فتح شيفت برّه الوقت المسموح (${list.length})</h4>
+        <div class="tbl-wrap"><table class="tbl">
+          <tr><th>الموظف</th><th>التاريخ</th><th></th></tr>
+          ${list.map(r=>`<tr>
+            <td><b>${esc(r.staff_name)}</b></td>
+            <td>${new Date(r.created_at).toLocaleString('ar-JO')}</td>
+            <td style="white-space:nowrap">
+              <button class="mini ok" onclick="approveShiftOpenRequest('${r.id}')">✅ موافقة</button>
+              <button class="mini del" onclick="rejectShiftOpenRequest('${r.id}')">❌ رفض</button>
+            </td>
+          </tr>`).join('')}
+        </table></div>
+      </div>`;
+    }catch(e){ console.error(e); }
+  }
+  async function approveShiftOpenRequest(id){
+    await db.from('shift_open_requests').update({ status:'approved', approved_by: ME.full_name, approved_at: new Date().toISOString() }).eq('id', id);
+    toast('✓ اتوافق — الموظف يقدر يفتح شيفته هلأ'); renderShiftOpenRequests();
+  }
+  async function rejectShiftOpenRequest(id){
+    await db.from('shift_open_requests').update({ status:'rejected', approved_by: ME.full_name, approved_at: new Date().toISOString() }).eq('id', id);
+    toast('✓ اترفض الطلب'); renderShiftOpenRequests();
+  }
   window.confirmStartShift = function(){
     const cashRaw = normalizeDigits(document.getElementById('os_cash')?.value||'').trim();
     if(cashRaw===''){ toast('⚠️ لازم تكتب رقم الكاش (حتى لو 0) — ما ينحفظ فاضي'); return; }
@@ -5037,9 +5166,11 @@
         STAFF=data||[];
         C.innerHTML=`<button class="add-btn" onclick="staffForm()">＋ إضافة موظف</button>
           <button class="mini ok" style="background:#7b2cbf" onclick="showHrLinkChecker()">🔗 تحقّق من ربط الأسماء مع HR</button>
+          <div id="shiftOpenReqBox"></div>
           <input id="staffSearch" placeholder="🔍 ابحث بالاسم أو الدور..." oninput="renderStaffTable()" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:10px">
           <div id="staffTableWrap"></div>`;
         renderStaffTable();
+        renderShiftOpenRequests();
         const salesStaff = document.getElementById('salesStaff');
         if (salesStaff) salesStaff.innerHTML = '<option value="">كل الموظفين</option>' + STAFF.map(s=>`<option value="${s.id}">${esc(s.full_name)}</option>`).join('');
       } catch(e) { console.error(e); }
@@ -12027,6 +12158,14 @@ try {
         <option value="admin" ${st.role==='admin'?'selected':''}>مدير (كل الصلاحيات)</option>
         ${CUSTOM_ROLES.map(r=>`<option value="custom:${r.id}" ${st.role==='custom'&&st.role_id===r.id?'selected':''}>${esc(r.name)}</option>`).join('')}
         </select></div>
+      <div class="fld" style="background:#fff8e1;border-radius:10px;padding:10px 12px">
+        <label>⏰ وقت الشيفت المسموح (اختياري)</label>
+        <div class="two">
+          <div style="flex:1"><small>يفتح من الساعة</small><input id="f_swf" type="time" value="${esc(st.shift_window_from||'')}"></div>
+          <div style="flex:1"><small>لازم يسكر مع الساعة</small><input id="f_swt" type="time" value="${esc(st.shift_window_to||'')}"></div>
+        </div>
+        <div style="font-size:.78rem;color:var(--muted);font-weight:600;margin-top:4px">لو حطيت وقتين، هاد الموظف ما رح يقدر يفتح شيفت إلا بهاي الفترة (أو بموافقتك)، وشيفته رح ينسكر تلقائيًا لو تجاوز وقت الإغلاق المحدد. سيبها فاضية لعدم التقييد.</div>
+      </div>
       <div class="fld"><label>الفرع</label><select id="f_sb"><option value="">كل الفروع</option>
         ${BRANCHES.map(b=>`<option value="${b.id}" ${st.branch_id===b.id?'selected':''}>${esc(b.name_ar)}</option>`).join('')}</select></div>
       <div class="fld" style="background:#e8f5ff;border-radius:10px;padding:10px 12px">
@@ -12102,7 +12241,7 @@ try {
         return;
       }
     }
-    const rec={full_name: f_sn ? f_sn.value.trim() : '', username: f_su ? f_su.value.trim() : '', pin: f_sp ? f_sp.value.trim() : '', role: roleVal, role_id: roleId, branch_id: f_sb ? f_sb.value||null : null, permissions, linked_hr_id: document.getElementById('f_hrLink')?.value || null};
+    const rec={full_name: f_sn ? f_sn.value.trim() : '', username: f_su ? f_su.value.trim() : '', pin: f_sp ? f_sp.value.trim() : '', role: roleVal, role_id: roleId, branch_id: f_sb ? f_sb.value||null : null, permissions, linked_hr_id: document.getElementById('f_hrLink')?.value || null, shift_window_from: document.getElementById('f_swf')?.value||null, shift_window_to: document.getElementById('f_swt')?.value||null};
     if(!rec.full_name||!rec.username||!/^\d{4}$/.test(rec.pin)){ toast('⚠️ جميع الحقول مطلوبة'); return; }
     if(rec.role==='cashier'&&!rec.branch_id){ toast('⚠️ الكاشير يحتاج فرع'); return; }
     const dup=STAFF.find(x=>x.pin===rec.pin&&x.id!==id&&x.is_active);
