@@ -748,7 +748,41 @@
       if(sel?.value){ info.textContent = '💸 نسبة الخصم لهاد الشخص: '+disc+'%'; info.classList.remove('hidden'); }
       else info.classList.add('hidden');
     }
+    if(sel?.value){
+      const emp = MEAL_NAMES_DATA.find(n=>n.name===sel.value);
+      if(emp && window.__empMealVerified !== emp.name){
+        if(emp.pin) verifyEmpMealSelectionPin(emp);
+        else toast('⚠️ "'+emp.name+'" ما إله رقم سري محفوظ — لحماية أفضل ضيفيله واحد من شاشة HR ← الموظفين');
+      }
+    } else {
+      window.__empMealVerified = null;
+    }
     renderCart();
+  }
+  // 🔒 تأكيد هوية صاحب "وجبة الموظف" بالرقم السري تبعه — يمنع حدا يطلب وجبة باسم موظف تاني بدون علمه
+  function verifyEmpMealSelectionPin(emp){
+    modal(`<h3>🔒 تأكيد الهوية</h3>
+      <div style="font-weight:800;margin-bottom:10px">اطلبي من "${esc(emp.name)}" يدخل رقمه السري بنفسه للتأكيد</div>
+      <input id="emp_meal_pin_confirm" type="password" inputmode="numeric" maxlength="6" placeholder="الرقم السري" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;font-size:1.2rem;text-align:center" onkeydown="if(event.key==='Enter')checkEmpMealPin('${emp.id}')">
+      <div id="emp_meal_pin_err" style="color:var(--red);font-weight:800;margin-top:6px"></div>
+      <div class="m-act"><button class="save" onclick="checkEmpMealPin('${emp.id}')">تأكيد ✓</button><button class="cancel" onclick="cancelEmpMealSelection()">إلغاء</button></div>`);
+    setTimeout(()=>document.getElementById('emp_meal_pin_confirm')?.focus(), 100);
+  }
+  function cancelEmpMealSelection(){
+    const sel = document.getElementById('empMealName'); if(sel) sel.value='';
+    window.__empMealVerified = null;
+    closeModal(); onEmpMealNameChange();
+  }
+  function checkEmpMealPin(empId){
+    const emp = MEAL_NAMES_DATA.find(n=>n.id===empId); if(!emp) return;
+    const val = normalizeDigits(document.getElementById('emp_meal_pin_confirm')?.value||'').trim();
+    if(val !== normalizeDigits(emp.pin||'').trim()){
+      const err = document.getElementById('emp_meal_pin_err'); if(err) err.textContent = '⛔ رقم سري غلط';
+      return;
+    }
+    window.__empMealVerified = emp.name;
+    closeModal();
+    toast('✓ تأكدت هوية '+emp.name);
   }
   function onEmpMealToggle(){
     const chk = document.getElementById('empMealChk');
@@ -3546,6 +3580,13 @@
     if(platformValSel && !perm('order_platform')){ toast('⛔ ما عندك صلاحية البيع عبر التطبيقات/المنصات'); return; }
     const empMealName = document.getElementById('empMealChk')?.checked ? (document.getElementById('empMealName')?.value.trim()||'') : '';
     if(document.getElementById('empMealChk')?.checked && !empMealName){ toast('⚠️ اكتب اسم الموظف — إجباري لوجبة الموظف'); return; }
+    if(empMealName){
+      const empRec = MEAL_NAMES_DATA.find(n=>n.name===empMealName);
+      if(empRec && empRec.pin && window.__empMealVerified !== empMealName){
+        toast('🔒 لازم تأكيد الرقم السري تبع "'+empMealName+'" أول — اختار الاسم من جديد وأدخل الرقم');
+        return;
+      }
+    }
 
     const t = totals();
     const custPhone = document.getElementById('custPhone');
@@ -5365,10 +5406,20 @@
               <button class="mini ok" onclick="assignViolationEmployee('${v.id}')">✓ تثبيت المخالف</button>
               ${v.employee_id && !v.deduction_id ? `<button class="mini del" onclick="deductFromViolation('${v.id}','${v.employee_id}','${esc(v.employee_name||'')}')">➖ تعيين خصم</button>`:''}
               ${v.status!=='resolved'?`<button class="mini ok" style="background:var(--ok)" onclick="resolveViolation('${v.id}')">✅ تم الحل</button>`:`<b style="color:var(--ok)">✅ ${v.deduction_id?'متسوّى (اتعمل خصم)':'متسوّى'}</b>`}
+              ${canDeleteRecords()?`<button class="mini del" onclick="deleteViolationRecord('${v.id}')">🗑️ حذف نهائي</button>`:''}
             </div>
           </div>
         </div>`).join('') || '<div class="empty-note">ما في مخالفات مسجّلة</div>'}`;
     }catch(e){ box.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message)}</div>`; console.error(e); }
+  }
+  async function deleteViolationRecord(id){
+    if(!canDeleteRecords()){ toast('⛔ ما عندك صلاحية الحذف النهائي'); return; }
+    if(!confirm('⚠️ حذف هاي المخالفة نهائيًا؟ (لو فيها خصم مرتبط، الخصم رح يضل موجود لحاله — احذفيه من "جدول الخصومات" لو بدك)')) return;
+    try{
+      const { error } = await db.from('violations').delete().eq('id', id);
+      if(error){ toast('✗ '+error.message); return; }
+      toast('✓ انحذفت المخالفة نهائيًا'); renderViolations();
+    }catch(e){ toast('✗ '+e.message); }
   }
   async function assignViolationEmployee(id){
     const sel = document.getElementById('vioEmpSel_'+id);
@@ -5388,27 +5439,60 @@
       const { data } = await db.from('meal_names').select('id,name').order('name');
       const emps = data||[];
       modal(`<h3>➖ خصم عن مخالفة</h3>
-        <div class="f-row"><label>الموظف</label><select id="dedEmp">${emps.map(e=>`<option value="${e.id}" ${e.id===empId?'selected':''}>${esc(e.name)}</option>`).join('')}</select></div>
-        <div class="f-row"><label>المبلغ (${CURRENCY})</label><input id="dedAmt" type="number" step="0.01" placeholder="0.00"></div>
+        <div class="f-row"><label>الموظفين المسؤولين (اختاري واحد أو أكتر — لحد 10)</label>
+          <div id="dedEmpList" style="max-height:220px;overflow-y:auto;border:1.5px solid var(--line);border-radius:10px;padding:8px 10px">
+            ${emps.map(e=>`<label style="display:flex;align-items:center;gap:8px;padding:5px 0;cursor:pointer">
+              <input type="checkbox" class="dedEmpChk" value="${e.id}" data-name="${esc(e.name)}" ${e.id===empId?'checked':''} onchange="updateDedSplitPreview()">
+              <span>${esc(e.name)}</span>
+            </label>`).join('')||'<div class="empty-note">ما في موظفين</div>'}
+          </div>
+        </div>
+        <div class="f-row"><label>المبلغ الكلي للمخالفة (${CURRENCY})</label><input id="dedAmt" type="number" step="0.01" placeholder="0.00" oninput="updateDedSplitPreview()"></div>
+        <div id="dedSplitPreview" style="font-weight:800;color:var(--maroon);margin:4px 0 10px"></div>
         <div class="f-row"><label>السبب</label><input id="dedReason" value="مخالفة: ${esc(v?.note||'')}"></div>
         <div class="f-row"><label>📸 الصور (من المخالفة)</label><div style="display:flex;flex-wrap:wrap;gap:6px">${window.__dedImgs.map(url=>`<img src="${url}" style="width:80px;height:80px;object-fit:cover;border-radius:8px">`).join('')||'<span style="color:var(--muted)">لا يوجد</span>'}</div></div>
         <div class="m-act"><button class="cancel" onclick="closeModal()">إلغاء</button><button class="save" onclick="saveDeductionFromViolation('${violationId}')">💾 حفظ الخصم</button></div>`);
+      updateDedSplitPreview();
     }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
+  function updateDedSplitPreview(){
+    const checked = [...document.querySelectorAll('.dedEmpChk:checked')];
+    const total = parseFloat(document.getElementById('dedAmt')?.value)||0;
+    const prev = document.getElementById('dedSplitPreview'); if(!prev) return;
+    if(!checked.length){ prev.textContent = '⚠️ اختاري موظف واحد على الأقل'; return; }
+    const per = total/checked.length;
+    prev.textContent = checked.length===1
+      ? `💰 المبلغ الكلي ${fmt(total)} ${CURRENCY} رح ينخصم كامل من ${checked[0].dataset.name}`
+      : `💰 ${fmt(total)} ${CURRENCY} ÷ ${checked.length} أشخاص = ${fmt(per)} ${CURRENCY} لكل واحد (${checked.map(c=>c.dataset.name).join('، ')})`;
+  }
   async function saveDeductionFromViolation(violationId){
-    const empSel = document.getElementById('dedEmp');
-    const empId = empSel?.value; const empName = empSel?.selectedOptions?.[0]?.textContent;
+    const checked = [...document.querySelectorAll('.dedEmpChk:checked')];
     const amount = parseFloat(document.getElementById('dedAmt')?.value);
     const reason = document.getElementById('dedReason')?.value?.trim();
-    if(!empId || !amount || amount<=0){ toast('⚠️ اختر الموظف والمبلغ'); return; }
+    if(!checked.length){ toast('⚠️ اختاري موظف واحد على الأقل'); return; }
+    if(checked.length>10){ toast('⚠️ أقصى عدد 10 أشخاص بالمرة الوحدة'); return; }
+    if(!amount || amount<=0){ toast('⚠️ اكتبي المبلغ الكلي'); return; }
+    if(!lockSubmit('saveDeductionFromViolation')) return;
+    setTimeout(()=>unlockSubmit('saveDeductionFromViolation'), 3000);
+    const per = amount/checked.length;
     try{
-      const { data, error } = await db.from('employee_deductions').insert({
-        employee_id: empId, employee_name: empName, amount, reason: reason||null,
-        images: window.__dedImgs||[], created_by: ME.full_name
-      }).select().single();
-      if(error){ toast('✗ '+error.message); return; }
-      await db.from('violations').update({ deduction_id: data.id, employee_id: empId, employee_name: empName, status:'resolved', resolved_at: new Date().toISOString() }).eq('id', violationId);
-      toast('✓ اتسجّل الخصم وارتبط بالمخالفة — وانحلّت المخالفة تلقائيًا'); window.__dedImgs=[]; closeModal();
+      const insertedIds = []; const names = [];
+      for(const c of checked){
+        const perReason = (reason||'') + (checked.length>1 ? ' (حصته من مخالفة جماعية — الأصل '+fmt(amount)+' '+CURRENCY+' مقسومة على '+checked.length+')' : '');
+        const { data, error } = await db.from('employee_deductions').insert({
+          employee_id: c.value, employee_name: c.dataset.name, amount: per, reason: perReason||null,
+          images: window.__dedImgs||[], created_by: ME.full_name
+        }).select().single();
+        if(error){ toast('✗ '+error.message+' — توقفت بعد '+insertedIds.length+' من '+checked.length+' — يلي اتسجلوا ما بيرجعوا تلقائيًا، احذفيهم يدويًا من جدول الخصومات لو بدك تلغي'); return; }
+        insertedIds.push(data.id); names.push(c.dataset.name);
+      }
+      await db.from('violations').update({
+        deduction_id: insertedIds[0], deduction_ids: insertedIds,
+        employee_id: checked[0].value, employee_name: names.join('، '),
+        status:'resolved', resolved_at: new Date().toISOString()
+      }).eq('id', violationId);
+      toast('✓ اتسجّل الخصم على '+checked.length+' شخص — كل واحد '+fmt(per)+' '+CURRENCY);
+      window.__dedImgs=[]; closeModal();
       renderViolations();
       if(document.getElementById('deductionsBox')) renderDeductionsLedger();
     }catch(e){ toast('✗ '+e.message); }
@@ -5497,7 +5581,25 @@
   }
   async function deleteDeduction(id){
     if(!confirm('⚠️ حذف هاد الخصم نهائيًا؟')) return;
-    try{ await db.from('employee_deductions').delete().eq('id', id); toast('✓ انحذف'); renderDeductionsLedger(); }
+    try{
+      await db.from('employee_deductions').delete().eq('id', id);
+      // 🔧 مهم: لو هاد الخصم كان جاي من مخالفة (لشخص واحد أو مقسوم على أكتر من شخص)، المخالفة الأصلية
+      // كانت تضل "متسوّى" مرتبطة بخصم محذوف فتضل عالقة نهائيًا. هلأ منفك الربط، وإذا كانت المخالفة
+      // مقسومة على أكتر من شخص، ما نفتحها من جديد إلا لما كل الحصص تتحذف (مش أول وحدة بس).
+      const { data: linked } = await db.from('violations').select('id, deduction_id, deduction_ids, status, resolved_at').or(`deduction_id.eq.${id},deduction_ids.cs.{${id}}`);
+      for(const lv of (linked||[])){
+        const remaining = (lv.deduction_ids||[]).filter(x=>x!==id);
+        const stillLinked = remaining.length>0;
+        await db.from('violations').update({
+          deduction_id: stillLinked ? remaining[0] : null,
+          deduction_ids: remaining,
+          status: stillLinked ? lv.status : 'open',
+          resolved_at: stillLinked ? lv.resolved_at : null,
+        }).eq('id', lv.id);
+      }
+      toast('✓ انحذف الخصم — وأي مخالفة مرتبطة رجعت "مفتوحة" لو ما ضل عليها خصم تاني');
+      renderDeductionsLedger();
+    }
     catch(e){ toast('✗ '+e.message); }
   }
 
@@ -9981,7 +10083,17 @@
     runEmpMealsReport();
   }
   async function mealNameForm(id){
-    const n = MEAL_NAMES_DATA.find(x=>x.id===id) || {};
+    // 🔧 مهم: ما نعتمد على MEAL_NAMES_DATA هون — هاي القائمة المخزّنة بالذاكرة بتحتوي فقط الموظفين
+    // الفعّالين (is_active=true) بمعظم أماكن استخدامها بالتطبيق. لو الموظف معطّل حاليًا وفتحتي فورمه
+    // للتعديل (مثلًا عشان تفعّليه من جديد)، كان n بيطلع {} فاضي — فسعر الساعة والرصيد السابق يطلعوا
+    // فاضيين بالفورم، ولو حفظتي بدون ما تنتبهي، بيتصفّروا نهائيًا بقاعدة البيانات! هلأ منجيب بيانات
+    // الموظف الحقيقية مباشرة من قاعدة البيانات دايمًا، بغض النظر عن حالة التفعيل.
+    let n = {};
+    if(id){
+      const { data, error } = await db.from('meal_names').select('*').eq('id', id).maybeSingle();
+      if(error){ toast('✗ فشل جلب بيانات الموظف: '+error.message); return; }
+      n = data || {};
+    }
     let locSection = '';
     if(id){
       try{
@@ -12918,6 +13030,7 @@ try {
 
         <button onclick="loadEmpPortal()" style="width:100%;background:#7b2cbf;color:#fff;border:none;border-radius:12px;padding:10px;font-weight:900;margin-bottom:10px;cursor:pointer">🔄 تحديث</button>
         <button onclick="empRequestAdvanceForm()" style="width:100%;background:var(--warn);color:#fff;border:none;border-radius:12px;padding:12px;font-weight:900;margin-bottom:14px;cursor:pointer">🧾 طلب سلفة</button>
+        <button onclick="empShowRecipes()" style="width:100%;background:#0d6efd;color:#fff;border:none;border-radius:12px;padding:12px;font-weight:900;margin-bottom:14px;cursor:pointer">📋 وصفات التحضير</button>
 
         ${adv&&adv.length?`<div style="background:#fff;border-radius:12px;padding:12px;margin-bottom:14px">
           <div style="font-weight:900;color:var(--maroon);margin-bottom:6px">📜 كل سلفي (تفصيل كامل)</div>
@@ -13098,6 +13211,34 @@ try {
     const net = gross - advOutstanding - mealsTotal - shiftDed - deductionsTotal + rewardsTotal + parseFloat(openingBalance||0);
     const maxAllowed = Math.max(0, net * ((maxAdvPercent||30)/100));
     return { net, maxAllowed };
+  }
+  async function empShowRecipes(){
+    modal('<h3>📋 وصفات التحضير</h3><div id="empRecipesBody" class="empty-note">... جاري التحميل</div>');
+    // 🔒 عمدًا ما بنجيب unit_cost ولا أي سعر — الموظف بس بدو يشوف المكونات وطريقة العمل
+    const { data, error } = await db.from('recipes').select('id, prep_method, menu_items(name_ar), recipe_items(quantity, ingredients(name,unit))').order('created_at',{ascending:false});
+    const body = document.getElementById('empRecipesBody'); if(!body) return;
+    if(error){ body.innerHTML = '<div class="alert-red">⚠️ '+esc(error.message)+'</div>'; return; }
+    const recipes = (data||[]).filter(r=>r.menu_items?.name_ar);
+    window.__EMP_RECIPES = recipes;
+    body.innerHTML = `
+      <input id="emp_recipe_search" placeholder="🔍 بحث عن صنف..." oninput="filterEmpRecipes(this.value)" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:9px 12px;margin-bottom:10px;font-weight:700">
+      <div id="emp_recipe_list">${recipes.map((r,idx)=>`
+        <div class="emp_recipe_row" data-name="${esc((r.menu_items?.name_ar||'').toLowerCase())}" style="border:1.5px solid var(--line);border-radius:10px;padding:10px;margin-bottom:8px;cursor:pointer" onclick="empToggleRecipe(${idx})">
+          <b>${esc(r.menu_items?.name_ar||'—')}</b>
+          <div id="emp_recipe_detail_${idx}" class="hidden" style="margin-top:8px;font-size:.85rem">
+            <div style="font-weight:800;color:var(--maroon);margin-bottom:4px">المكونات:</div>
+            ${(r.recipe_items||[]).map(i=>`• ${i.quantity} ${esc(i.ingredients?.unit||'')} ${esc(i.ingredients?.name||'—')}`).join('<br>')||'—'}
+            ${r.prep_method?`<div style="font-weight:800;color:var(--maroon);margin:8px 0 4px">طريقة التحضير:</div><div style="white-space:pre-line">${esc(r.prep_method)}</div>`:''}
+          </div>
+        </div>`).join('') || '<div class="empty-note">ما في وصفات محفوظة بعد</div>'}
+      </div>`;
+  }
+  function filterEmpRecipes(q){
+    q=(q||'').trim().toLowerCase();
+    document.querySelectorAll('.emp_recipe_row').forEach(el=>{ el.style.display = !q || (el.dataset.name||'').includes(q) ? '' : 'none'; });
+  }
+  function empToggleRecipe(idx){
+    document.getElementById('emp_recipe_detail_'+idx)?.classList.toggle('hidden');
   }
   async function empRequestAdvanceForm(){
     modal(`<h3>🧾 طلب سلفة</h3><div id="epaLimitInfo" class="empty-note">... جاري الحساب</div>
