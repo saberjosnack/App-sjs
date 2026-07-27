@@ -4192,10 +4192,18 @@
       </div>
       <div class="m-act">
         <button class="cancel" onclick="closeModal()">إغلاق</button>
+        ${o.customers?.phone?`<button class="mini ok" style="background:#25D366" onclick="sendFeedbackRequest('${esc(o.customers?.name||'')}','${esc(o.customers.phone)}')">📩 اطلب فيدباك من العميل</button>`:''}
         <button class="mini ok" style="background:#0d6efd" onclick="rateOrderSatisfactionSel('${o.id}',${o.order_number},'positive')">😊 عميل راضي (+3 نقاط)</button>
         <button class="mini" onclick="rateOrderSatisfactionSel('${o.id}',${o.order_number},'negative')">😐 مو راضي</button>
         <button class="mini del" onclick="complaintForm('${o.id}','${esc(o.order_number)}','${o.branch_id||''}','${esc(o.branches?.name_ar||'')}','${o.created_by||''}','${esc(o.created_by_name||'')}')">😠 تسجيل شكوى عميل</button>
       </div>`);
+  }
+  function sendFeedbackRequest(custName, custPhone){
+    const template = SETTINGS.feedback_msg_template || 'مرحبا، شو رأيك بطلبك الأخير من صابر جو سناك؟ رأيك بهمنا كتير وبساعدنا نتحسن 🙏';
+    const msg = template.replace(/\[الاسم\]/g, custName||'');
+    let phone = (custPhone||'').replace(/\D/g,'');
+    if(phone.startsWith('0')) phone = '962'+phone.slice(1);
+    window.open(`https://wa.me/${phone}?text=${encodeURIComponent(msg)}`, '_blank');
   }
   function rateOrderSatisfactionSel(orderId, orderNumber, rating){
     const sel = document.getElementById('ratingEmpSel_'+orderId);
@@ -10796,9 +10804,11 @@ window.__lastEmpMealsData = null;
       C.innerHTML = `
         <div style="color:var(--muted);font-weight:700;font-size:.85rem;margin-bottom:10px">مرتبين حسب عدد الطلبات — استخدم الفلتر لترتيب حسب التقييم بدل هيك.</div>
         <input id="topCustSearch" placeholder="🔍 بحث بالاسم / الهاتف / العنوان (بكل العملاء مش بس أفضل 100)" oninput="searchTopCust(this.value)" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:10px">
-        <div style="display:flex;gap:8px;margin-bottom:12px">
+        <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
           <button class="mini ok" onclick="sortTopCust('orders')">🔢 الأكثر طلبات</button>
           <button class="mini edit" onclick="sortTopCust('rating')">⭐ الأفضل تقييم</button>
+          <button class="mini ok" style="background:#0d6efd" onclick="filterTodayCustomers()">📅 عملاء اليوم بس (وحددهم للإرسال)</button>
+          <button class="mini" onclick="TOP_CUST_DATA=TOP_CUST_ALL.slice(0,100);document.getElementById('topCustTableWrap').innerHTML=renderTopCustRows(TOP_CUST_DATA)">↩️ إلغاء الفلتر</button>
         </div>
         <div id="topCustTableWrap">${renderTopCustRows(TOP_CUST_DATA)}</div>
         <div id="topCustBulkBar" class="hidden" style="margin-top:10px;background:#e6f7ec;border:1.5px solid var(--ok);border-radius:10px;padding:8px 12px">
@@ -10811,7 +10821,7 @@ window.__lastEmpMealsData = null;
     return `<div class="tbl-wrap"><table class="tbl">
       <tr><th></th><th>الاسم</th><th>الهاتف</th><th>العنوان</th><th>عدد الطلبات</th><th>متوسط التقييم</th><th></th></tr>
       ${list.map(c=>`<tr>
-        <td><input type="checkbox" onchange="toggleCustSelect('${c.id}',this.checked);updateCustBulkBarTop()" style="width:18px;height:18px"></td>
+        <td><input type="checkbox" ${CUST_SELECTED.has(c.id)?'checked':''} onchange="toggleCustSelect('${c.id}',this.checked);updateCustBulkBarTop()" style="width:18px;height:18px"></td>
         <td><b>${c.flagged?'🚩 ':''}${esc(c.name)}</b></td>
         <td dir="ltr" style="text-align:right">${esc(c.phone)}</td>
         <td style="font-size:.82rem;color:var(--muted)">${esc(c.address||'—')}</td>
@@ -10820,6 +10830,23 @@ window.__lastEmpMealsData = null;
         <td><button class="mini ok" onclick="sendVipMessage('${c.id}')">🎁 رسالة VIP</button></td>
       </tr>`).join('')||'<tr><td colspan="7" class="empty-note">ما في نتائج</td></tr>'}
     </table></div>`;
+  }
+  async function filterTodayCustomers(){
+    try{
+      const fd = getFinancialDay();
+      const { data, error } = await db.from('orders').select('customer_id').gte('created_at', fd.from).lte('created_at', fd.to).not('customer_id','is',null).neq('status','cancelled');
+      if(error){ toast('✗ '+error.message); return; }
+      const todayIds = new Set((data||[]).map(o=>o.customer_id));
+      if(!todayIds.size){ toast('⚠️ ما في عملاء طلبوا اليوم لسا'); return; }
+      const todayList = TOP_CUST_ALL.filter(c=>todayIds.has(c.id));
+      TOP_CUST_DATA = todayList;
+      CUST_SELECTED.clear();
+      todayList.forEach(c=>CUST_SELECTED.add(c.id));
+      const wrap = document.getElementById('topCustTableWrap');
+      if(wrap) wrap.innerHTML = renderTopCustRows(todayList);
+      updateCustBulkBarTop();
+      toast('✓ اتحدد '+todayList.length+' عميل طلبوا اليوم — جاهزين للإرسال الجماعي');
+    }catch(e){ toast('✗ '+e.message); }
   }
   function searchTopCust(q){
     const wrap = document.getElementById('topCustTableWrap'); if(!wrap) return;
