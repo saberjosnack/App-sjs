@@ -4152,6 +4152,14 @@
   async function showOrderDetail(id){
     if(isAdmin() && !STAFF.length){ const {data} = await db.from('staff').select('id, full_name, role').order('full_name'); STAFF = data||[]; }
     const o = DAY.find(x=>x.id===id); if(!o) return;
+    // 🔧 مهم: لو الطلب هاد أصلًا اتقيّم وانحدد/انتقل لموظف تاني من شاشة "نقاط رضا العملاء"،
+    // لازم القائمة هون تعكس آخر تحديد فعلي (مش ترجع دايمًا لاسم الكاشير الأصلي يلي عمل البيع)
+    let existingRating = null;
+    if(isAdmin()){
+      const { data: rdata } = await db.from('employee_ratings').select('*').eq('order_id', id).order('created_at',{ascending:false}).limit(1).maybeSingle();
+      existingRating = rdata||null;
+    }
+    const currentAssignedId = existingRating?.employee_id || o.created_by;
     const statusLbl = o.status==='new' ? '🆕 جديد' : o.status==='preparing' ? '🔥 قيد التحضير' : o.status==='ready' ? '📦 جاهز' : (o.status==='delivered' ? '✅ منجز' : '❌ ملغي');
     modal(`<h3>تفاصيل الطلب #${o.order_number}</h3>
       <div class="tbl-wrap"><table class="tbl">
@@ -4186,8 +4194,9 @@
         <label style="font-weight:800;font-size:.85rem">👤 الموظف المسؤول عن الطلب (تعديل — للمالك بس)</label>
         <select id="ratingEmpSel_${o.id}" style="width:100%;margin-top:4px">
           <option value="">— بدون تحديد —</option>
-          ${STAFF.map(s=>`<option value="${s.id}" data-name="${esc(s.full_name)}" ${s.id===o.created_by?'selected':''}>${esc(s.full_name)}</option>`).join('')}
+          ${STAFF.map(s=>`<option value="${s.id}" data-name="${esc(s.full_name)}" ${s.id===currentAssignedId?'selected':''}>${esc(s.full_name)}</option>`).join('')}
         </select>
+        ${existingRating?`<div style="font-size:.76rem;color:var(--muted);font-weight:600;margin-top:4px">✓ الطلب هاد اتقيّم أصلًا: ${existingRating.rating==='positive'?'😊 راضي':'😐 مو راضي'} — أي تقييم جديد بيضيفلها تقييم إضافي، مش يبدّلها</div>`:''}
       </div>` : `
       <div style="background:#f3f3f3;border-radius:10px;padding:10px 12px;margin-top:10px">
         <span style="font-weight:800;font-size:.85rem">👤 الموظف المسؤول: </span><b>${esc(o.created_by_name||'—')}</b>
@@ -4196,8 +4205,8 @@
       <div class="m-act">
         <button class="cancel" onclick="closeModal()">إغلاق</button>
         ${o.customers?.phone?`<button class="mini ok" style="background:#25D366" onclick="sendFeedbackRequest('${esc(o.customers?.name||'')}','${esc(o.customers.phone)}')">📩 اطلب فيدباك من العميل</button>`:''}
-        <button class="mini ok" style="background:#0d6efd" onclick="rateOrderSatisfactionSel('${o.id}',${o.order_number},'${o.created_by||''}','${esc(o.created_by_name||'')}','positive')">😊 عميل راضي (+3 نقاط)</button>
-        <button class="mini" onclick="rateOrderSatisfactionSel('${o.id}',${o.order_number},'${o.created_by||''}','${esc(o.created_by_name||'')}','negative')">😐 مو راضي</button>
+        <button class="mini ok" style="background:#0d6efd" onclick="rateOrderSatisfactionSel('${o.id}',${o.order_number},'${currentAssignedId||''}','${esc(existingRating?.employee_name||o.created_by_name||'')}','positive')">😊 عميل راضي (+3 نقاط)</button>
+        <button class="mini" onclick="rateOrderSatisfactionSel('${o.id}',${o.order_number},'${currentAssignedId||''}','${esc(existingRating?.employee_name||o.created_by_name||'')}','negative')">😐 مو راضي</button>
         <button class="mini del" onclick="complaintForm('${o.id}','${esc(o.order_number)}','${o.branch_id||''}','${esc(o.branches?.name_ar||'')}','${o.created_by||''}','${esc(o.created_by_name||'')}')">😠 تسجيل شكوى عميل</button>
       </div>`);
   }
