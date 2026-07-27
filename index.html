@@ -621,6 +621,7 @@
         <button data-a="violations" onclick="admTab('violations')" style="background:#ffcccc;border-color:#8b0000">🚩 المخالفات</button>
         <button data-a="deductions" onclick="admTab('deductions')" style="background:#ffe0e0;border-color:#c0392b">➖ جدول الخصومات</button>
         <button data-a="rewards" onclick="admTab('rewards')" style="background:#d4f7d4;border-color:#1a9c4b">🎁 جدول المكافآت</button>
+        <button data-a="satisfaction" onclick="admTab('satisfaction')" style="background:#fff0f5;border-color:#e91e8c">⭐ نقاط رضا العملاء</button>
         <button data-a="activityLog" onclick="admTab('activityLog')" style="background:#2b2b2b;color:#fff;border-color:#000">📜 سجل الأحداث</button>
         <button data-a="sett" onclick="admTab('sett')">🔧 إعدادات</button>
         <button data-a="shifts" onclick="admTab('shifts')">🔄 شيفتات</button>
@@ -1197,6 +1198,7 @@
       tab_dailyAudits: 'جرد الفرع اليومي',
       tab_activityLog: 'سجل الأحداث (حساس — انتبهي قبل ما تعطيها لغير المالك)',
       tab_manufacturing: 'التصنيع',
+      tab_satisfaction: 'نقاط رضا العملاء',
     },
     '🔓 صلاحيات إدارية دقيقة (بدائل قابلة للاختيار لوحدها)': {
       fin_approvals: 'الموافقات المالية (مصاريف، تسوية مشتريات، دفعات موردين، خصم يدوي حر، الخزينة)',
@@ -3967,9 +3969,23 @@
       <div class="trow total"><span>الإجمالي</span><span>${fmt(o.total)} ${CURRENCY}</span></div>
       <div class="m-act">
         <button class="save" onclick="reprintDay('${o.id}');closeModal()">🖨️ طباعة</button>
+        <button class="mini ok" style="background:#0d6efd" onclick="rateOrderSatisfaction('${o.id}',${o.order_number},'${o.created_by||''}','${esc(o.created_by_name||'')}','positive')">😊 عميل راضي (+3 نقاط)</button>
+        <button class="mini" onclick="rateOrderSatisfaction('${o.id}',${o.order_number},'${o.created_by||''}','${esc(o.created_by_name||'')}','negative')">😐 مو راضي</button>
         <button class="mini del" onclick="complaintForm('${o.id}','${esc(o.order_number)}','${o.branch_id||''}','${esc(o.branches?.name_ar||'')}','${o.created_by||''}','${esc(o.created_by_name||'')}')">😠 تسجيل شكوى عميل</button>
         <button class="cancel" onclick="closeModal()">إغلاق</button>
       </div>`);
+  }
+  async function rateOrderSatisfaction(orderId, orderNumber, empId, empName, rating){
+    if(!empId){ toast('⚠️ هاد الطلب ما إله موظف مرتبط بيتسجّل عليه التقييم'); return; }
+    try{
+      const { error } = await db.from('employee_ratings').insert({
+        order_id: orderId, order_number: orderNumber, employee_id: empId, employee_name: empName,
+        rating, points: rating==='positive'?3:0, created_by: ME.full_name
+      });
+      if(error){ toast('✗ '+error.message); return; }
+      toast(rating==='positive' ? '✓ سجّلت! +3 نقاط لـ'+empName : '✓ اتسجّل التقييم');
+      closeModal();
+    }catch(e){ toast('✗ '+e.message); }
   }
 
   function setDayFilter(mode){
@@ -5116,7 +5132,7 @@
     items:'items_manage', cats:'cats_manage', codes:'codes_manage', staff:'staff_manage', roles:'admin_only', branches:'branches_manage', sett:'settings_manage', devices:'devices_manage',
     ingredients:'inventory_view', recipes:'inventory_view',
     inventory:'inventory_audit', transfers:'inventory_transfer', warehouse:'tab_warehouse', treasury:'tab_treasury', hr:'tab_hr', chats:'tab_chats', dailyAudits:'tab_dailyAudits', hrLocations:'tab_hrLocations', dutyHours:'tab_dutyHours', hrClosures:'tab_hrClosures', ordersScreen:'tab_ordersScreen',
-    complaints:'tab_complaints', violations:'tab_violations', deductions:'tab_deductions', rewards:'tab_rewards', activityLog:'tab_activityLog', manufacturing:'tab_manufacturing',
+    complaints:'tab_complaints', violations:'tab_violations', deductions:'tab_deductions', rewards:'tab_rewards', activityLog:'tab_activityLog', manufacturing:'tab_manufacturing', satisfaction:'tab_satisfaction',
     expenses:'expenses_view', purchases:'purchases_view',
     platforms:'platforms_view', empmeals:'empmeals_view', topcust:'topcust_view', waste:'waste_log', suppliers:'purchases_view',
   };
@@ -5201,6 +5217,7 @@
     if(admView==='hrClosures'){ renderHrMonthClosures(); return; }
     if(admView==='activityLog'){ renderActivityLog(); return; }
     if(admView==='manufacturing'){ renderManufacturing(); return; }
+    if(admView==='satisfaction'){ renderSatisfaction(); return; }
     if(admView==='ordersScreen'){ renderOrdersScreen(); return; }
     if(admView==='platforms'){ renderPlatforms(); return; }
     if(admView==='devices'){ renderDevices(); return; }
@@ -5735,6 +5752,73 @@
     catch(e){ toast('✗ '+e.message); }
   }
 
+  /* ---- ⭐ نقاط رضا العملاء ---- */
+  const POINTS_PER_RATING = 3;
+  const POINTS_PER_REDEMPTION = 140;
+  const REDEMPTION_VALUE = 10; // د.أ لكل 140 نقطة
+  async function renderSatisfaction(){
+    const C = document.getElementById('admContent');
+    C.innerHTML = '<div class="empty-note">... جاري التحميل</div>';
+    try{
+      const [ratingsRes, redemptionsRes] = await Promise.all([
+        db.from('employee_ratings').select('*').order('created_at',{ascending:false}),
+        db.from('point_redemptions').select('*').order('created_at',{ascending:false}),
+      ]);
+      if(ratingsRes.error){ C.innerHTML = `<div class="alert-red">⚠️ ${esc(ratingsRes.error.message||'الجدول employee_ratings غير موجود — نفّذ SQL أولاً')}</div>`; return; }
+      const ratings = ratingsRes.data||[];
+      const redemptions = redemptionsRes.data||[];
+      const byEmp = {};
+      ratings.forEach(r=>{
+        if(!byEmp[r.employee_id]) byEmp[r.employee_id] = { name:r.employee_name, positive:0, negative:0, points:0 };
+        if(r.rating==='positive'){ byEmp[r.employee_id].positive++; byEmp[r.employee_id].points += (r.points||POINTS_PER_RATING); }
+        else byEmp[r.employee_id].negative++;
+      });
+      const redeemedByEmp = {};
+      redemptions.forEach(r=>{ redeemedByEmp[r.employee_id] = (redeemedByEmp[r.employee_id]||0) + r.points_used; });
+      const rows = Object.entries(byEmp).map(([empId, v])=>{
+        const total = v.positive + v.negative;
+        const satisfactionPct = total>0 ? Math.round(v.positive/total*100) : 0;
+        const redeemed = redeemedByEmp[empId]||0;
+        const available = v.points - redeemed;
+        return { empId, ...v, total, satisfactionPct, redeemed, available };
+      }).sort((a,b)=>b.available-a.available);
+      C.innerHTML = `
+        <div class="panel" style="margin-bottom:14px">
+          <h3>⭐ نقاط رضا العملاء</h3>
+          <div style="font-size:.85rem;color:var(--muted);font-weight:700;margin-top:6px">كل تقييم "عميل راضي" = ${POINTS_PER_RATING} نقاط. كل ${POINTS_PER_REDEMPTION} نقطة = ${REDEMPTION_VALUE} ${CURRENCY} (بتنضاف تلقائيًا لجدول المكافآت عند الاستبدال).</div>
+        </div>
+        <div class="tbl-wrap"><table class="tbl">
+          <tr><th>الموظف</th><th>راضي 😊</th><th>مو راضي 😐</th><th>نسبة الرضا</th><th>مجموع النقاط</th><th>مستبدلة</th><th>متاحة</th><th></th></tr>
+          ${rows.map(r=>`<tr>
+            <td><b>${esc(r.name)}</b></td>
+            <td style="color:var(--ok)">${r.positive}</td>
+            <td style="color:var(--muted)">${r.negative}</td>
+            <td><b style="color:${r.satisfactionPct>=80?'var(--ok)':r.satisfactionPct>=50?'var(--warn)':'var(--red)'}">${r.satisfactionPct}%</b></td>
+            <td>${r.points}</td>
+            <td>${r.redeemed}</td>
+            <td><b style="color:var(--maroon)">${r.available}</b></td>
+            <td>${r.available>=POINTS_PER_REDEMPTION?`<button class="mini ok" style="background:var(--maroon)" onclick="redeemPoints('${r.empId}','${esc(r.name)}')">🎁 استبدال ${POINTS_PER_REDEMPTION} نقطة = ${REDEMPTION_VALUE} ${CURRENCY}</button>`:`<span style="color:var(--muted);font-size:.78rem">محتاج ${POINTS_PER_REDEMPTION-r.available} نقطة كمان</span>`}</td>
+          </tr>`).join('')||'<tr><td colspan="8" class="empty-note">ما في تقييمات مسجّلة بعد</td></tr>'}
+        </table></div>`;
+    }catch(e){ C.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
+  }
+  async function redeemPoints(empId, empName){
+    if(!confirm('استبدال '+POINTS_PER_REDEMPTION+' نقطة بمبلغ '+REDEMPTION_VALUE+' '+CURRENCY+' لـ"'+empName+'"؟ رح تنضاف تلقائيًا لجدول المكافآت.')) return;
+    try{
+      const { error: e1 } = await db.from('point_redemptions').insert({
+        employee_id: empId, employee_name: empName, points_used: POINTS_PER_REDEMPTION, reward_amount: REDEMPTION_VALUE, created_by: ME.full_name
+      });
+      if(e1){ toast('✗ '+e1.message); return; }
+      const { error: e2 } = await db.from('employee_rewards').insert({
+        employee_id: empId, employee_name: empName, amount: REDEMPTION_VALUE,
+        reason: 'استبدال '+POINTS_PER_REDEMPTION+' نقطة رضا عملاء', created_by: ME.full_name
+      });
+      if(e2){ toast('⚠️ اتسجّل الاستبدال بس فشلت إضافة المكافأة: '+e2.message); renderSatisfaction(); return; }
+      await logActivity('redeem_points', 'استبدال نقاط رضا لـ'+empName+' — '+REDEMPTION_VALUE+' '+CURRENCY);
+      toast('✓ اتحوّلت النقاط لمكافأة '+REDEMPTION_VALUE+' '+CURRENCY);
+      renderSatisfaction();
+    }catch(e){ toast('✗ '+e.message); }
+  }
   /* ---- جدول المكافآت ---- */
   async function renderRewardsLedger(){
     const box = document.getElementById('rewardsBox'); if(!box) return;
