@@ -1059,6 +1059,7 @@
           ME = data.staff;
           sessionStorage.setItem('sjs_me', JSON.stringify(ME));
           enterApp();
+          logActivity('login', 'تسجيل دخول');
 
           setTimeout(() => {
               if (!currentShift) {
@@ -1182,7 +1183,10 @@
   /* ================= الأدوار المخصصة (يعملها المالك) ================= */
   let CUSTOM_ROLES = [];
   async function loadCustomRoles(){
-    const {data} = await db.from('roles').select('*').order('created_at');
+    const {data, error} = await db.from('roles').select('*').order('created_at');
+    // 🔧 مهم: لو صار خطأ شبكة مؤقت (نت ضعيف مثلًا)، ما لازم نمسح الصلاحيات المحفوظة سابقًا بالذاكرة —
+    // كانت هاي بالضبط سبب "الموظف بيفقد صلاحياته بعد تحديث الصفحة لحد ما يسجّل خروج ودخول من جديد".
+    if(error){ console.error('loadCustomRoles failed, keeping previous CUSTOM_ROLES:', error); return CUSTOM_ROLES; }
     CUSTOM_ROLES = data||[];
     return CUSTOM_ROLES;
   }
@@ -1485,8 +1489,9 @@
     shiftCheckInterval = setInterval(checkShift, 30000);
   }
 
-  window.logout = function(){
+  window.logout = async function(){
     if (shiftCheckInterval) clearInterval(shiftCheckInterval);
+    if(ME) try{ await logActivity('logout', 'تسجيل خروج'); }catch(e){}
     sessionStorage.removeItem('sjs_me');
     location.reload();
   };
@@ -4453,6 +4458,7 @@
     try {
       const r = id ? await db.from('customers').update(rec).eq('id',id) : await db.from('customers').insert(rec);
       if(r.error){ toast(r.error.code==='23505'?'⚠️ رقم الهاتف مسجل':'✗ فشل'); return; }
+      await logActivity(id?'edit_customer':'add_customer', (id?'تعديل عميل: ':'إضافة عميل: ')+rec.name);
       closeModal(); toast('✓ انحفظ'); loadCustomers();
     } catch(e) { console.error(e); }
   }
@@ -4556,8 +4562,14 @@
     const p = __drPicker;
     if(!p.start){ toast('⚠️ اختر تاريخ أول'); return; }
     const start = p.start, end = p.end||p.start;
-    const fromIso = new Date(start.getFullYear(),start.getMonth(),start.getDate(),0,0,0).toISOString();
-    const toIso = new Date(end.getFullYear(),end.getMonth(),end.getDate(),23,59,59).toISOString();
+    // 🔧 إصلاح: كان يحسب من منتصف الليل لمنتصف الليل (00:00 → 23:59) بغض النظر عن إعداد "اليوم المالي"
+    // (مثلاً 10ص → 3ف)، فكان يسحب معه آخر ساعات أمس (00:00-3ص يلي هي فعليًا جزء من يوم أمس المالي)
+    // ويقطع آخر ساعات اليوم الحالي (بعد نص الليل لغاية 3ف يلي هي فعليًا جزء من اليوم المختار).
+    // هلأ منحسب زي getFinancialDay تمامًا: من بداية اليوم الأول الساعة FIN_START_H، لنهاية اليوم الأخير + يوم الساعة FIN_END_H.
+    const from = new Date(start.getFullYear(),start.getMonth(),start.getDate()); from.setHours(FIN_START_H,0,0,0);
+    const to = new Date(end.getFullYear(),end.getMonth(),end.getDate()+1); to.setHours(FIN_END_H,0,0,0);
+    const fromIso = from.toISOString();
+    const toIso = to.toISOString();
     const label = start.toDateString()===end.toDateString() ? fmtDrDate(start) : (fmtDrDate(start)+' → '+fmtDrDate(end));
     if(p.scope==='sales'){
       _curFrom=fromIso; _curTo=toIso;
@@ -11910,6 +11922,7 @@ try {
       const r=id?await db.from('staff').update(rec).eq('id',id):await db.from('staff').insert(rec);
       if(r.error){ console.error('saveStaff error:', r.error); toast(r.error.code==='23505'?'⚠️ اسم المستخدم مكرر':'✗ فشل الحفظ: '+(r.error.message||r.error.code||'خطأ غير معروف')); return; }
       if(id&&id===ME.id){ ME={...ME,...rec}; sessionStorage.setItem('sjs_me',JSON.stringify(ME)); }
+      await logActivity(id?'edit_staff':'add_staff', (id?'تعديل موظف: ':'إضافة موظف: ')+rec.full_name+' — الدور: '+(rec.role==='custom'?'مخصص':rec.role));
       closeModal(); toast('✓ انحفظ'); renderAdmin();
     } catch(e) { console.error(e); }
   }
@@ -12100,9 +12113,13 @@ try {
   function getFinancialDay(offsetDays=0){
     // يرجع {from, to} لليوم المالي (اليوم أو offsetDays للأمس وما قبل)
     const now = new Date();
-    // إذا الساعة الحالية < 3ص، اليوم المالي بدأ بالأمس
-    const baseDate = new Date(now);
-    if(now.getHours() < FIN_END_H) baseDate.setDate(baseDate.getDate()-1);
+    // 🔧 إصلاح: بدل ما نقارن رقم الساعة الحالية بـFIN_END_H بس (كان بيسيب فجوة غلط بين وقت الإغلاق ووقت الفتح،
+    // مثلًا 3ص–10ص — بيصير "from" بالمستقبل وين اليوم المالي لسا ما بلّش فعليًا)، منقارن الوقت الحالي مباشرة
+    // مع لحظة بداية اليوم المالي الحقيقية (اليوم الساعة FIN_START_H). لو لسا ما وصلنا هاي اللحظة، يعني
+    // إحنا لسا ضمن اليوم المالي يلي بلّش أمس (سواء بعد نص الليل أو حتى بفترة الإغلاق قبل الفتح).
+    const baseDate = new Date(now); baseDate.setHours(0,0,0,0);
+    const todayFinStart = new Date(baseDate); todayFinStart.setHours(FIN_START_H,0,0,0);
+    if(now.getTime() < todayFinStart.getTime()) baseDate.setDate(baseDate.getDate()-1);
     baseDate.setDate(baseDate.getDate() - offsetDays);
     const from = new Date(baseDate);
     from.setHours(FIN_START_H,0,0,0);
