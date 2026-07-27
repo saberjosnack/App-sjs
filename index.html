@@ -6374,6 +6374,19 @@
     const qty = qtyField ? (parseFloat(qtyField.value)||r.output_quantity) : (qtyOverride||r.output_quantity);
     const scale = r.output_quantity>0 ? qty/r.output_quantity : 1;
     const branchName = BRANCHES.find(b=>b.id===document.getElementById('mfg_run_branch')?.value)?.name_ar || '';
+    // نص عادي (32 حرف بالسطر) — نفس مقاس فواتير الطابعة الحرارية، تمشي بنفس مسار الطباعة الحقيقي (بلوتوث/شبكة/RawBT)
+    let text = '═'.repeat(32) + '\n';
+    text += '  🏭 ورقة إنتاج \n';
+    text += '═'.repeat(32) + '\n';
+    text += `${r.name}\n`;
+    if(branchName) text += `الفرع: ${branchName}\n`;
+    text += `${new Date().toLocaleString('ar-JO')}\n`;
+    text += '─'.repeat(32) + '\n';
+    text += `الكمية: ${qty} ${r.ingredients?.unit||''} من ${r.ingredients?.name||'—'}\n`;
+    text += '─'.repeat(32) + '\n';
+    text += 'المواد الخام المطلوبة:\n';
+    items.forEach(i=>{ text += `${(i.quantity*scale).toFixed(2)} ${i.ingredients?.unit||''} — ${i.ingredients?.name||'—'}\n`; });
+    text += '═'.repeat(32) + '\n';
     const html = `<html dir="rtl"><head><meta charset="UTF-8"><style>
       body{font-family:Cairo,Arial;padding:24px;color:#241414}
       h2{text-align:center;color:#4a1010;margin-bottom:4px} .sub{text-align:center;color:#8a7a72;font-weight:700;margin-bottom:20px}
@@ -6390,8 +6403,7 @@
       ${items.map(i=>`<tr><td>${esc(i.ingredients?.name||'—')}</td><td>${(i.quantity*scale).toFixed(2)} ${esc(i.ingredients?.unit||'')}</td></tr>`).join('')}
       </table>
       </body></html>`;
-    const win = window.open('','_blank');
-    win.document.write(html); win.document.close();
+    printRaw(text, html); // 🖨️ نفس مسار طباعة الفواتير الحقيقي (بلوتوث/شبكة/RawBT) بدل ما يفتح تبويب متصفح بس
   }
   function updateMfgRunPreview(recipeId){
     const r = MFG_RECIPES.find(x=>x.id===recipeId); if(!r) return;
@@ -6444,7 +6456,8 @@
         items: scaledItems, notes: note||null, created_by: ME.full_name
       });
       await logActivity('manufacturing_run', 'تصنيع '+qty+' من "'+(r.ingredients?.name||r.name)+'" — تكلفة '+fmt(finalCost));
-      closeModal(); toast('✓ اتنفّذ التصنيع وتحدّث المخزون'); renderManufacturing();
+      printMfgSheet(recipeId); // 🖨️ طباعة تلقائية فور التنفيذ — زي ما بتطبع الفاتورة تلقائيًا وقت البيع
+      closeModal(); toast('✓ اتنفّذ التصنيع وتحدّث المخزون وطلعت ورقة الإنتاج للطباعة'); renderManufacturing();
     }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
 
