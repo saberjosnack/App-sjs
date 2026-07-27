@@ -9016,6 +9016,19 @@
     const t = localTodayStr();
     return t.split('-').slice(0,2).join('-')+'-01';
   }
+  // ☕ لو الموظف خد بريكات أكتر من 60 دقيقة بنفس اليوم (مهما كان السبب)، الزيادة تُخصم من ساعات دوامه المحسوبة
+  function calcBreakExcessHours(breaks){
+    const byDay = {};
+    (breaks||[]).forEach(b=>{
+      if(!b.ended_at) return;
+      const day = new Date(b.started_at).toLocaleDateString('en-CA'); // YYYY-MM-DD محلي
+      const mins = (new Date(b.ended_at)-new Date(b.started_at))/60000;
+      byDay[day] = (byDay[day]||0) + mins;
+    });
+    let excessMin = 0;
+    Object.values(byDay).forEach(mins=>{ if(mins>60) excessMin += (mins-60); });
+    return excessMin/60;
+  }
   async function renderHR(){
     const C = document.getElementById('admContent');
     C.innerHTML = '<div class="empty-note">... جاري التحميل</div>';
@@ -9023,7 +9036,7 @@
       HR_FILTER.from = localMonthStartStr();
       HR_FILTER.to = localTodayStr();
     }
-    const [empRes, attRes, advRes, ordRes, shiftAdjRes, tlRes, dedRes, rwdRes] = await Promise.all([
+    const [empRes, attRes, advRes, ordRes, shiftAdjRes, tlRes, dedRes, rwdRes, brRes] = await Promise.all([
       db.from('meal_names').select('*').order('name'), // 🔧 كل الموظفين (فعّال وغير فعّال) — كانوا يستبعدوا الغير فعّالين من الأساس فما كانوا يظهروا أبدًا حتى للتفعيل
       db.from('hr_attendance').select('employee_id, work_date, hours')
         .gte('work_date', HR_FILTER.from).lte('work_date', HR_FILTER.to),
@@ -9042,6 +9055,8 @@
         .gte('created_at', localDayStart(HR_FILTER.from)).lte('created_at', localDayEnd(HR_FILTER.to)),
       db.from('employee_rewards').select('employee_id, amount, reason, created_at')
         .gte('created_at', localDayStart(HR_FILTER.from)).lte('created_at', localDayEnd(HR_FILTER.to)),
+      db.from('hr_breaks').select('employee_id, started_at, ended_at').not('ended_at','is',null)
+        .gte('started_at', localDayStart(HR_FILTER.from)).lte('started_at', localDayEnd(HR_FILTER.to)),
     ]);
     if(empRes.error){
       C.innerHTML = `<div class="alert-red">⚠️ ${esc(empRes.error.message||'خطأ بجلب موظفي HR')}</div>`;
@@ -9069,6 +9084,7 @@
     const timeLogs = tlRes.data||[];
     const deductions = dedRes.data||[];
     const rewards = rwdRes.data||[];
+    const breaksAll = brRes.data||[];
 
     const rows = empList.map(e=>{
       const myAtt = attendance.filter(a=>a.employee_id===e.id);
@@ -9080,7 +9096,9 @@
       const suspiciousLogs = myLogs.filter(l=>((new Date(l.clock_out)-new Date(l.clock_in))/3600000) > 16 && !l.reviewed_ok);
       const validLogs = myLogs.filter(l=>((new Date(l.clock_out)-new Date(l.clock_in))/3600000) <= 16 || l.reviewed_ok);
       const portalHours = validLogs.reduce((a,l)=>a+((new Date(l.clock_out)-new Date(l.clock_in))/3600000), 0);
-      const hours = manualHours + portalHours;
+      const myBreaks = breaksAll.filter(b=>b.employee_id===e.id);
+      const breakExcessHours = calcBreakExcessHours(myBreaks);
+      const hours = Math.max(0, manualHours + portalHours - breakExcessHours);
       const days = myAtt.length + validLogs.length;
       const advTotal = advances.filter(a=>a.employee_id===e.id).reduce((a,x)=>a+parseFloat(x.amount||0),0);
       const myMeals = mealOrders.filter(o=>o.employee_meal_id ? o.employee_meal_id===e.id : o.employee_tab_name===e.name);
@@ -9100,7 +9118,7 @@
       const gross = hours * (e.hourly_wage||0);
       const opening = parseFloat(e.opening_balance||0);
       const net = gross - advTotal - mealsTotal - shiftDeduction - deductionsTotal + rewardsTotal + opening;
-      return { emp:e, hours, days, advTotal, mealsCount, mealsTotal, shiftDeduction, deductionsTotal, rewardsTotal, opening, gross, net, suspiciousLogs };
+      return { emp:e, hours, days, advTotal, mealsCount, mealsTotal, shiftDeduction, deductionsTotal, rewardsTotal, opening, gross, net, suspiciousLogs, breakExcessHours };
     });
     const totalNet = rows.reduce((a,r)=>a+r.net,0);
     window.__HR_ROWS = rows;
@@ -9494,7 +9512,7 @@
       <div class="tbl-wrap"><table class="tbl">
         <tr><td>سعر ساعة العمل</td><td><b>${fmt(r.emp.hourly_wage||0)} ${CURRENCY}</b></td></tr>
         <tr><td>أيام الحضور</td><td><b>${r.days}</b></td></tr>
-        <tr><td>مجموع ساعات العمل</td><td><b>${r.hours.toFixed(1)} ساعة</b></td></tr>
+        <tr><td>مجموع ساعات العمل</td><td><b>${r.hours.toFixed(1)} ساعة</b></td></tr>${r.breakExcessHours>0?`<tr><td>☕ خصم بريك زايد عن 60د/يوم</td><td><b style="color:var(--red)">-${r.breakExcessHours.toFixed(2)} ساعة</b></td></tr>`:''}
         <tr><td>إجمالي الراتب (قبل الخصومات)</td><td><b>${fmt(r.gross)} ${CURRENCY}</b></td></tr>
         <tr><td>عدد الوجبات المسحوبة</td><td><b>${r.mealsCount}</b></td></tr>
         <tr><td>قيمة الوجبات (تُخصم من الراتب)</td><td><b style="color:var(--warn)">${fmt(r.mealsTotal)} ${CURRENCY}</b></td></tr>
@@ -9667,7 +9685,7 @@
       <table>
         <tr><td>سعر ساعة العمل</td><td><b>${fmt(r.emp.hourly_wage||0)} ${CURRENCY}</b></td></tr>
         <tr><td>أيام الحضور</td><td><b>${r.days}</b></td></tr>
-        <tr><td>مجموع ساعات العمل</td><td><b>${r.hours.toFixed(1)} ساعة</b></td></tr>
+        <tr><td>مجموع ساعات العمل</td><td><b>${r.hours.toFixed(1)} ساعة</b></td></tr>${r.breakExcessHours>0?`<tr><td>☕ خصم بريك زايد عن 60د/يوم</td><td><b style="color:var(--red)">-${r.breakExcessHours.toFixed(2)} ساعة</b></td></tr>`:''}
         <tr><td>إجمالي الراتب (قبل الخصومات)</td><td><b>${fmt(r.gross)} ${CURRENCY}</b></td></tr>
         <tr><td>قيمة الوجبات المخصومة</td><td><b>${fmt(r.mealsTotal)} ${CURRENCY}</b></td></tr>
         <tr><td>السلف المخصومة</td><td><b>${fmt(r.advTotal)} ${CURRENCY}</b></td></tr>
@@ -13140,7 +13158,7 @@ try {
       const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0,0,0,0);
       const { data: linkedStaffRows } = await db.from('staff').select('id').eq('linked_hr_id', EMP.id);
       const linkedIds = (linkedStaffRows||[]).map(s=>s.id);
-      const [logsRes, attRes, advRes, mealsRes, shiftAdjRes, dedRes, rwdRes] = await Promise.all([
+      const [logsRes, attRes, advRes, mealsRes, shiftAdjRes, dedRes, rwdRes, monthBreaksRes] = await Promise.all([
         db.from('hr_time_logs').select('*').eq('employee_id', EMP.id).gte('clock_in', monthStart.toISOString()).order('clock_in',{ascending:false}),
         db.from('hr_attendance').select('hours').eq('employee_id', EMP.id).gte('work_date', monthStart.toISOString().split('T')[0]),
         db.from('hr_advances').select('*').eq('employee_id', EMP.id).order('created_at',{ascending:false}),
@@ -13150,6 +13168,7 @@ try {
           : db.from('shift_adjustments').select('amount').eq('staff_name', EMP.name).eq('status','approved').gte('created_at', monthStart.toISOString()),
         db.from('employee_deductions').select('amount, reason, created_at').eq('employee_id', EMP.id).gte('created_at', monthStart.toISOString()),
         db.from('employee_rewards').select('amount, reason, created_at').eq('employee_id', EMP.id).gte('created_at', monthStart.toISOString()),
+        db.from('hr_breaks').select('started_at, ended_at').eq('employee_id', EMP.id).not('ended_at','is',null).gte('started_at', monthStart.toISOString()),
       ]);
       const logs = logsRes.data||[];
       // 🚩 نفس فحص الأمان: أي جلسة أطول من 16 ساعة متواصلة مستبعدة (غالبًا نسيان خروج) لحد ما الأدمن يراجعها
@@ -13157,7 +13176,8 @@ try {
       // 🔧 مهم: الساعات = المسجّلة ذاتيًا من البوابة + الساعات اليدوية يلي الأدمن دخّلها (كانت مفقودة تمامًا هون)
       const portalHours = closedLogs.reduce((a,l)=>a+((new Date(l.clock_out)-new Date(l.clock_in))/3600000),0);
       const manualHours = (attRes.data||[]).reduce((a,x)=>a+parseFloat(x.hours||0),0);
-      const hoursThisMonth = portalHours + manualHours;
+      const monthBreakExcessHours = calcBreakExcessHours(monthBreaksRes.data||[]);
+      const hoursThisMonth = Math.max(0, portalHours + manualHours - monthBreakExcessHours);
       const adv = advRes.data||[];
       // 🔧 نفس منطق الأدمن بالضبط: كل سلفة اتاخدت هالشهر بتخصم من الصافي، بغض النظر إذا اتسددت أو لسا —
       // "متسددة" معناها بس إنها انحسبت/اتصفّت بمراجعة سابقة، مش إنها ما بتأثر عالشهر يلي اتاخدت فيه
@@ -13208,6 +13228,7 @@ try {
 
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
           ${settingOn('hr_portal_show_hours')?`<div class="stat">ساعات هالشهر<b>${hoursThisMonth.toFixed(1)}</b></div>`:''}
+          ${monthBreakExcessHours>0?`<div class="stat" style="grid-column:1/-1">☕ خصم بريك زايد عن ساعة/يوم<b style="color:var(--red)">-${monthBreakExcessHours.toFixed(2)} ساعة</b></div>`:''}
           ${settingOn('hr_portal_show_net')?`<div class="stat">صافي المستحق<b style="color:${net<0?'var(--red)':'var(--ok)'}">${fmt(net)} ${CURRENCY}</b></div>`:''}
           ${settingOn('hr_portal_show_advances')?`<div class="stat">سلف هالشهر (تُخصم من الصافي)<b style="color:var(--warn)">${fmt(advTakenThisMonth)} ${CURRENCY}</b></div>`:''}
           ${settingOn('hr_portal_show_advances')?`<div class="stat">إجمالي السلف القائمة (كل الوقت)<b style="color:var(--warn)">${fmt(advOutstanding)} ${CURRENCY}</b></div>`:''}
@@ -13440,7 +13461,7 @@ try {
     const fromIso = monthStart.toISOString();
     const { data: linkedStaffRows2 } = await db.from('staff').select('id').eq('linked_hr_id', empId);
     const linkedIds2 = (linkedStaffRows2||[]).map(s=>s.id);
-    const [attRes, logsRes, advRes, mealsRes, shiftAdjRes, dedRes, rwdRes] = await Promise.all([
+    const [attRes, logsRes, advRes, mealsRes, shiftAdjRes, dedRes, rwdRes, brRes] = await Promise.all([
       db.from('hr_attendance').select('hours').eq('employee_id', empId).gte('work_date', fromIso.split('T')[0]),
       db.from('hr_time_logs').select('clock_in,clock_out,reviewed_ok').eq('employee_id', empId).not('clock_out','is',null).gte('clock_in', fromIso),
       db.from('hr_advances').select('amount').eq('employee_id', empId).gte('created_at', fromIso),
@@ -13450,10 +13471,12 @@ try {
         : db.from('shift_adjustments').select('amount').eq('staff_name', empName).eq('status','approved').gte('created_at', fromIso),
       db.from('employee_deductions').select('amount').eq('employee_id', empId).gte('created_at', fromIso),
       db.from('employee_rewards').select('amount').eq('employee_id', empId).gte('created_at', fromIso),
+      db.from('hr_breaks').select('started_at, ended_at').eq('employee_id', empId).not('ended_at','is',null).gte('started_at', fromIso),
     ]);
     const manualHours = (attRes.data||[]).reduce((a,x)=>a+parseFloat(x.hours||0),0);
     const portalHours = (logsRes.data||[]).filter(l=>((new Date(l.clock_out)-new Date(l.clock_in))/3600000)<=16 || l.reviewed_ok).reduce((a,l)=>a+((new Date(l.clock_out)-new Date(l.clock_in))/3600000),0);
-    const hours = manualHours+portalHours;
+    const breakExcess = calcBreakExcessHours(brRes.data||[]);
+    const hours = Math.max(0, manualHours+portalHours-breakExcess);
     const gross = hours*(hourlyWage||0);
     const advOutstanding = (advRes.data||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
     const mealsTotal = (mealsRes.data||[]).reduce((a,o)=>a+parseFloat(o.total||0),0);
