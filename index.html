@@ -593,6 +593,7 @@
         <button data-a="items" class="on" onclick="admTab('items')">🍔 الأصناف</button>
         <button data-a="cats" onclick="admTab('cats')">📂 التصنيفات</button>
         <button data-a="codes" onclick="admTab('codes')">🎟️ أكواد الخصم</button>
+        <button data-a="schedDisc" onclick="admTab('schedDisc')" style="background:#ffe0e9;border-color:#e91e8c">🏷️ خصومات مجدولة</button>
         <button data-a="staff" onclick="admTab('staff')">👥 الموظفين</button>
         <button data-a="roles" onclick="admTab('roles')">🛡️ الأدوار</button>
         <button data-a="branches" onclick="admTab('branches')">🏪 الفروع</button>
@@ -1682,6 +1683,7 @@
       LATE_MIN = parseInt(SETTINGS.late_min); if(isNaN(LATE_MIN)||LATE_MIN<=0) LATE_MIN = 20;
       READY_WAIT_MIN = parseInt(SETTINGS.ready_wait_min); if(isNaN(READY_WAIT_MIN)||READY_WAIT_MIN<=0) READY_WAIT_MIN = 7;
       applyTheme();
+      await loadActiveScheduledDiscount();
       if(ME && ME.role==='custom'){
         await loadCustomRoles();
         applyRoles(); // 🔧 مهم: أول تطبيق كان بيصير قبل ما توصل صلاحيات الدور المخصص أصلًا، فكانت تنعرض أقل صلاحية (شكل كاشير) لحد ما يعمل المستخدم تحديث يدوي للصفحة
@@ -2833,6 +2835,75 @@
     } catch(e) { console.error(e); }
   }
 
+  // 🏷️ خصم مجدول تلقائي — المالك بيضيف فترات بأيام يختارها بنفسه، وبتطبّق تلقائيًا على كل الفواتير بدون أي تدخل من الكاشير
+  let ACTIVE_SCHEDULED_DISCOUNT = null;
+  async function loadActiveScheduledDiscount(){
+    try{
+      const { data, error } = await db.from('scheduled_discounts').select('*').eq('active', true).order('percent',{ascending:false}).limit(1);
+      if(error){ ACTIVE_SCHEDULED_DISCOUNT = null; return; }
+      ACTIVE_SCHEDULED_DISCOUNT = (data && data[0]) || null;
+    }catch(e){ console.error('loadActiveScheduledDiscount failed:', e); ACTIVE_SCHEDULED_DISCOUNT = null; }
+  }
+  async function renderScheduledDiscounts(){
+    const C = document.getElementById('admContent');
+    C.innerHTML = '<div class="empty-note">... جاري التحميل</div>';
+    try{
+      const { data, error } = await db.from('scheduled_discounts').select('*').order('date_from',{ascending:false});
+      if(error){ C.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message||'الجدول scheduled_discounts غير موجود — نفّذ SQL أولاً')}</div>`; return; }
+      const list = data||[];
+      C.innerHTML = `
+        <button class="add-btn" onclick="scheduledDiscountForm()">＋ خصم جديد</button>
+        <div style="font-size:.85rem;color:var(--muted);font-weight:700;margin:8px 0 14px">بيتطبّق تلقائيًا على كل الفواتير طول ما زر "تفعيل" شغّال — إنتي بتتحكمي فيه براحتك، تفعّليه وتوقفيه أي وقت. لو في أكتر من خصم مفعّل بنفس الوقت، بينطبّق الأعلى نسبة بس.</div>
+        <div class="tbl-wrap"><table class="tbl">
+          <tr><th>الاسم</th><th>النسبة</th><th>الحالة</th><th></th></tr>
+          ${list.map(d=>`<tr>
+              <td><b>${esc(d.name||'—')}</b></td>
+              <td><b style="color:var(--red)">${d.percent}%</b></td>
+              <td>${d.active?'🟢 فعّال هلأ':'⏸️ متوقف'}</td>
+              <td style="white-space:nowrap">
+                <button class="mini tog" style="${d.active?'background:var(--red);color:#fff':'background:var(--ok);color:#fff'}" onclick="toggleScheduledDiscount('${d.id}',${!d.active})">${d.active?'⏸️ إيقاف':'▶️ تفعيل'}</button>
+                <button class="mini edit" onclick="scheduledDiscountForm('${d.id}')">تعديل</button>
+                <button class="mini del" onclick="deleteScheduledDiscount('${d.id}')">حذف</button>
+              </td>
+            </tr>`).join('')||'<tr><td colspan="4" class="empty-note">ما في خصومات محفوظة بعد</td></tr>'}
+        </table></div>`;
+    }catch(e){ C.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
+  }
+  function scheduledDiscountForm(id){
+    db.from('scheduled_discounts').select('*').eq('id', id||'').maybeSingle().then(({data:d})=>{
+      d = d || {};
+      modal(`<h3>${id?'تعديل خصم':'خصم جديد'}</h3>
+        <div class="fld"><label>اسم الخصم (بيبيّن للعميل بالفاتورة)</label><input id="sd_name" value="${esc(d.name||'')}" placeholder="مثال: عرض اليوم"></div>
+        <div class="fld"><label>النسبة %</label><input id="sd_pct" type="number" step="1" min="1" max="100" value="${d.percent||''}"></div>
+        <div class="m-act"><button class="save" onclick="saveScheduledDiscount('${id||''}')">حفظ ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
+    });
+  }
+  async function saveScheduledDiscount(id){
+    const name = document.getElementById('sd_name')?.value.trim();
+    const percent = parseFloat(document.getElementById('sd_pct')?.value);
+    if(!name){ toast('⚠️ اكتبي اسم الخصم'); return; }
+    if(!percent || percent<=0 || percent>100){ toast('⚠️ نسبة الخصم لازم تكون بين 1 و100'); return; }
+    try{
+      // 🔧 نحفظ خصم جديد بدون تفعيل تلقائي (تفعّليه إنتي يدويًا بعدين)، إلا لو عم تعدّلي وحدة كانت مفعّلة أصلًا
+      const existingActive = id ? (await db.from('scheduled_discounts').select('active').eq('id', id).maybeSingle()).data?.active : false;
+      const rec = { name, percent, active: !!existingActive };
+      const { error } = id
+        ? await db.from('scheduled_discounts').update(rec).eq('id', id)
+        : await db.from('scheduled_discounts').insert(rec);
+      if(error){ toast('✗ '+error.message); return; }
+      await logActivity('scheduled_discount_save', name+' — '+percent+'%');
+      closeModal(); toast('✓ انحفظ'); renderScheduledDiscounts(); loadActiveScheduledDiscount();
+    }catch(e){ toast('✗ '+e.message); }
+  }
+  async function toggleScheduledDiscount(id, active){
+    await db.from('scheduled_discounts').update({ active }).eq('id', id);
+    toast(active?'✓ اتفعّل':'✓ اتوقّف'); renderScheduledDiscounts(); loadActiveScheduledDiscount();
+  }
+  async function deleteScheduledDiscount(id){
+    if(!confirm('⚠️ حذف هاد الخصم المجدول نهائيًا؟')) return;
+    await db.from('scheduled_discounts').delete().eq('id', id);
+    toast('✓ انحذف'); renderScheduledDiscounts(); loadActiveScheduledDiscount();
+  }
   function totals(){
     const sub = cart.reduce((s,l)=>s + l.item.price*l.qty, 0);
     let disc = 0, lbl = '';
@@ -2846,6 +2917,9 @@
     } else if(appliedCode){
       disc = appliedCode.kind==='percent' ? sub*appliedCode.value/100 : +appliedCode.value;
       lbl = '('+appliedCode.code+')';
+    } else if(ACTIVE_SCHEDULED_DISCOUNT){
+      disc = sub * ACTIVE_SCHEDULED_DISCOUNT.percent/100;
+      lbl = '('+(ACTIVE_SCHEDULED_DISCOUNT.name||'خصم اليوم')+' '+ACTIVE_SCHEDULED_DISCOUNT.percent+'%)';
     }
     if(canFinApprove() && !isEmpMeal){
       const discInput = document.getElementById('discInput');
@@ -5184,7 +5258,7 @@
   }
 
   const ADMIN_TAB_PERM = {
-    items:'items_manage', cats:'cats_manage', codes:'codes_manage', staff:'staff_manage', roles:'admin_only', branches:'branches_manage', sett:'settings_manage', devices:'devices_manage',
+    items:'items_manage', cats:'cats_manage', codes:'codes_manage', schedDisc:'codes_manage', staff:'staff_manage', roles:'admin_only', branches:'branches_manage', sett:'settings_manage', devices:'devices_manage',
     ingredients:'inventory_view', recipes:'inventory_view',
     inventory:'inventory_audit', transfers:'inventory_transfer', warehouse:'tab_warehouse', treasury:'tab_treasury', hr:'tab_hr', chats:'tab_chats', dailyAudits:'tab_dailyAudits', hrLocations:'tab_hrLocations', dutyHours:'tab_dutyHours', hrClosures:'tab_hrClosures', ordersScreen:'tab_ordersScreen',
     complaints:'tab_complaints', violations:'tab_violations', deductions:'tab_deductions', rewards:'tab_rewards', activityLog:'tab_activityLog', manufacturing:'tab_manufacturing', satisfaction:'tab_satisfaction',
@@ -5278,6 +5352,7 @@
     if(admView==='hrClosures'){ renderHrMonthClosures(); return; }
     if(admView==='activityLog'){ renderActivityLog(); return; }
     if(admView==='manufacturing'){ renderManufacturing(); return; }
+    if(admView==='schedDisc'){ renderScheduledDiscounts(); return; }
     if(admView==='satisfaction'){ renderSatisfaction(); return; }
     if(admView==='ordersScreen'){ renderOrdersScreen(); return; }
     if(admView==='platforms'){ renderPlatforms(); return; }
