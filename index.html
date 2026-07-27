@@ -4170,7 +4170,8 @@
     } catch(e) { console.error(e); }
   }
 
-  function showOrderDetail(id){
+  async function showOrderDetail(id){
+    if(!STAFF.length){ const {data} = await db.from('staff').select('id, full_name').order('full_name'); STAFF = data||[]; }
     const o = DAY.find(x=>x.id===id); if(!o) return;
     const statusLbl = o.status==='new' ? '🆕 جديد' : o.status==='preparing' ? '🔥 قيد التحضير' : o.status==='ready' ? '📦 جاهز' : (o.status==='delivered' ? '✅ منجز' : '❌ ملغي');
     modal(`<h3>تفاصيل الطلب #${o.order_number}</h3>
@@ -4201,7 +4202,25 @@
         ${o.order_type==='delivery'?`<tr><td>أجرة التوصيل</td><td class="tl">${fmt(o.delivery_fee)}</td></tr>`:''}
         <tr><td><b>الإجمالي</b></td><td class="tl"><b style="color:var(--red)">${fmt(o.total)} ${CURRENCY}</b></td></tr>
       </table></div>
-      <div class="m-act"><button class="cancel" onclick="closeModal()">إغلاق</button><button class="mini del" onclick="complaintForm('${o.id}','${esc(o.order_number)}','${o.branch_id||''}','${esc(o.branches?.name_ar||'')}','${o.created_by||''}','${esc(o.created_by_name||'')}')">😠 تسجيل شكوى عميل</button></div>`);
+      <div style="background:#e8f5ff;border-radius:10px;padding:10px 12px;margin-top:10px">
+        <label style="font-weight:800;font-size:.85rem">👤 الموظف المسؤول عن الطلب (للتقييم — عدّله لو غلط)</label>
+        <select id="ratingEmpSel_${o.id}" style="width:100%;margin-top:4px">
+          <option value="">— بدون تحديد —</option>
+          ${STAFF.map(s=>`<option value="${s.id}" data-name="${esc(s.full_name)}" ${s.id===o.created_by?'selected':''}>${esc(s.full_name)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="m-act">
+        <button class="cancel" onclick="closeModal()">إغلاق</button>
+        <button class="mini ok" style="background:#0d6efd" onclick="rateOrderSatisfactionSel('${o.id}',${o.order_number},'positive')">😊 عميل راضي (+3 نقاط)</button>
+        <button class="mini" onclick="rateOrderSatisfactionSel('${o.id}',${o.order_number},'negative')">😐 مو راضي</button>
+        <button class="mini del" onclick="complaintForm('${o.id}','${esc(o.order_number)}','${o.branch_id||''}','${esc(o.branches?.name_ar||'')}','${o.created_by||''}','${esc(o.created_by_name||'')}')">😠 تسجيل شكوى عميل</button>
+      </div>`);
+  }
+  function rateOrderSatisfactionSel(orderId, orderNumber, rating){
+    const sel = document.getElementById('ratingEmpSel_'+orderId);
+    const empId = sel?.value; const empName = sel?.selectedOptions?.[0]?.dataset?.name;
+    if(!empId){ toast('⚠️ اختاري الموظف المسؤول أول'); return; }
+    rateOrderSatisfaction(orderId, orderNumber, empId, empName, rating);
   }
 
   /* ---- شكوى عميل على طلب ---- */
@@ -5181,6 +5200,12 @@
       try {
         const {data}=await db.from('staff').select('*, branches(name_ar)').order('created_at');
         STAFF=data||[];
+        const { data: ratingsData } = await db.from('employee_ratings').select('employee_id, rating');
+        window.__STAFF_RATINGS = {};
+        (ratingsData||[]).forEach(r=>{
+          if(!window.__STAFF_RATINGS[r.employee_id]) window.__STAFF_RATINGS[r.employee_id] = {positive:0, negative:0};
+          window.__STAFF_RATINGS[r.employee_id][r.rating==='positive'?'positive':'negative']++;
+        });
         C.innerHTML=`<button class="add-btn" onclick="staffForm()">＋ إضافة موظف</button>
           <button class="mini ok" style="background:#7b2cbf" onclick="showHrLinkChecker()">🔗 تحقّق من ربط الأسماء مع HR</button>
           <div id="shiftOpenReqBox"></div>
@@ -12257,7 +12282,11 @@ try {
     const wrap = document.getElementById('staffTableWrap'); if(!wrap) return;
     const q = (document.getElementById('staffSearch')?.value||'').trim().toLowerCase();
     const list = q ? STAFF.filter(s=>(s.full_name||'').toLowerCase().includes(q) || (ROLE_AR[s.role]||s.role||'').toLowerCase().includes(q)) : STAFF;
-    wrap.innerHTML = `<div class="tbl-wrap"><table class="tbl"><tr><th>الاسم</th><th>الدور</th><th>الفرع</th><th>PIN</th><th>الحالة</th><th></th></tr>${list.map(s=>`<tr class="${s.is_active?'':'off'}"><td>${esc(s.full_name)}</td><td>${ROLE_AR[s.role]||esc(s.role)}</td><td>${esc(s.branches?.name_ar||'كل الفروع')}</td><td>${s.pin}</td><td>${s.is_active?'✅':'🚫'}</td><td style="white-space:nowrap"><button class="mini edit" onclick="staffForm('${s.id}')">تعديل</button>${s.id!==ME.id?`<button class="mini tog" onclick="toggleStaff('${s.id}',${!s.is_active})">${s.is_active?'تعطيل/أرشفة':'تفعيل'}</button><button class="mini del" onclick="deleteStaff('${s.id}','${esc(s.full_name)}')">حذف نهائي</button>`:''}</td></tr>`).join('')||'<tr><td colspan="6" class="empty-note">ما في نتائج</td></tr>'}</table></div>`;
+    const ratings = window.__STAFF_RATINGS||{};
+    wrap.innerHTML = `<div class="tbl-wrap"><table class="tbl"><tr><th>الاسم</th><th>الدور</th><th>الفرع</th><th>PIN</th><th>⭐ التقييمات</th><th>الحالة</th><th></th></tr>${list.map(s=>{
+      const r = ratings[s.id]||{positive:0,negative:0};
+      return `<tr class="${s.is_active?'':'off'}"><td>${esc(s.full_name)}</td><td>${ROLE_AR[s.role]||esc(s.role)}</td><td>${esc(s.branches?.name_ar||'كل الفروع')}</td><td>${s.pin}</td><td>${(r.positive||r.negative)?`<span style="color:var(--ok)">😊 ${r.positive}</span> / <span style="color:var(--muted)">😐 ${r.negative}</span>`:'—'}</td><td>${s.is_active?'✅':'🚫'}</td><td style="white-space:nowrap"><button class="mini edit" onclick="staffForm('${s.id}')">تعديل</button>${s.id!==ME.id?`<button class="mini tog" onclick="toggleStaff('${s.id}',${!s.is_active})">${s.is_active?'تعطيل/أرشفة':'تفعيل'}</button><button class="mini del" onclick="deleteStaff('${s.id}','${esc(s.full_name)}')">حذف نهائي</button>`:''}</td></tr>`;
+    }).join('')||'<tr><td colspan="7" class="empty-note">ما في نتائج</td></tr>'}</table></div>`;
   }
   async function showHrLinkChecker(){
     modal(`<h3>🔗 تحقّق من ربط الأسماء مع HR</h3><div id="hrLinkCheckerBody" class="empty-note">... جاري الفحص</div>`);
