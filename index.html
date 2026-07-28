@@ -624,6 +624,7 @@
         <button data-a="deductions" onclick="admTab('deductions')" style="background:#ffe0e0;border-color:#c0392b">➖ جدول الخصومات</button>
         <button data-a="rewards" onclick="admTab('rewards')" style="background:#d4f7d4;border-color:#1a9c4b">🎁 جدول المكافآت</button>
         <button data-a="satisfaction" onclick="admTab('satisfaction')" style="background:#fff0f5;border-color:#e91e8c">⭐ نقاط رضا العملاء</button>
+        <button data-a="ccPoints" onclick="admTab('ccPoints')" style="background:#e0f0ff;border-color:#0d6efd">📞 نقاط مبيعات الكول سنتر</button>
         <button data-a="activityLog" onclick="admTab('activityLog')" style="background:#2b2b2b;color:#fff;border-color:#000">📜 سجل الأحداث</button>
         <button data-a="sett" onclick="admTab('sett')">🔧 إعدادات</button>
         <button data-a="shifts" onclick="admTab('shifts')">🔄 شيفتات</button>
@@ -1201,6 +1202,7 @@
       tab_activityLog: 'سجل الأحداث (حساس — انتبهي قبل ما تعطيها لغير المالك)',
       tab_manufacturing: 'التصنيع',
       tab_satisfaction: 'نقاط رضا العملاء',
+      tab_ccPoints: 'نقاط مبيعات الكول سنتر',
     },
     '🔓 صلاحيات إدارية دقيقة (بدائل قابلة للاختيار لوحدها)': {
       fin_approvals: 'الموافقات المالية (مصاريف، تسوية مشتريات، دفعات موردين، خصم يدوي حر، الخزينة)',
@@ -5275,7 +5277,7 @@
     items:'items_manage', cats:'cats_manage', codes:'codes_manage', schedDisc:'codes_manage', staff:'staff_manage', roles:'admin_only', branches:'branches_manage', sett:'settings_manage', devices:'devices_manage',
     ingredients:'inventory_view', recipes:'inventory_view',
     inventory:'inventory_audit', transfers:'inventory_transfer', warehouse:'tab_warehouse', treasury:'tab_treasury', hr:'tab_hr', chats:'tab_chats', dailyAudits:'tab_dailyAudits', hrLocations:'tab_hrLocations', dutyHours:'tab_dutyHours', hrClosures:'tab_hrClosures', ordersScreen:'tab_ordersScreen',
-    complaints:'tab_complaints', violations:'tab_violations', deductions:'tab_deductions', rewards:'tab_rewards', activityLog:'tab_activityLog', manufacturing:'tab_manufacturing', satisfaction:'tab_satisfaction',
+    complaints:'tab_complaints', violations:'tab_violations', deductions:'tab_deductions', rewards:'tab_rewards', activityLog:'tab_activityLog', manufacturing:'tab_manufacturing', satisfaction:'tab_satisfaction', ccPoints:'tab_ccPoints',
     expenses:'expenses_view', purchases:'purchases_view',
     platforms:'platforms_view', empmeals:'empmeals_view', topcust:'topcust_view', waste:'waste_log', suppliers:'purchases_view',
   };
@@ -5368,6 +5370,7 @@
     if(admView==='manufacturing'){ renderManufacturing(); return; }
     if(admView==='schedDisc'){ renderScheduledDiscounts(); return; }
     if(admView==='satisfaction'){ renderSatisfaction(); return; }
+    if(admView==='ccPoints'){ renderCcPoints(); return; }
     if(admView==='ordersScreen'){ renderOrdersScreen(); return; }
     if(admView==='platforms'){ renderPlatforms(); return; }
     if(admView==='devices'){ renderDevices(); return; }
@@ -5907,6 +5910,75 @@
   const POINTS_PER_NEGATIVE = -4; // 💔 كل "مو راضي" = خصم 4 نقاط من الموظف
   const POINTS_PER_REDEMPTION = 140;
   const REDEMPTION_VALUE = 10; // د.أ لكل 140 نقطة
+  // 📞 نقاط مبيعات الكول سنتر: نقطة عن كل 10 د.أ مبيعات، الطلبات تحت 4 د.أ ما إلها نقاط إطلاقًا
+  const CC_POINT_MIN_ORDER = 4;
+  const CC_POINT_PER_AMOUNT = 10;
+  function calcCcPoints(orders){
+    return (orders||[]).reduce((a,o)=>{
+      const total = parseFloat(o.total||0);
+      if(total < CC_POINT_MIN_ORDER) return a;
+      return a + Math.floor(total/CC_POINT_PER_AMOUNT);
+    },0);
+  }
+  async function renderCcPoints(){
+    const C = document.getElementById('admContent');
+    C.innerHTML = '<div class="empty-note">... جاري التحميل</div>';
+    try{
+      const ccStaff = STAFF.length ? STAFF.filter(s=>s.role==='callcenter') : (await db.from('staff').select('*').eq('role','callcenter')).data||[];
+      if(!STAFF.length) STAFF = ccStaff;
+      const fd = getFinancialMonth ? getFinancialMonth() : null;
+      const monthStart = fd ? fd.from : new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString();
+      const monthEnd = fd ? fd.to : new Date().toISOString();
+      const { data: orders, error } = await db.from('orders').select('id, total, created_by, created_by_name, created_at, status')
+        .in('created_by', ccStaff.map(s=>s.id).length ? ccStaff.map(s=>s.id) : ['00000000-0000-0000-0000-000000000000'])
+        .neq('status','cancelled').gte('created_at', monthStart).lte('created_at', monthEnd);
+      if(error){ C.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message)}</div>`; return; }
+      const byStaff = {};
+      (orders||[]).forEach(o=>{
+        if(!byStaff[o.created_by]) byStaff[o.created_by] = [];
+        byStaff[o.created_by].push(o);
+      });
+      C.innerHTML = `
+        <div class="panel" style="margin-bottom:14px">
+          <h3>📞 نقاط مبيعات الكول سنتر</h3>
+          <div style="font-size:.85rem;color:var(--muted);font-weight:700;margin-top:6px">نقطة عن كل ${CC_POINT_PER_AMOUNT} د.أ مبيعات للموظف. الطلبات أقل من ${CC_POINT_MIN_ORDER} د.أ ما إلها نقاط إطلاقًا. النقاط بتترحّل لبونص آخر الشهر — إنتي يلي بتحددي القيمة وبتوافقي عليها يدويًا.</div>
+        </div>
+        <div class="tbl-wrap"><table class="tbl">
+          <tr><th>الموظف</th><th>عدد الطلبات (المؤهلة)</th><th>إجمالي المبيعات</th><th>النقاط هالشهر</th><th></th></tr>
+          ${ccStaff.map(s=>{
+            const myOrders = byStaff[s.id]||[];
+            const qualifying = myOrders.filter(o=>parseFloat(o.total||0)>=CC_POINT_MIN_ORDER);
+            const sum = myOrders.reduce((a,o)=>a+parseFloat(o.total||0),0);
+            const points = calcCcPoints(myOrders);
+            return `<tr>
+              <td><b>${esc(s.full_name)}</b></td>
+              <td>${qualifying.length} (من أصل ${myOrders.length})</td>
+              <td><b style="color:var(--red)">${fmt(sum)} ${CURRENCY}</b></td>
+              <td><b style="color:var(--maroon)">${points}</b></td>
+              <td><button class="mini ok" style="background:var(--maroon)" onclick="ccBonusForm('${s.id}','${esc(s.full_name)}',${points})">🎁 اعتماد بونص</button></td>
+            </tr>`;
+          }).join('')||'<tr><td colspan="5" class="empty-note">ما في موظفين كول سنتر</td></tr>'}
+        </table></div>`;
+    }catch(e){ C.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
+  }
+  function ccBonusForm(staffId, staffName, points){
+    modal(`<h3>🎁 اعتماد بونص — ${esc(staffName)}</h3>
+      <div style="font-weight:800;color:var(--maroon);margin-bottom:10px">رصيد النقاط هالشهر: ${points} نقطة</div>
+      <div class="fld"><label>قيمة البونص (${CURRENCY}) — حددي المبلغ براحتك</label><input id="cc_bonus_amt" type="number" step="0.01" placeholder="0.00"></div>
+      <div class="fld"><label>ملاحظة</label><input id="cc_bonus_note" value="بونص مبيعات كول سنتر — ${points} نقطة"></div>
+      <div class="m-act"><button class="save" onclick="saveCcBonus('${staffId}','${esc(staffName)}')">اعتماد ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
+  }
+  async function saveCcBonus(staffId, staffName){
+    const amt = parseFloat(document.getElementById('cc_bonus_amt')?.value);
+    const note = document.getElementById('cc_bonus_note')?.value.trim();
+    if(!amt || amt<=0){ toast('⚠️ اكتبي مبلغ صحيح'); return; }
+    try{
+      const { error } = await db.from('employee_rewards').insert({ employee_id: staffId, employee_name: staffName, amount: amt, reason: note||'بونص مبيعات كول سنتر', created_by: ME.full_name });
+      if(error){ toast('✗ '+error.message); return; }
+      await logActivity('cc_bonus', 'بونص كول سنتر لـ'+staffName+' — '+fmt(amt));
+      toast('✓ اتاعتمد البونص وانضاف لجدول المكافآت'); closeModal(); renderCcPoints();
+    }catch(e){ toast('✗ '+e.message); }
+  }
   async function renderSatisfaction(){
     const C = document.getElementById('admContent');
     C.innerHTML = '<div class="empty-note">... جاري التحميل</div>';
@@ -13527,8 +13599,16 @@ try {
       if(EMP_OPEN_LOG) startGeofenceWatch(); else stopGeofenceWatch();
 
       const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0,0,0,0);
-      const { data: linkedStaffRows } = await db.from('staff').select('id').eq('linked_hr_id', EMP.id);
+      const { data: linkedStaffRows } = await db.from('staff').select('id, role').eq('linked_hr_id', EMP.id);
       const linkedIds = (linkedStaffRows||[]).map(s=>s.id);
+      const linkedCcIds = (linkedStaffRows||[]).filter(s=>s.role==='callcenter').map(s=>s.id);
+      let ccPointsThisMonth = 0, ccOrdersThisMonth = 0, ccSalesThisMonth = 0;
+      if(linkedCcIds.length){
+        const { data: ccOrders } = await db.from('orders').select('total,status').in('created_by', linkedCcIds).neq('status','cancelled').gte('created_at', monthStart.toISOString());
+        ccOrdersThisMonth = (ccOrders||[]).length;
+        ccSalesThisMonth = (ccOrders||[]).reduce((a,o)=>a+parseFloat(o.total||0),0);
+        ccPointsThisMonth = calcCcPoints(ccOrders||[]);
+      }
       const [logsRes, attRes, advRes, mealsRes, shiftAdjRes, dedRes, rwdRes, monthBreaksRes, ratingsRes, redRes] = await Promise.all([
         db.from('hr_time_logs').select('*').eq('employee_id', EMP.id).gte('clock_in', monthStart.toISOString()).order('clock_in',{ascending:false}),
         db.from('hr_attendance').select('hours').eq('employee_id', EMP.id).gte('work_date', monthStart.toISOString().split('T')[0]),
@@ -13590,6 +13670,17 @@ try {
 
       body.innerHTML = `
         ${(EMP.shift_window_from && EMP.shift_window_to) ? `<div style="background:#fff8e1;border-radius:12px;padding:10px 14px;text-align:center;margin-bottom:10px;font-weight:800;color:#8a6d00">🕐 دوامك المحدد: من ${EMP.shift_window_from} لغاية ${EMP.shift_window_to}</div>` : ''}
+        ${linkedCcIds.length ? `<div style="background:linear-gradient(135deg,#e0f0ff,#fff8e1);border:1.5px solid #0d6efd;border-radius:14px;padding:14px;text-align:center;margin-bottom:10px">
+          <div style="font-weight:900;color:#0d6efd;font-size:1.1rem;margin-bottom:6px">📞 نقاط مبيعاتك هالشهر</div>
+          <div style="display:flex;justify-content:center;gap:16px;margin-bottom:8px">
+            <div><span style="color:var(--maroon);font-weight:900;font-size:1.3rem">${ccOrdersThisMonth}</span><br><small>طلب</small></div>
+            <div><span style="color:var(--red);font-weight:900;font-size:1.3rem">${fmt(ccSalesThisMonth)}</span><br><small>${CURRENCY} مبيعات</small></div>
+            <div><span style="color:#0d6efd;font-weight:900;font-size:1.3rem">${ccPointsThisMonth}</span><br><small>نقطة</small></div>
+          </div>
+          <div style="font-size:.76rem;color:var(--muted);font-weight:700;line-height:1.6">
+            نقطة عن كل ${CC_POINT_PER_AMOUNT} ${CURRENCY} مبيعات (الطلبات أقل من ${CC_POINT_MIN_ORDER} ${CURRENCY} ما إلها نقاط). النقاط بتترحّل لبونص آخر الشهر بموافقة المدير.
+          </div>
+        </div>` : ''}
         ${linkedIds.length ? `<div style="background:linear-gradient(135deg,#fff0f5,#fff8e1);border:1.5px solid #e91e8c;border-radius:14px;padding:14px;text-align:center;margin-bottom:10px">
           <div style="font-weight:900;color:#e91e8c;font-size:1.1rem;margin-bottom:6px">⭐ نقاط رضا العملاء</div>
           <div style="display:flex;justify-content:center;gap:16px;margin-bottom:8px">
