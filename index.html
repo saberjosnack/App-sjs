@@ -4381,7 +4381,7 @@
   window.__complaintImgs = [];
   function complaintForm(orderId, orderNumber, branchId, branchName, defaultEmpId, defaultEmpName){
     window.__complaintImgs = [];
-    db.from('meal_names').select('id,name').order('name').then(({data})=>{
+    db.from('meal_names').select('id,name').eq('is_active', true).order('name').then(({data})=>{
       const emps = data||[];
       modal(`<h3>😠 تسجيل شكوى عميل — طلب #${esc(orderNumber)}</h3>
         <div class="f-row"><label>الموظف المسؤول عن الطلب</label>
@@ -5728,7 +5728,7 @@
       if(error){ box.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message||'الجدول violations غير موجود — نفّذ SQL أولاً')}</div>`; return; }
       const list = data||[];
       const open = list.filter(v=>v.status!=='resolved');
-      const { data: empsData } = await db.from('meal_names').select('id,name').order('name');
+      const { data: empsData } = await db.from('meal_names').select('id,name').eq('is_active', true).order('name');
       const emps = empsData||[];
       box.innerHTML = `
         <div style="margin-bottom:14px;font-weight:800">🚩 كل المخالفات (${list.length}) — ${open.length} تحتاج معالجة</div>
@@ -5781,7 +5781,7 @@
     try{
       const { data: v } = await db.from('violations').select('images, note').eq('id', violationId).single();
       if(v?.images?.length) window.__dedImgs = [...v.images]; // نجيب صور المخالفة تلقائيًا للخصم
-      const { data } = await db.from('meal_names').select('id,name').order('name');
+      const { data } = await db.from('meal_names').select('id,name').eq('is_active', true).order('name');
       const emps = data||[];
       modal(`<h3>➖ خصم عن مخالفة</h3>
         <div class="f-row"><label>الموظفين المسؤولين (اختاري واحد أو أكتر — لحد 10)</label>
@@ -5868,7 +5868,7 @@
   }
   async function deductFromComplaint(complaintId, empId, empName){
     window.__dedImgs = [];
-    const { data } = await db.from('meal_names').select('id,name').order('name');
+    const { data } = await db.from('meal_names').select('id,name').eq('is_active', true).order('name');
     const emps = data||[];
     modal(`<h3>➖ خصم على موظف</h3>
       <div class="f-row"><label>الموظف</label><select id="dedEmp">${emps.map(e=>`<option value="${e.id}" ${e.id===empId?'selected':''}>${esc(e.name)}</option>`).join('')}</select></div>
@@ -6192,8 +6192,16 @@
         </table></div>`;
     }catch(e){ box.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message)}</div>`; console.error(e); }
   }
+  async function deleteReward(id){
+    if(!confirm('⚠️ حذف هاي المكافأة نهائيًا؟')) return;
+    try{
+      const { error } = await db.from('employee_rewards').delete().eq('id', id);
+      if(error){ toast('✗ '+error.message); return; }
+      toast('✓ انحذفت المكافأة'); renderRewardsLedger();
+    }catch(e){ toast('✗ '+e.message); }
+  }
   async function addRewardForm(){
-    const { data } = await db.from('meal_names').select('id,name').order('name');
+    const { data } = await db.from('meal_names').select('id,name').eq('is_active', true).order('name');
     const emps = data||[];
     modal(`<h3>🎁 إضافة مكافأة لموظف</h3>
       <div class="f-row"><label>الموظف</label><select id="rwdEmp">${emps.map(e=>`<option value="${e.id}">${esc(e.name)}</option>`).join('')}</select></div>
@@ -10072,7 +10080,7 @@
     C.innerHTML = '<div class="empty-note">... جاري التحميل</div>';
     try{
       const [empRes, closRes] = await Promise.all([
-        db.from('meal_names').select('id,name').order('name'),
+        db.from('meal_names').select('id,name').eq('is_active', true).order('name'),
         db.from('hr_month_closures').select('*').order('closed_at',{ascending:false}),
       ]);
       if(closRes.error){ C.innerHTML = `<div class="alert-red">⚠️ ${esc(closRes.error.message||'الجدول hr_month_closures غير موجود — نفّذ SQL أولاً')}</div>`; return; }
