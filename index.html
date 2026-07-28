@@ -4174,7 +4174,11 @@
       if (dayStats) {
         if(adm || cc){
           const ok = DAY.filter(o=>o.status!=='cancelled');
-          const sum = ok.reduce((s,o)=>s + (+o.total), 0);
+          // 🔧 مهم: "المبيعات" هون كانت بتجمع إجمالي الفاتورة كامل (شامل التوصيل ووجبات الموظفين)،
+          // بينما شاشة "المبيعات" واللوحة بتحسبوها صافي قيمة الأصناف بس (بدون توصيل، وبدون وجبات الموظفين
+          // المدعومة) — نفس التعريف المتفق عليه، حتى يطلع نفس الرقم بكل الشاشات لنفس اليوم المالي.
+          const salesOk = ok.filter(o=>!o.employee_tab_name);
+          const sum = salesOk.reduce((s,o)=>s + (+o.total - (+o.delivery_fee||0)), 0);
           const cancelled = DAY.filter(o=>o.status==='cancelled');
           const ccSelBranch = document.getElementById('dayBranchSel')?.value;
           dayStats.innerHTML = `
