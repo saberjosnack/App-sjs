@@ -1280,7 +1280,7 @@
   }
   async function saveRole(id, legacyRole){
     if(!lockSubmit('saveRole')) return;
-    setTimeout(()=>unlockSubmit('saveRole'), 3000);
+    setTimeout(()=>unlockSubmit('saveRole'), 15000);
     const perms = {};
     document.querySelectorAll('.rolePermChk').forEach(c=>{ perms[c.dataset.perm]=c.checked; });
     if(legacyRole){
@@ -2262,11 +2262,10 @@
   }
   async function saveDrawerRequest(){
     if(!lockSubmit('saveDrawerRequest')) return;
-    setTimeout(()=>unlockSubmit('saveDrawerRequest'), 3000);
     const amt = parseFloat(document.getElementById('dr_amt').value);
     const reason = document.getElementById('dr_reason').value.trim();
-    if(isNaN(amt)||amt<=0){ toast('⚠️ اكتب مبلغ صحيح'); return; }
-    if(!reason){ toast('⚠️ السبب إجباري'); return; }
+    if(isNaN(amt)||amt<=0){ toast('⚠️ اكتب مبلغ صحيح'); unlockSubmit('saveDrawerRequest'); return; }
+    if(!reason){ toast('⚠️ السبب إجباري'); unlockSubmit('saveDrawerRequest'); return; }
     try{
       const { error } = await db.from('expenses').insert({
         expense_date: new Date().toISOString().split('T')[0],
@@ -2281,6 +2280,7 @@
       closeModal(); toast('✓ اتسجل السحب — بانتظار موافقة المدير');
       printDrawerSlip(amt, reason);
     }catch(e){ toast('✗ '+e.message); console.error(e); }
+    finally{ unlockSubmit('saveDrawerRequest'); } // 🔒 فك القفل فورًا بعد ما العملية تخلص (نجحت أو فشلت) — مش بعد وقت ثابت، عشان ما ينفتح المجال لسحب مزدوج بشبكة بطيئة
   }
   /* ---- سند سحب من الدرج — يطبع فيش صغير لإرفاقه مع الفاتورة الأصلية (إثبات إنه المبلغ خرج من الدرج فعليًا) ---- */
   function printDrawerSlip(amt, reason){
@@ -2428,6 +2428,49 @@
         <div class="nm">${esc(i.name_ar)}</div><div class="pr">${fmt(i.price)} ${CURRENCY}</div>
       </div>`).join('')
       : `<div class="empty-note">ما في أصناف بعد.<br>أضفها من ⚙️ الإدارة ← الأصناف</div>`;
+  }
+  function findDuplicateItems(){
+    const groups = {};
+    ITEMS.forEach(i=>{
+      const key = (i.name_ar||'').trim().toLowerCase();
+      if(!groups[key]) groups[key] = [];
+      groups[key].push(i);
+    });
+    const dups = Object.values(groups).filter(g=>g.length>1);
+    if(!dups.length){ toast('✅ ما في أصناف مكررة بالاسم'); return; }
+    modal(`<h3>🔀 أصناف مكررة (${dups.length})</h3>
+      <div style="color:var(--muted);font-weight:700;margin-bottom:10px">اختاري "المُبقى" لكل مجموعة — كل الطلبات والوصفات القديمة يلي كانت على النسخ التانية بتنتقل تلقائيًا للصنف المُبقى، وبعدها ينحذفوا الباقي.</div>
+      ${dups.map((g,gi)=>`<div style="border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:10px">
+        <b>${esc(g[0].name_ar)}</b> (${g.length} نسخ)
+        <div style="margin-top:6px">
+          ${g.map(i=>`<label style="display:flex;align-items:center;gap:8px;padding:4px 0;cursor:pointer">
+            <input type="radio" name="dupkeep_${gi}" value="${i.id}" ${i===g[0]?'checked':''}>
+            <span>سعر ${fmt(i.price)} ${CURRENCY} — ${i.is_available?'✅ ظاهر':'🚫 مخفي'} — أنشئ ${i.created_at?new Date(i.created_at).toLocaleDateString('ar-JO'):'—'}</span>
+          </label>`).join('')}
+        </div>
+      </div>`).join('')}
+      <div class="m-act"><button class="save" onclick="mergeAllDuplicateItems(${dups.length})">🔀 دمج الكل</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
+    window.__dupGroups = dups;
+  }
+  async function mergeAllDuplicateItems(count){
+    if(!confirm('⚠️ هاد إجراء نهائي — رح يدمج كل المجموعات ويحذف النسخ الزايدة. متأكدة؟')) return;
+    try{
+      for(let gi=0; gi<count; gi++){
+        const keepId = document.querySelector(`input[name="dupkeep_${gi}"]:checked`)?.value;
+        const group = window.__dupGroups[gi];
+        if(!keepId || !group) continue;
+        const toRemove = group.filter(i=>i.id!==keepId).map(i=>i.id);
+        for(const oldId of toRemove){
+          await db.from('order_items').update({ menu_item_id: keepId }).eq('menu_item_id', oldId).then(()=>{}).catch(()=>{});
+          await db.from('recipes').update({ menu_item_id: keepId }).eq('menu_item_id', oldId).then(()=>{}).catch(()=>{});
+          await db.from('composite_fixed').update({ menu_item_id: keepId }).eq('menu_item_id', oldId).then(()=>{}).catch(()=>{});
+          await db.from('composite_groups').update({ menu_item_id: keepId }).eq('menu_item_id', oldId).then(()=>{}).catch(()=>{});
+          const { error } = await db.from('menu_items').delete().eq('id', oldId);
+          if(error) console.error('failed to delete duplicate item', oldId, error);
+        }
+      }
+      closeModal(); toast('✓ اتدمجوا الأصناف المكررة'); renderAdmin(); await bootData();
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
   function addToCart(id){
     if(!currentShift && !isAdmin()){ toast('⚠️ يجب فتح شيفت أولاً'); return; }
@@ -3744,7 +3787,7 @@
 
   async function saveOrder(print){
     if(!lockSubmit('saveOrder')) return;
-    setTimeout(()=>unlockSubmit('saveOrder'), 3000);
+    setTimeout(()=>unlockSubmit('saveOrder'), 15000);
     if(!cart.length){ toast('⚠️ السلة فاضية'); return; }
     if(!currentShift && !isAdmin()){ toast('⚠️ يجب فتح شيفت أولاً'); return; }
     if(!perm(orderType==='delivery'?'order_delivery':'order_takeaway')){ toast('⛔ ما عندك صلاحية بيع '+(orderType==='delivery'?'التوصيل':'الاستلام')); return; }
@@ -4634,7 +4677,7 @@
   };
   async function saveCustomerRating(customerId, orderId){
     if(!lockSubmit('saveCustomerRating')) return;
-    setTimeout(()=>unlockSubmit('saveCustomerRating'), 3000);
+    setTimeout(()=>unlockSubmit('saveCustomerRating'), 15000);
     const rating = window.__currentRating || 0;
     if(!rating){ toast('⚠️ اختر نجوم أول'); return; }
     try{
@@ -4768,7 +4811,7 @@
 
   async function saveCust(id){
     if(!lockSubmit('saveCust')) return;
-    setTimeout(()=>unlockSubmit('saveCust'), 3000);
+    setTimeout(()=>unlockSubmit('saveCust'), 15000);
     const f_wn = document.getElementById('f_wn');
     const f_wp = document.getElementById('f_wp');
     const f_wa = document.getElementById('f_wa');
@@ -5303,7 +5346,7 @@
       try {
         const {data}=await db.from('menu_items').select('*').order('sort_order');
         ITEMS=data||[];
-        C.innerHTML=`<button class="add-btn" onclick="itemForm()">＋ إضافة صنف</button><button class="mini ok" style="background:#1D6F42;margin-bottom:10px" onclick="exportItemsExcel()">📥 تصدير Excel</button><div class="tbl-wrap"><table class="tbl"><tr><th>الصنف</th><th>التصنيف</th><th>السعر</th><th>الحالة</th><th></th></tr>${ITEMS.map(i=>`<tr class="${i.is_available?'':'off'}"><td>${esc(i.name_ar)}${i.item_type==='composite'?' 🧩':''}</td><td>${esc(i.category||'—')}</td><td>${fmt(i.price)}</td><td>${i.is_available?'✅ ظاهر':'🚫 مخفي'}</td><td style="white-space:nowrap"><button class="mini edit" onclick="itemForm('${i.id}')">تعديل</button><button class="mini tog" onclick="toggleItem('${i.id}',${!i.is_available})">${i.is_available?'إخفاء (أرشفة)':'إظهار'}</button><button class="mini del" onclick="deleteMenuItem('${i.id}','${esc(i.name_ar)}')">حذف نهائي</button></td></tr>`).join('')||'<tr><td colspan="5" class="empty-note">ما في أصناف</td></tr>'}</table></div>`;
+        C.innerHTML=`<button class="add-btn" onclick="itemForm()">＋ إضافة صنف</button><button class="mini ok" style="background:#1D6F42;margin-bottom:10px" onclick="exportItemsExcel()">📥 تصدير Excel</button><button class="mini ok" style="background:#e91e8c;margin-bottom:10px" onclick="findDuplicateItems()">🔀 دمج الأصناف المكررة</button><div class="tbl-wrap"><table class="tbl"><tr><th>الصنف</th><th>التصنيف</th><th>السعر</th><th>الحالة</th><th></th></tr>${ITEMS.map(i=>`<tr class="${i.is_available?'':'off'}"><td>${esc(i.name_ar)}${i.item_type==='composite'?' 🧩':''}</td><td>${esc(i.category||'—')}</td><td>${fmt(i.price)}</td><td>${i.is_available?'✅ ظاهر':'🚫 مخفي'}</td><td style="white-space:nowrap"><button class="mini edit" onclick="itemForm('${i.id}')">تعديل</button><button class="mini tog" onclick="toggleItem('${i.id}',${!i.is_available})">${i.is_available?'إخفاء (أرشفة)':'إظهار'}</button><button class="mini del" onclick="deleteMenuItem('${i.id}','${esc(i.name_ar)}')">حذف نهائي</button></td></tr>`).join('')||'<tr><td colspan="5" class="empty-note">ما في أصناف</td></tr>'}</table></div>`;
       } catch(e) { console.error(e); }
     }
     if(admView==='cats'){
@@ -5658,7 +5701,7 @@
   }
   async function saveViolation(){
     if(!lockSubmit('saveViolation')) return;
-    setTimeout(()=>unlockSubmit('saveViolation'), 3000);
+    setTimeout(()=>unlockSubmit('saveViolation'), 15000);
     const note = document.getElementById('vioNote')?.value?.trim();
     if(!note && !(window.__violationImgs||[]).length){ toast('⚠️ اكتب وصف أو أرفق صورة على الأقل'); return; }
     // 🔧 الزر متاح بمكانين: التطبيق الرئيسي (كاشير/أدمن — يستخدم ME) وبوابة الموظف الذاتية
@@ -5775,7 +5818,7 @@
     if(checked.length>10){ toast('⚠️ أقصى عدد 10 أشخاص بالمرة الوحدة'); return; }
     if(!amount || amount<=0){ toast('⚠️ اكتبي المبلغ الكلي'); return; }
     if(!lockSubmit('saveDeductionFromViolation')) return;
-    setTimeout(()=>unlockSubmit('saveDeductionFromViolation'), 3000);
+    setTimeout(()=>unlockSubmit('saveDeductionFromViolation'), 15000);
     const per = amount/checked.length;
     try{
       const insertedIds = []; const names = [];
@@ -6697,7 +6740,7 @@
   }
   async function saveIngredient(id){
     if(!lockSubmit('saveIngredient')) return;
-    setTimeout(()=>unlockSubmit('saveIngredient'), 3000);
+    setTimeout(()=>unlockSubmit('saveIngredient'), 15000);
     const unitSel = document.getElementById('fi_un').value;
     const unit = unitSel==='__custom__' ? (document.getElementById('fi_un_custom')?.value.trim()||'') : unitSel;
     if(!unit){ toast('⚠️ اكتب وحدة القياس'); return; }
@@ -6713,8 +6756,10 @@
   /* ---- الوصفات ---- */
   async function renderRecipes(){
     await loadIngredients();
-    const {data}=await db.from('recipes').select('*, menu_items(name_ar,price), recipe_items(*, ingredients(name,unit,unit_cost))').order('created_at',{ascending:false});
-    RECIPES_DATA=data||[];
+    const {data}=await db.from('recipes').select('*, menu_items(name_ar,price,is_available), recipe_items(*, ingredients(name,unit,unit_cost))').order('created_at',{ascending:false});
+    // 🔧 الوصفات المرتبطة بصنف مؤرشف/مخفي كانت تضل تظهر هون رغم إخفاء الصنف من كل مكان تاني — هلأ منستبعدها،
+    // وبترجع تظهر تلقائيًا فور ما ترجعي تفعّلي الصنف من جديد
+    RECIPES_DATA=(data||[]).filter(r=>r.menu_items?.is_available!==false);
     const C=document.getElementById('admContent');
     C.innerHTML=`<button class="add-btn" onclick="recipeForm()">＋ وصفة جديدة</button>
       <button class="mini ok" style="background:#1D6F42;margin-bottom:10px" onclick="exportRecipesExcel()">📥 تصدير Excel</button>
@@ -6800,7 +6845,7 @@
   function addRiRow(){document.getElementById('ri_list').insertAdjacentHTML('beforeend',riRow(++riIdx,'',''));}
   async function saveRecipe(id){
     if(!lockSubmit('saveRecipe')) return;
-    setTimeout(()=>unlockSubmit('saveRecipe'), 3000);
+    setTimeout(()=>unlockSubmit('saveRecipe'), 15000);
     const itemId=document.getElementById('fr_item').value;
     if(!itemId){toast('⚠️ اختر الصنف');return;}
     const rows=[...document.querySelectorAll('#ri_list .two')];
@@ -6930,7 +6975,7 @@
   }
   async function saveMfgRecipe(id){
     if(!lockSubmit('saveMfgRecipe')) return;
-    setTimeout(()=>unlockSubmit('saveMfgRecipe'), 3000);
+    setTimeout(()=>unlockSubmit('saveMfgRecipe'), 15000);
     const name = document.getElementById('mfg_name')?.value.trim();
     let outId = document.getElementById('mfg_out')?.value;
     const outQty = parseFloat(document.getElementById('mfg_out_qty')?.value)||0;
@@ -7047,7 +7092,7 @@
   }
   async function saveManufacturingRun(recipeId){
     if(!lockSubmit('saveManufacturingRun')) return;
-    setTimeout(()=>unlockSubmit('saveManufacturingRun'), 3000);
+    setTimeout(()=>unlockSubmit('saveManufacturingRun'), 15000);
     const r = MFG_RECIPES.find(x=>x.id===recipeId); if(!r) return;
     const branchId = document.getElementById('mfg_run_branch')?.value;
     const qty = parseFloat(document.getElementById('mfg_run_qty')?.value)||0;
@@ -7291,7 +7336,7 @@
   }
   async function confirmSettlePurchase(id){
     if(!lockSubmit('confirmSettlePurchase')) return;
-    setTimeout(()=>unlockSubmit('confirmSettlePurchase'), 3000);
+    setTimeout(()=>unlockSubmit('confirmSettlePurchase'), 15000);
     if(!canFinApprove()){ toast('⛔ صلاحية المالك فقط — الموظف يقدر يدخل الفاتورة بس، الدفع قرارك إنت'); return; }
     const p = PURCHASES_DATA.find(x=>x.id===id); if(!p) return;
     if(p.approval_status!=='approved'){ toast('⛔ الفاتورة لسا مو موافق عليها'); return; }
@@ -7326,7 +7371,7 @@
   }
   async function confirmSupplierGeneralPayment(supplierName){
     if(!lockSubmit('confirmSupplierGeneralPayment')) return;
-    setTimeout(()=>unlockSubmit('confirmSupplierGeneralPayment'), 3000);
+    setTimeout(()=>unlockSubmit('confirmSupplierGeneralPayment'), 15000);
     if(!canFinApprove()){ toast('⛔ صلاحية المالك فقط'); return; }
     const acc = document.getElementById('sgp_acc')?.value||'cash';
     const note = document.getElementById('sgp_note')?.value.trim();
@@ -7610,7 +7655,7 @@
   }
   async function savePurchase(){
     if(!lockSubmit('savePurchase')) return;
-    setTimeout(()=>unlockSubmit('savePurchase'), 3000);
+    setTimeout(()=>unlockSubmit('savePurchase'), 15000);
     const dt=document.getElementById('fp_dt').value;
     let sup=document.getElementById('fp_sup').value.trim();
     if(sup==='__new__'){
@@ -8243,7 +8288,7 @@
   }
   async function saveInventoryAudit(branchId, branchName){
     if(!lockSubmit('saveInventoryAudit')) return;
-    setTimeout(()=>unlockSubmit('saveInventoryAudit'), 3000); // شبكة أمان: يفك القفل لحاله لو صار خطأ غير متوقع
+    setTimeout(()=>unlockSubmit('saveInventoryAudit'), 15000); // شبكة أمان: يفك القفل لحاله لو صار خطأ غير متوقع
     const qtys=[...document.querySelectorAll('.inv_qty')];
     const results = [];
     let updated=0;
@@ -8381,7 +8426,7 @@
   }
   async function saveInventory(branchId, branchName){
     if(!lockSubmit('saveInventory')) return;
-    setTimeout(()=>unlockSubmit('saveInventory'), 3000);
+    setTimeout(()=>unlockSubmit('saveInventory'), 15000);
     const qtys=[...document.querySelectorAll('.inv_qty')];
     const mins=[...document.querySelectorAll('.inv_min')];
     let updated=0;
@@ -8856,7 +8901,7 @@
   }
   async function saveAdjust(invId, branchId, ingId, oldStock){
     if(!lockSubmit('saveAdjust')) return;
-    setTimeout(()=>unlockSubmit('saveAdjust'), 3000);
+    setTimeout(()=>unlockSubmit('saveAdjust'), 15000);
     const stock = parseFloat(document.getElementById('adj_cur').value)||0;
     const min_stock = parseFloat(document.getElementById('adj_min').value)||0;
     const reason = document.getElementById('adj_reason')?.value||'تصحيح خطأ';
@@ -9351,7 +9396,7 @@
   }
   async function saveHrAdvance(empId, empName){
     if(!lockSubmit('saveHrAdvance')) return;
-    setTimeout(()=>unlockSubmit('saveHrAdvance'), 3000);
+    setTimeout(()=>unlockSubmit('saveHrAdvance'), 15000);
     const amt = parseFloat(document.getElementById('adv_amt')?.value);
     const acc = document.getElementById('adv_acc')?.value||'cash';
     const note = document.getElementById('adv_note')?.value.trim();
@@ -10480,7 +10525,7 @@
   }
   async function saveTreasuryManual(dir){
     if(!lockSubmit('saveTreasuryManual')) return;
-    setTimeout(()=>unlockSubmit('saveTreasuryManual'), 3000);
+    setTimeout(()=>unlockSubmit('saveTreasuryManual'), 15000);
     const amt = parseFloat(document.getElementById('tm_amt')?.value);
     const note = document.getElementById('tm_note')?.value.trim();
     if(isNaN(amt)||amt<=0){ toast('⚠️ اكتب مبلغ صحيح'); return; }
@@ -10634,7 +10679,7 @@
   }
   async function saveDeviceInfo(id){
     if(!lockSubmit('saveDeviceInfo')) return;
-    setTimeout(()=>unlockSubmit('saveDeviceInfo'), 3000);
+    setTimeout(()=>unlockSubmit('saveDeviceInfo'), 15000);
     const name = document.getElementById('dv_name').value.trim();
     if(!name){ toast('⚠️ اسم الجهاز مطلوب'); return; }
     const rec = {
@@ -10812,7 +10857,7 @@
   }
   async function saveMealName(id){
     if(!lockSubmit('saveMealName')) return;
-    setTimeout(()=>unlockSubmit('saveMealName'), 3000);
+    setTimeout(()=>unlockSubmit('saveMealName'), 15000);
     const name = document.getElementById('mn_name').value.trim();
     const disc = parseFloat(document.getElementById('mn_disc').value);
     const wage = parseFloat(document.getElementById('mn_wage')?.value)||0;
@@ -11210,7 +11255,7 @@ window.__lastEmpMealsData = null;
   }
   async function confirmSendVip(custId){
     if(!lockSubmit('confirmSendVip')) return;
-    setTimeout(()=>unlockSubmit('confirmSendVip'), 3000);
+    setTimeout(()=>unlockSubmit('confirmSendVip'), 15000);
     const pct = parseFloat(document.getElementById('vip_disc_pct')?.value);
     if(isNaN(pct)||pct<0||pct>100){ toast('⚠️ نسبة الخصم يجب تكون بين 0 و100'); return; }
     try{
@@ -11340,7 +11385,7 @@ window.__lastEmpMealsData = null;
   }
   async function saveWaste(){
     if(!lockSubmit('saveWaste')) return;
-    setTimeout(()=>unlockSubmit('saveWaste'), 3000);
+    setTimeout(()=>unlockSubmit('saveWaste'), 15000);
     const isItemMode = !document.getElementById('wf_item_wrap').classList.contains('hidden');
     const qty = parseFloat(document.getElementById('wf_qty').value);
     const branchId = document.getElementById('wf_branch').value;
@@ -11616,7 +11661,7 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
   }
   async function saveSupplier(id){
     if(!lockSubmit('saveSupplier')) return;
-    setTimeout(()=>unlockSubmit('saveSupplier'), 3000);
+    setTimeout(()=>unlockSubmit('saveSupplier'), 15000);
     const name = document.getElementById('sup_name').value.trim();
     if(!name){ toast('⚠️ اسم المورد مطلوب'); return; }
     const rec = { name, phone: document.getElementById('sup_phone').value.trim()||null, whatsapp: document.getElementById('sup_whatsapp')?.value.trim()||null, notes: document.getElementById('sup_notes').value.trim()||null };
@@ -12012,7 +12057,7 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
   }
   async function savePlatform(id){
     if(!lockSubmit('savePlatform')) return;
-    setTimeout(()=>unlockSubmit('savePlatform'), 3000);
+    setTimeout(()=>unlockSubmit('savePlatform'), 15000);
     const name = document.getElementById('pf_name').value.trim();
     const commission = parseFloat(document.getElementById('pf_comm').value);
     if(!name){ toast('⚠️ اسم المنصة مطلوب'); return; }
@@ -12086,7 +12131,7 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
   }
   async function saveTransfer(){
     if(!lockSubmit('saveTransfer')) return;
-    setTimeout(()=>unlockSubmit('saveTransfer'), 3000);
+    setTimeout(()=>unlockSubmit('saveTransfer'), 15000);
     const fromId = document.getElementById('tr_from').value;
     const toId = document.getElementById('tr_to').value;
     const fee = parseFloat(document.getElementById('tr_fee').value)||0;
@@ -12266,7 +12311,7 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
 
   async function saveSettings(){
     if(!lockSubmit('saveSettings')) return;
-    setTimeout(()=>unlockSubmit('saveSettings'), 3000);
+    setTimeout(()=>unlockSubmit('saveSettings'), 15000);
     const f_wanum = document.getElementById('f_wanum');
     const f_receiptTemplate = document.getElementById('f_receiptTemplate');
     const f_printMethod = document.getElementById('f_printMethod');
@@ -12369,7 +12414,7 @@ try {
   function codeForm(id){ const list=window.__CODES||[]; const c=list.find(x=>x.id===id)||{}; modal(`<h3>${id?'تعديل كود':'كود جديد'}</h3><div class="fld"><label>الكود</label><input id="f_cc" value="${esc(c.code||'')}" style="text-transform:uppercase"></div><div class="fld"><label>النوع</label><select id="f_ck"><option value="percent" ${c.kind!=='fixed'?'selected':''}>نسبة %</option><option value="fixed" ${c.kind==='fixed'?'selected':''}>مبلغ ثابت</option></select></div><div class="fld"><label>القيمة</label><input id="f_cv" inputmode="decimal" value="${c.value??''}"></div><div class="m-act"><button class="save" onclick="saveCode('${id||''}')">حفظ</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`); }
   async function saveCode(id){
     if(!lockSubmit('saveCode')) return;
-    setTimeout(()=>unlockSubmit('saveCode'), 3000);
+    setTimeout(()=>unlockSubmit('saveCode'), 15000);
     const f_cc = document.getElementById('f_cc');
     const f_ck = document.getElementById('f_ck');
     const f_cv = document.getElementById('f_cv');
@@ -12412,7 +12457,7 @@ try {
   };
   async function saveItem(id){
     if(!lockSubmit('saveItem')) return;
-    setTimeout(()=>unlockSubmit('saveItem'), 3000);
+    setTimeout(()=>unlockSubmit('saveItem'), 15000);
     const f_nm = document.getElementById('f_nm');
     const f_pr = document.getElementById('f_pr');
     const f_cat = document.getElementById('f_cat');
@@ -12423,6 +12468,10 @@ try {
     if(window.__itemImg !== undefined){ rec.image_url = window.__itemImg || null; }
     window.__itemImg = undefined;
     if(!rec.name_ar||!(rec.price>0)){ toast('⚠️ الاسم وسعر صحيح'); return; }
+    if(!id){
+      const dup = ITEMS.find(i=>i.name_ar.trim().toLowerCase()===rec.name_ar.toLowerCase());
+      if(dup && !confirm('⚠️ في صنف موجود أصلًا بنفس الاسم "'+dup.name_ar+'" (سعره '+fmt(dup.price)+' '+CURRENCY+'). متأكدة بدك تضيفي وحدة جديدة كمان؟ (بيصير عندك صنفين بنفس الاسم)')) return;
+    }
     try {
       const r=id?await db.from('menu_items').update(rec).eq('id',id):await db.from('menu_items').insert(rec).select().single();
       if(r.error){ toast('✗ فشل'); return; }
@@ -12586,7 +12635,7 @@ try {
   function catForm(id){ const list=window.__ALLCATS||CATS; const c=list.find(x=>x.id===id)||{}; modal(`<h3>${id?'تعديل تصنيف':'تصنيف جديد'}</h3><div class="fld"><label>اسم التصنيف</label><input id="f_cn" value="${esc(c.name_ar||'')}"></div><div class="fld"><label>الترتيب</label><input id="f_cs" inputmode="numeric" value="${c.sort_order??0}"></div><div class="m-act"><button class="save" onclick="saveCat('${id||''}')">حفظ</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`); }
   async function saveCat(id){
     if(!lockSubmit('saveCat')) return;
-    setTimeout(()=>unlockSubmit('saveCat'), 3000);
+    setTimeout(()=>unlockSubmit('saveCat'), 15000);
     const f_cn = document.getElementById('f_cn');
     const f_cs = document.getElementById('f_cs');
     const rec={name_ar: f_cn ? f_cn.value.trim() : '', sort_order: f_cs ? parseInt(f_cs.value)||0 : 0};
@@ -12760,7 +12809,7 @@ try {
 
   async function saveStaff(id){
     if(!lockSubmit('saveStaff')) return;
-    setTimeout(()=>unlockSubmit('saveStaff'), 3000);
+    setTimeout(()=>unlockSubmit('saveStaff'), 15000);
     const f_sn = document.getElementById('f_sn');
     const f_su = document.getElementById('f_su');
     const f_sp = document.getElementById('f_sp');
@@ -12808,7 +12857,7 @@ try {
   function branchForm(id){ const list=window.__ALLBR||BRANCHES; const b=list.find(x=>x.id===id)||{}; modal(`<h3>${id?'تعديل فرع':'فرع جديد'}</h3><div class="fld"><label>الاسم (عربي)</label><input id="f_bn" value="${esc(b.name_ar||'')}"></div><div class="fld"><label>العنوان</label><input id="f_be" value="${esc(b.address||'')}"></div><div class="m-act"><button class="save" onclick="saveBranch('${id||''}')">حفظ</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`); }
   async function saveBranch(id){
     if(!lockSubmit('saveBranch')) return;
-    setTimeout(()=>unlockSubmit('saveBranch'), 3000);
+    setTimeout(()=>unlockSubmit('saveBranch'), 15000);
     const f_bn = document.getElementById('f_bn');
     const f_be = document.getElementById('f_be');
     const rec={name_ar: f_bn ? f_bn.value.trim() : '', address: f_be ? f_be.value.trim()||null : null};
@@ -14056,7 +14105,7 @@ try {
   }
   async function empSubmitAdvanceRequest(){
     if(!lockSubmit('empSubmitAdvanceRequest')) return;
-    setTimeout(()=>unlockSubmit('empSubmitAdvanceRequest'), 3000);
+    setTimeout(()=>unlockSubmit('empSubmitAdvanceRequest'), 15000);
     const amt = parseFloat(normalizeDigits(document.getElementById('epa_amt')?.value));
     const note = document.getElementById('epa_note')?.value.trim();
     if(isNaN(amt)||amt<=0){ toast('⚠️ اكتب مبلغ صحيح'); return; }
