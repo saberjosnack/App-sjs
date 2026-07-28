@@ -7306,10 +7306,10 @@
       for(const item of (p.purchase_items||[])){
         for(const branch of branchesToRevert){
           const {data:bi} = await db.from('branch_inventory').select('id,stock').eq('branch_id',branch.id).eq('ingredient_id',item.ingredient_id).maybeSingle();
-          if(bi) await db.from('branch_inventory').update({stock: Math.max(0,(bi.stock||0)-item.quantity)}).eq('id',bi.id);
+          if(bi) await db.from('branch_inventory').update({stock: Math.max(0,(bi.stock||0)-(item.qty||0))}).eq('id',bi.id);
         }
       }
-      await db.from('purchase_items').delete().eq('purchase_id',id);
+      await db.from('purchase_items').delete().eq('purchase_order_id',id);
       await db.from('purchases').delete().eq('id',id);
       await logActivity('delete_purchase','حذف فاتورة: '+(p.supplier||'—'));
       toast('✓ اتحذفت الفاتورة وترجّع المخزون');
@@ -7323,9 +7323,9 @@
       <table class="tbl" style="margin-bottom:10px">
         <tr><th>المادة</th><th>الكمية</th><th>الوحدة</th><th>سعر الوحدة</th><th>المجموع</th></tr>
         ${(p.purchase_items||[]).map(i=>`<tr>
-          <td>${esc(i.ingredients?.name||'—')}</td><td>${i.quantity}</td>
+          <td>${esc(i.ingredients?.name||'—')}</td><td>${i.qty}</td>
           <td>${esc(i.ingredients?.unit||'')}</td><td>${fmt(i.unit_cost||0)}</td>
-          <td><b>${fmt((i.quantity||0)*(i.unit_cost||0))}</b></td></tr>`).join('')}
+          <td><b>${fmt((i.qty||0)*(i.unit_cost||0))}</b></td></tr>`).join('')}
       </table>
       <div class="trow total"><span>الإجمالي</span><b>${fmt(p.total)} ${CURRENCY}</b></div>
       <div class="m-act"><button class="cancel" onclick="closeModal()">إغلاق</button></div>`);
@@ -7542,7 +7542,9 @@
       await addTreasuryTx(payStatus, -total, 'purchase', pur.id, 'فاتورة شراء — '+sup, isAllBranches ? null : window.__purchaseBranchId);
       await db.from('supplier_payments').insert({ supplier:sup, amount:total, account:payStatus, purchase_id:pur.id, branch_id: isAllBranches?null:window.__purchaseBranchId, note:'دفع كامل وقت الفاتورة', created_by: ME.full_name });
     }
-    const { error: itemsErr } = await db.from('purchase_items').insert(items.map(x=>({...x,purchase_id:pur.id})));
+    const { error: itemsErr } = await db.from('purchase_items').insert(items.map(x=>({
+      ingredient_id: x.ingredient_id, qty: x.quantity, unit_price: x.unit_cost, unit_cost: x.unit_cost, purchase_order_id: pur.id
+    })));
     if(itemsErr){
       console.error('purchase_items insert failed:', itemsErr);
       toast('⚠️ انحفظت الفاتورة بس فشل حفظ تفاصيل المواد: '+itemsErr.message+' — احذف الفاتورة وأعد إدخالها');
@@ -7750,7 +7752,7 @@
         repTable(['التاريخ','المورد','المواد','الإجمالي'],(data||[]).map(p=>`<tr>
           <td>${new Date(p.purchase_date).toLocaleDateString('ar-JO')}</td>
           <td><b>${esc(p.supplier||'—')}</b></td>
-          <td>${(p.purchase_items||[]).map(i=>i.quantity+'×'+esc(i.ingredients?.name||'—')).join('، ')}</td>
+          <td>${(p.purchase_items||[]).map(i=>i.qty+'×'+esc(i.ingredients?.name||'—')).join('، ')}</td>
           <td><b>${fmt(p.total)}</b></td></tr>`));
     }
   if(mode==='profit'){
@@ -10936,7 +10938,7 @@ window.__lastEmpMealsData = null;
   async function exportPurchasesExcel(){
     try{
       toast('⏳ جاري تجهيز الملف...');
-      const { data: purchases } = await db.from('purchases').select('*, branches(name_ar), purchase_items(quantity, unit_cost, ingredients(name, unit))').order('purchase_date',{ascending:false}).limit(5000);
+      const { data: purchases } = await db.from('purchases').select('*, branches(name_ar), purchase_items(qty, unit_cost, ingredients(name, unit))').order('purchase_date',{ascending:false}).limit(5000);
       const rows = [];
       (purchases||[]).forEach(p=>{
         const items = p.purchase_items||[];
@@ -10952,9 +10954,9 @@ window.__lastEmpMealsData = null;
             'المورد': idx===0?p.supplier:'',
             'الفرع': idx===0?(p.branches?.name_ar||'كل الفروع'):'',
             'المادة': it.ingredients?.name||'—',
-            'الكمية': it.quantity,
+            'الكمية': it.qty,
             'سعر الوحدة': it.unit_cost,
-            'تكلفة السطر': (it.quantity*it.unit_cost).toFixed(3),
+            'تكلفة السطر': (it.qty*it.unit_cost).toFixed(3),
             'إجمالي الفاتورة': idx===0?fmt(p.total):'',
             'المدفوع': idx===0?fmt(p.paid_amount||0):'',
             'حالة الدفع': idx===0?(payStatusAr[p.payment_status]||p.payment_status):'',
@@ -11557,8 +11559,8 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
       list.forEach(p=>(p.purchase_items||[]).forEach(i=>{
         const nm = i.ingredients?.name||'—';
         if(!byItem[nm]) byItem[nm] = {qty:0, unit:i.ingredients?.unit||'', cost:0};
-        byItem[nm].qty += parseFloat(i.quantity||0);
-        byItem[nm].cost += (i.quantity||0)*(i.unit_cost||0);
+        byItem[nm].qty += parseFloat(i.qty||0);
+        byItem[nm].cost += (i.qty||0)*(i.unit_cost||0);
       }));
       window.__lastSupplierStmt = { supplierName, from, to, list, payments, total, debt, totalPaid, byItem };
       const payLbl = p => {
@@ -11595,9 +11597,9 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
             <table class="tbl"><tr><th>المادة</th><th>الكمية</th><th>سعر الوحدة</th><th>الإجمالي</th></tr>
               ${(p.purchase_items||[]).map(i=>`<tr>
                 <td>${esc(i.ingredients?.name||'—')}</td>
-                <td>${fmt(i.quantity)} ${esc(i.ingredients?.unit||'')}</td>
+                <td>${fmt(i.qty)} ${esc(i.ingredients?.unit||'')}</td>
                 <td>${fmt(i.unit_cost||0)}</td>
-                <td><b>${fmt((i.quantity||0)*(i.unit_cost||0))}</b></td>
+                <td><b>${fmt((i.qty||0)*(i.unit_cost||0))}</b></td>
               </tr>`).join('')||'<tr><td colspan="4" class="empty-note">لا شي</td></tr>'}
             </table>
             <div style="text-align:left;font-weight:900;margin-top:6px;color:var(--red)">إجمالي الفاتورة: ${fmt(p.total)} ${CURRENCY}</div>
@@ -11662,7 +11664,7 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
         <div class="inv">
           <div class="inv-head"><span>📅 ${p.purchase_date} — 🏪 ${esc(p.branches?.name_ar||'—')}</span><span>${payLbl(p)}</span></div>
           <table><tr><th>المادة</th><th>الكمية</th><th>سعر الوحدة</th><th>الإجمالي</th></tr>
-          ${(p.purchase_items||[]).map(i=>`<tr><td>${esc(i.ingredients?.name||'—')}</td><td>${fmt(i.quantity)} ${esc(i.ingredients?.unit||'')}</td><td>${fmt(i.unit_cost||0)}</td><td>${fmt((i.quantity||0)*(i.unit_cost||0))}</td></tr>`).join('')}
+          ${(p.purchase_items||[]).map(i=>`<tr><td>${esc(i.ingredients?.name||'—')}</td><td>${fmt(i.qty)} ${esc(i.ingredients?.unit||'')}</td><td>${fmt(i.unit_cost||0)}</td><td>${fmt((i.qty||0)*(i.unit_cost||0))}</td></tr>`).join('')}
           </table>
           <div style="text-align:left;font-weight:900;color:#F60100">إجمالي الفاتورة: ${fmt(p.total)} ${CURRENCY}</div>
           ${p.notes?`<div style="font-size:.8rem;color:#8a7a72">📝 ${esc(p.notes)}</div>`:''}
