@@ -5947,16 +5947,22 @@
         <div class="tbl-wrap"><table class="tbl">
           <tr><th>الموظف</th><th>عدد الطلبات (المؤهلة)</th><th>إجمالي المبيعات</th><th>النقاط هالشهر</th><th></th></tr>
           ${ccStaff.map(s=>{
-            const myOrders = byStaff[s.id]||[];
+            // 🔄 لو عملتي تصفير لهاد الموظف، منحسب بس من لحظة التصفير (مش من أول الشهر) — مفيد للموظفين القدام يلي عندهم طلبات كتير قبل ما نبلّش النظام
+            const resetAt = s.cc_points_reset_at ? new Date(s.cc_points_reset_at) : null;
+            const effectiveFrom = resetAt && resetAt > new Date(monthStart) ? resetAt : new Date(monthStart);
+            const myOrders = (byStaff[s.id]||[]).filter(o=>new Date(o.created_at) >= effectiveFrom);
             const qualifying = myOrders.filter(o=>parseFloat(o.total||0)>=CC_POINT_MIN_ORDER);
             const sum = myOrders.reduce((a,o)=>a+parseFloat(o.total||0),0);
             const points = calcCcPoints(myOrders);
             return `<tr>
-              <td><b>${esc(s.full_name)}</b></td>
+              <td><b>${esc(s.full_name)}</b>${resetAt?`<br><small style="color:var(--muted);font-weight:600">🔄 مصفّرة من ${resetAt.toLocaleDateString('ar-JO')}</small>`:''}</td>
               <td>${qualifying.length} (من أصل ${myOrders.length})</td>
               <td><b style="color:var(--red)">${fmt(sum)} ${CURRENCY}</b></td>
               <td><b style="color:var(--maroon)">${points}</b></td>
-              <td><button class="mini ok" style="background:var(--maroon)" onclick="ccBonusForm('${s.id}','${esc(s.full_name)}',${points})">🎁 اعتماد بونص</button></td>
+              <td style="white-space:nowrap">
+                <button class="mini ok" style="background:var(--maroon)" onclick="ccBonusForm('${s.id}','${esc(s.full_name)}',${points})">🎁 اعتماد بونص</button>
+                <button class="mini del" onclick="resetCcPoints('${s.id}','${esc(s.full_name)}')">🔄 تصفير</button>
+              </td>
             </tr>`;
           }).join('')||'<tr><td colspan="5" class="empty-note">ما في موظفين كول سنتر</td></tr>'}
         </table></div>
@@ -5974,6 +5980,15 @@
           </table></div>
         </div>`;
     }catch(e){ C.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
+  }
+  async function resetCcPoints(staffId, staffName){
+    if(!confirm('🔄 تصفير نقاط "'+staffName+'"؟ من هلأ رح تتحسب نقاطه من هالّلحظة بس (طلباته القديمة ما رح تتحسب تاني ولا هالشهر ولا الأشهر الجاية).')) return;
+    try{
+      const { error } = await db.from('staff').update({ cc_points_reset_at: new Date().toISOString() }).eq('id', staffId);
+      if(error){ toast('✗ '+error.message); return; }
+      const s = STAFF.find(x=>x.id===staffId); if(s) s.cc_points_reset_at = new Date().toISOString();
+      toast('✓ اتصفّرت نقاط '+staffName); renderCcPoints();
+    }catch(e){ toast('✗ '+e.message); }
   }
   async function deleteCcBonus(id){
     if(!confirm('⚠️ حذف هاد البونص نهائيًا؟')) return;
