@@ -5938,6 +5938,7 @@
         if(!byStaff[o.created_by]) byStaff[o.created_by] = [];
         byStaff[o.created_by].push(o);
       });
+      const { data: pastBonuses } = await db.from('employee_rewards').select('*').eq('cc_bonus', true).order('created_at',{ascending:false}).limit(50);
       C.innerHTML = `
         <div class="panel" style="margin-bottom:14px">
           <h3>📞 نقاط مبيعات الكول سنتر</h3>
@@ -5958,8 +5959,29 @@
               <td><button class="mini ok" style="background:var(--maroon)" onclick="ccBonusForm('${s.id}','${esc(s.full_name)}',${points})">🎁 اعتماد بونص</button></td>
             </tr>`;
           }).join('')||'<tr><td colspan="5" class="empty-note">ما في موظفين كول سنتر</td></tr>'}
-        </table></div>`;
+        </table></div>
+        <div class="panel" style="margin-top:16px">
+          <h4 style="color:var(--maroon);margin-bottom:8px">📜 سجل البونصات المعتمدة</h4>
+          <div class="tbl-wrap"><table class="tbl">
+            <tr><th>التاريخ</th><th>الموظف</th><th>المبلغ</th><th>ملاحظة</th><th></th></tr>
+            ${(pastBonuses||[]).map(b=>`<tr>
+              <td>${new Date(b.created_at).toLocaleDateString('ar-JO')}</td>
+              <td><b>${esc(b.employee_name)}</b></td>
+              <td><b style="color:var(--ok)">${fmt(b.amount)} ${CURRENCY}</b></td>
+              <td>${esc(b.reason||'—')}</td>
+              <td><button class="mini del" onclick="deleteCcBonus('${b.id}')">🗑️ حذف</button></td>
+            </tr>`).join('')||'<tr><td colspan="5" class="empty-note">ما في بونصات معتمدة بعد</td></tr>'}
+          </table></div>
+        </div>`;
     }catch(e){ C.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
+  }
+  async function deleteCcBonus(id){
+    if(!confirm('⚠️ حذف هاد البونص نهائيًا؟')) return;
+    try{
+      const { error } = await db.from('employee_rewards').delete().eq('id', id);
+      if(error){ toast('✗ '+error.message); return; }
+      toast('✓ انحذف البونص'); renderCcPoints();
+    }catch(e){ toast('✗ '+e.message); }
   }
   function ccBonusForm(staffId, staffName, points){
     modal(`<h3>🎁 اعتماد بونص — ${esc(staffName)}</h3>
@@ -5973,7 +5995,7 @@
     const note = document.getElementById('cc_bonus_note')?.value.trim();
     if(!amt || amt<=0){ toast('⚠️ اكتبي مبلغ صحيح'); return; }
     try{
-      const { error } = await db.from('employee_rewards').insert({ employee_id: staffId, employee_name: staffName, amount: amt, reason: note||'بونص مبيعات كول سنتر', created_by: ME.full_name });
+      const { error } = await db.from('employee_rewards').insert({ employee_id: staffId, employee_name: staffName, amount: amt, reason: note||'بونص مبيعات كول سنتر', created_by: ME.full_name, cc_bonus: true });
       if(error){ toast('✗ '+error.message); return; }
       await logActivity('cc_bonus', 'بونص كول سنتر لـ'+staffName+' — '+fmt(amt));
       toast('✓ اتاعتمد البونص وانضاف لجدول المكافآت'); closeModal(); renderCcPoints();
@@ -6638,6 +6660,10 @@
       await db.from('purchase_items').update({ ingredient_id: newId }).eq('ingredient_id', oldId);
       await db.from('inventory_movements').update({ ingredient_id: newId }).eq('ingredient_id', oldId).then(()=>{}).catch(()=>{});
       await db.from('waste_log').update({ ingredient_id: newId }).eq('ingredient_id', oldId).then(()=>{}).catch(()=>{});
+      // 🏭 مواد التصنيع: المادة الخام بالوصفة + المنتج الناتج منها (لو كانت هاي المادة أصلًا ناتج تصنيع)
+      await db.from('manufacturing_recipe_items').update({ ingredient_id: newId }).eq('ingredient_id', oldId).then(()=>{}).catch(()=>{});
+      await db.from('manufacturing_recipes').update({ output_ingredient_id: newId }).eq('output_ingredient_id', oldId).then(()=>{}).catch(()=>{});
+      await db.from('branch_inventory').delete().eq('ingredient_id', oldId).then(()=>{}).catch(()=>{});
       const { error } = await db.from('ingredients').delete().eq('id', oldId);
       if(error){ toast('✗ ما زال في مكان ما بدّلناه — '+error.message); console.error(error); return; }
       closeModal(); toast('✓ اتبدّل واتحذف بنجاح'); renderIngredients();
