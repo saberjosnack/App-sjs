@@ -7123,13 +7123,14 @@
         <button class="mini ok" onclick="printPurchasesPDF()">📄 PDF منسّق</button>
       </div>
       <div class="tbl-wrap"><table class="tbl">
-        <tr><th>التاريخ</th><th>المورد</th><th>المواد</th><th>الإجمالي</th><th>المدفوع</th><th>الحالة</th><th></th></tr>
+        <tr><th>التاريخ</th><th>المورد</th><th>المواد</th><th>الإجمالي</th><th>المدفوع</th><th>الحالة</th><th>الموافقة</th><th></th></tr>
         ${filtered.map(p=>{
           const paid = parseFloat(p.paid_amount||0);
           const remain = parseFloat(p.total||0) - paid;
           const st = remain<=0.005 ? '<b style="color:var(--ok)">✅ مدفوعة كليًا</b>'
             : paid>0.005 ? `<b style="color:var(--warn)">🟡 جزئي (${fmt(paid)}/${fmt(p.total)})</b>`
             : '<b style="color:var(--red)">🔴 دين</b>';
+          const isApproved = p.approval_status==='approved';
           return `<tr>
           <td>${new Date(p.purchase_date).toLocaleDateString('ar-JO')}</td>
           <td><b>${esc(p.supplier||'—')}</b></td>
@@ -7137,18 +7138,30 @@
           <td><b style="color:var(--red)">${fmt(p.total)} ${CURRENCY}</b></td>
           <td>${fmt(paid)} ${CURRENCY}</td>
           <td>${st}</td>
+          <td>${isApproved?`<b style="color:var(--ok)">✅ موافَق (${esc(p.approved_by||'')})</b>`:(canFinApprove()?`<button class="mini ok" style="background:var(--maroon)" onclick="approvePurchase('${p.id}')">✅ موافقة</button>`:'<b style="color:var(--warn)">⏳ بانتظار الموافقة</b>')}</td>
           <td style="white-space:nowrap">
             <button class="mini tog" onclick="showPurchaseDetail('${p.id}')">👁️</button>
             <button class="mini edit" onclick="editPurchaseInfo('${p.id}')">تعديل</button>
             ${remain>0.005?`<button class="mini ok" onclick="settlePurchase('${p.id}')">💰 دفعة</button>`:''}
             <button class="mini del" onclick="deletePurchase('${p.id}')">حذف</button>
           </td>
-        </tr>`;}).join('')||'<tr><td colspan="7" class="empty-note">ما في مشتريات</td></tr>'}
+        </tr>`;}).join('')||'<tr><td colspan="8" class="empty-note">ما في مشتريات</td></tr>'}
       </table></div>`;
+  }
+  async function approvePurchase(id){
+    if(!canFinApprove()){ toast('⛔ صلاحية المالك/مدير الفرع بس'); return; }
+    try{
+      const { error } = await db.from('purchases').update({ approval_status:'approved', approved_by: ME.full_name, approved_at: new Date().toISOString() }).eq('id', id);
+      if(error){ toast('✗ '+error.message); return; }
+      await logActivity('approve_purchase', 'موافقة على فاتورة شراء #'+id);
+      toast('✓ اتوافق على الفاتورة — صار ممكن يدفعوا عليها');
+      renderPurchases();
+    }catch(e){ toast('✗ '+e.message); }
   }
   function settlePurchase(id){
     if(!canFinApprove()){ toast('⛔ صلاحية المالك فقط — الدفع قرارك إنت'); return; }
     const p = PURCHASES_DATA.find(x=>x.id===id); if(!p) return;
+    if(p.approval_status!=='approved'){ toast('⛔ الفاتورة لسا مو موافق عليها — وافقي عليها أول من زر "✅ موافقة" بالجدول'); return; }
     const paid = parseFloat(p.paid_amount||0);
     const remain = parseFloat(p.total||0) - paid;
     modal(`<h3>💰 دفعة — ${esc(p.supplier||'—')}</h3>
@@ -7156,8 +7169,10 @@
         الإجمالي: <b>${fmt(p.total)} ${CURRENCY}</b> — مدفوع سابقًا: <b>${fmt(paid)}</b> — المتبقي: <b style="color:var(--red)">${fmt(remain)} ${CURRENCY}</b>
       </div>
       <div class="fld"><label>مبلغ الدفعة (كاملة أو جزء منها)</label><input id="settle_amt" type="number" step="0.01" min="0.01" max="${remain.toFixed(2)}" value="${remain.toFixed(2)}"></div>
+      <div class="fld"><label>طريقة الدفع</label>
+        <select id="settle_pay_method"><option value="cash">💵 كاش</option><option value="bank_transfer">🏦 تحويل بنكي</option><option value="cliq">📱 كليك</option><option value="card">💳 بطاقة</option></select></div>
       <div class="fld"><label>الدفع من</label>
-        <select id="settle_acc"><option value="cash">💵 كاش (مصاري الفرع)</option><option value="bank">🏦 كليك/بنك (مصاري الفرع)</option><option value="capital">🏦 رأس المال</option></select></div>
+        <select id="settle_acc"><option value="cash">💵 مصاري الفرع</option><option value="capital">🏦 رأس المال</option></select></div>
       <div class="fld"><label>ملاحظة (اختياري)</label><input id="settle_note" placeholder="مثال: دفعة أولى..."></div>
       <div class="m-act"><button class="save" onclick="confirmSettlePurchase('${id}')">تأكيد الدفع ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
   }
@@ -7166,7 +7181,9 @@
     setTimeout(()=>unlockSubmit('confirmSettlePurchase'), 3000);
     if(!canFinApprove()){ toast('⛔ صلاحية المالك فقط — الموظف يقدر يدخل الفاتورة بس، الدفع قرارك إنت'); return; }
     const p = PURCHASES_DATA.find(x=>x.id===id); if(!p) return;
+    if(p.approval_status!=='approved'){ toast('⛔ الفاتورة لسا مو موافق عليها'); return; }
     const acc = document.getElementById('settle_acc')?.value||'cash';
+    const payMethod = document.getElementById('settle_pay_method')?.value||'cash';
     const note = document.getElementById('settle_note')?.value.trim();
     const paidSoFar = parseFloat(p.paid_amount||0);
     const remain = parseFloat(p.total||0) - paidSoFar;
@@ -7176,10 +7193,10 @@
     try{
       const newPaid = paidSoFar + amt;
       const newStatus = (newPaid >= parseFloat(p.total||0) - 0.005) ? acc : 'partial';
-      await db.from('purchases').update({ payment_status: newStatus, paid_amount: newPaid, paid_at: new Date().toISOString() }).eq('id', id);
-      await db.from('supplier_payments').insert({ supplier: p.supplier, amount: amt, account: acc, purchase_id: id, branch_id: p.branch_id||null, note: note||null, created_by: ME.full_name });
-      if(acc==='capital') await addCapitalTx(-amt, 'purchase', id, 'دفعة فاتورة شراء — '+(p.supplier||''));
-      else await addTreasuryTx(acc, -amt, 'purchase', id, 'دفعة فاتورة شراء — '+(p.supplier||''), p.branch_id||null);
+      await db.from('purchases').update({ payment_status: newStatus, paid_amount: newPaid, paid_at: new Date().toISOString(), payment_method: payMethod }).eq('id', id);
+      await db.from('supplier_payments').insert({ supplier: p.supplier, amount: amt, account: acc, payment_method: payMethod, purchase_id: id, branch_id: p.branch_id||null, note: note||null, created_by: ME.full_name });
+      if(acc==='capital') await addCapitalTx(-amt, 'purchase', id, 'دفعة فاتورة شراء ('+payMethod+') — '+(p.supplier||''));
+      else await addTreasuryTx(acc, -amt, 'purchase', id, 'دفعة فاتورة شراء ('+payMethod+') — '+(p.supplier||''), p.branch_id||null);
       closeModal(); toast('✓ اتسجلت الدفعة'); renderPurchases();
     }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
@@ -7203,9 +7220,10 @@
     let amt = parseFloat(normalizeDigits(document.getElementById('sgp_amt')?.value));
     if(isNaN(amt)||amt<=0){ toast('⚠️ اكتب مبلغ صحيح'); return; }
     try{
-      const { data: openInvoices } = await db.from('purchases').select('id,total,paid_amount,branch_id,purchase_date')
+      const { data: openInvoices } = await db.from('purchases').select('id,total,paid_amount,branch_id,purchase_date,approval_status')
         .eq('supplier', supplierName).order('purchase_date',{ascending:true});
-      const remaining = (openInvoices||[]).map(p=>({...p, remain: parseFloat(p.total||0)-parseFloat(p.paid_amount||0)})).filter(p=>p.remain>0.005);
+      // 🔒 نستبعد الفواتير يلي لسا ما اتوافق عليها من التوزيع التلقائي — ما بيصير ندفع على فاتورة ما توافق عليها حدا
+      const remaining = (openInvoices||[]).filter(p=>p.approval_status==='approved').map(p=>({...p, remain: parseFloat(p.total||0)-parseFloat(p.paid_amount||0)})).filter(p=>p.remain>0.005);
       const totalAvailable = remaining.reduce((a,p)=>a+p.remain,0);
       if(amt > totalAvailable + 0.01){ toast('⚠️ المبلغ أكبر من إجمالي المستحق ('+fmt(totalAvailable)+')'); return; }
       let left = amt;
@@ -7511,7 +7529,10 @@
       notes:document.getElementById('fp_note').value.trim()||null,
       payment_status: payStatus,
       paid_at: payStatus!=='unpaid' ? new Date().toISOString() : null,
-      paid_amount: payStatus!=='unpaid' ? total : 0
+      paid_amount: payStatus!=='unpaid' ? total : 0,
+      approval_status: canFinApprove() ? 'approved' : 'pending',
+      approved_by: canFinApprove() ? ME.full_name : null,
+      approved_at: canFinApprove() ? new Date().toISOString() : null
     }).select().single();
     if(error){toast('✗ '+error.message);return;}
     if(payStatus==='capital'){
