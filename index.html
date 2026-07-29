@@ -6035,18 +6035,14 @@
     const C = document.getElementById('admContent');
     C.innerHTML = '<div class="empty-note">... جاري التحميل</div>';
     try{
-      const [hrRes, staffRes] = await Promise.all([
-        db.from('meal_names').select('id,name,shift_window_from,shift_window_to,is_active').eq('is_active',true).order('name'),
-        db.from('staff').select('id,full_name,shift_window_from,shift_window_to,is_active,role').eq('is_active',true).order('full_name'),
-      ]);
-      const hrList = hrRes.data||[];
-      const staffList = staffRes.data||[];
+      const { data: hrRes } = await db.from('meal_names').select('id,name,shift_window_from,shift_window_to,is_active').eq('is_active',true).order('name');
+      const hrList = hrRes||[];
       C.innerHTML = `
         <div class="panel" style="margin-bottom:14px">
-          <h3>🕐 جدول الدوام المحدد — كل الموظفين</h3>
+          <h3>🕐 جدول الدوام المحدد — موظفي بوابة HR</h3>
           <div style="font-size:.85rem;color:var(--muted);font-weight:700;margin-top:6px">حددي وقت الدخول والخروج المسموح لكل موظف، ودوسي "💾 حفظ" جنبه. سيبي الوقتين فاضيين لأي موظف ما بدك تقيّديه.</div>
         </div>
-        <div class="panel" style="margin-bottom:14px">
+        <div class="panel">
           <h4 style="color:var(--maroon);margin-bottom:8px">👤 موظفي بوابة HR الذاتية (${hrList.length})</h4>
           <div class="tbl-wrap"><table class="tbl">
             <tr><th>الاسم</th><th>يدخل من</th><th>لازم يطلع مع</th><th></th></tr>
@@ -6056,19 +6052,6 @@
               <td><input type="time" id="sched_hr_to_${e.id}" value="${esc(e.shift_window_to||'')}" style="width:120px"></td>
               <td><button class="mini ok" onclick="saveScheduleRow('hr','${e.id}','${esc(e.name)}')">💾 حفظ</button></td>
             </tr>`).join('')||'<tr><td colspan="4" class="empty-note">ما في موظفين</td></tr>'}
-          </table></div>
-        </div>
-        <div class="panel">
-          <h4 style="color:var(--maroon);margin-bottom:8px">🖥️ موظفي الكاشير/POS (${staffList.length})</h4>
-          <div class="tbl-wrap"><table class="tbl">
-            <tr><th>الاسم</th><th>الدور</th><th>يفتح من</th><th>لازم يسكر مع</th><th></th></tr>
-            ${staffList.map(s=>`<tr>
-              <td><b>${esc(s.full_name)}</b></td>
-              <td>${ROLE_AR[s.role]||esc(s.role)}</td>
-              <td><input type="time" id="sched_st_from_${s.id}" value="${esc(s.shift_window_from||'')}" style="width:120px"></td>
-              <td><input type="time" id="sched_st_to_${s.id}" value="${esc(s.shift_window_to||'')}" style="width:120px"></td>
-              <td><button class="mini ok" onclick="saveScheduleRow('staff','${s.id}','${esc(s.full_name)}')">💾 حفظ</button></td>
-            </tr>`).join('')||'<tr><td colspan="5" class="empty-note">ما في موظفين</td></tr>'}
           </table></div>
         </div>`;
     }catch(e){ C.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
