@@ -5967,8 +5967,11 @@
     const C = document.getElementById('admContent');
     C.innerHTML = '<div class="empty-note">... جاري التحميل</div>';
     try{
-      const ccStaff = STAFF.length ? STAFF.filter(s=>s.role==='callcenter') : (await db.from('staff').select('*').eq('role','callcenter')).data||[];
-      if(!STAFF.length) STAFF = ccStaff;
+      // 🔧 مهم: نجيب بيانات الموظفين طازة دايمًا (مش من الكاش STAFF) — لأنه لو الأدمن كان زار شاشة تانية
+      // قبل هيك، الكاش كان ممكن يكون قديم وما يعكس آخر تصفير نقاط (cc_points_reset_at) صار عليه
+      const { data: ccStaffFresh } = await db.from('staff').select('*').eq('role','callcenter').order('full_name');
+      const ccStaff = ccStaffFresh||[];
+      STAFF = STAFF.length ? STAFF.map(s=>ccStaff.find(c=>c.id===s.id)||s) : ccStaff; // نحدّث الكاش العام كمان بالمرة
       const fd = getFinancialMonth ? getFinancialMonth() : null;
       const monthStart = fd ? fd.from : new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString();
       const monthEnd = fd ? fd.to : new Date().toISOString();
