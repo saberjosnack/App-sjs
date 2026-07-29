@@ -10351,7 +10351,8 @@
 
   async function sweepBranchesToCapital(){
     if(!canFinApprove()){ toast('⛔ صلاحية المالك فقط'); return; }
-    if(!confirm('🔁 هاد بيصفّر رصيد كل فرع (كاش وبنك) وينقل المبلغ كامل لـ"رأس المال" — مناسب تعمله آخر اليوم بعد إغلاق كل الشيفتات.\nمتأكد؟')) return;
+    if(!lockSubmit('sweepBranchesToCapital')){ toast('⏳ العملية شغّالة أصلًا — لا تضغطي مرتين'); return; }
+    if(!confirm('🔁 هاد بيصفّر رصيد كل فرع (كاش وبنك) وينقل المبلغ كامل لـ"رأس المال" — مناسب تعمله آخر اليوم بعد إغلاق كل الشيفتات.\nمتأكد؟')){ unlockSubmit('sweepBranchesToCapital'); return; }
     try{
       const { data: allTx, error } = await db.from('treasury_transactions').select('*');
       if(error){ toast('✗ '+error.message); console.error(error); return; }
@@ -10376,6 +10377,7 @@
       toast(`✓ اترحّل ${fmt(totalSwept)} ${CURRENCY} من ${swept} فرع لرأس المال`);
       renderTreasury();
     }catch(e){ toast('✗ '+e.message); console.error(e); }
+    finally{ unlockSubmit('sweepBranchesToCapital'); }
   }
 
   /* ================= شاشة المصاري ================= */
