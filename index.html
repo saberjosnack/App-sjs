@@ -6773,6 +6773,7 @@
       // 🏭 مواد التصنيع: المادة الخام بالوصفة + المنتج الناتج منها (لو كانت هاي المادة أصلًا ناتج تصنيع)
       await db.from('manufacturing_recipe_items').update({ ingredient_id: newId }).eq('ingredient_id', oldId).then(()=>{}).catch(()=>{});
       await db.from('manufacturing_recipes').update({ output_ingredient_id: newId }).eq('output_ingredient_id', oldId).then(()=>{}).catch(()=>{});
+      await db.from('stock_transfers').update({ ingredient_id: newId }).eq('ingredient_id', oldId).then(()=>{}).catch(()=>{});
       await db.from('branch_inventory').delete().eq('ingredient_id', oldId).then(()=>{}).catch(()=>{});
       const { error } = await db.from('ingredients').delete().eq('id', oldId);
       if(error){ toast('✗ ما زال في مكان ما بدّلناه — '+error.message); console.error(error); return; }
