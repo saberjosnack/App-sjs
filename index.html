@@ -10354,8 +10354,11 @@
     if(!lockSubmit('sweepBranchesToCapital')){ toast('⏳ العملية شغّالة أصلًا — لا تضغطي مرتين'); return; }
     if(!confirm('🔁 هاد بيصفّر رصيد كل فرع (كاش وبنك) وينقل المبلغ كامل لـ"رأس المال" — مناسب تعمله آخر اليوم بعد إغلاق كل الشيفتات.\nمتأكد؟')){ unlockSubmit('sweepBranchesToCapital'); return; }
     try{
-      const { data: allTx, error } = await db.from('treasury_transactions').select('*');
-      if(error){ toast('✗ '+error.message); console.error(error); return; }
+      let allTx = [];
+      { const { data, error: pErr } = await fetchAllRows('treasury_transactions', '*');
+        if(pErr){ toast('✗ '+pErr.message); console.error(pErr); return; }
+        allTx = data||[];
+      }
       const brName = id => id ? (BRANCHES.find(b=>b.id===id)?.name_ar || 'فرع محذوف') : 'عام (بدون فرع محدد)';
       const byBranch = {};
       (allTx||[]).forEach(t=>{
@@ -10397,6 +10400,19 @@
   const CAP_TYPE_AR = {
     sweep_in:'🔁 ترحيل من فرع', manual_in:'➕ إيداع يدوي', manual_out:'➖ سحب يدوي', advance:'🧑‍🍳 سلفة موظف',
   };
+  // 🔧 Supabase بيرجع 1000 صف كحد أقصى بكل طلب افتراضيًا وبصمت (بدون أي تحذير) — أي جدول تراكمي
+  // (زي حركات الخزينة) ممكن يتخطى هالرقم بسهولة مع الوقت. هاي الدالة بتجيب كل الصفوف فعليًا عبر صفحات.
+  async function fetchAllRows(table, selectStr){
+    let all = []; let from = 0; const pageSize = 1000;
+    while(true){
+      const { data: page, error } = await db.from(table).select(selectStr).range(from, from+pageSize-1);
+      if(error) return { data: null, error };
+      all = all.concat(page||[]);
+      if(!page || page.length < pageSize) break;
+      from += pageSize;
+    }
+    return { data: all, error: null };
+  }
   async function renderTreasury(){
     const C = document.getElementById('admContent');
     C.innerHTML = '<div class="empty-note">... جاري التحميل</div>';
@@ -10405,13 +10421,14 @@
       TR_FILTER.from = d.toISOString().split('T')[0];
       TR_FILTER.to = new Date().toISOString().split('T')[0];
     }
-    const { data: allTx, error } = await db.from('treasury_transactions').select('*').order('created_at',{ascending:false});
+    const { data: allTxRaw, error } = await fetchAllRows('treasury_transactions', '*');
     if(error){
       C.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message||'الجدول treasury_transactions غير موجود — نفّذ SQL أولاً')}</div>`;
       console.error(error); return;
     }
-    const { data: capTx, error: capErr } = await db.from('capital_transactions').select('*').order('created_at',{ascending:false});
-    const capitalList = capErr ? [] : (capTx||[]);
+    const allTx = (allTxRaw||[]).sort((a,b)=>new Date(b.created_at)-new Date(a.created_at));
+    const { data: capTxRaw, error: capErr } = await fetchAllRows('capital_transactions', '*');
+    const capitalList = capErr ? [] : (capTxRaw||[]).sort((a,b)=>new Date(b.created_at)-new Date(a.created_at));
     const capitalBalance = capitalList.reduce((a,t)=>a+parseFloat(t.amount||0),0);
     const capitalToday = capitalList.filter(t=>t.created_at.split('T')[0]===new Date().toISOString().split('T')[0]).reduce((a,t)=>a+parseFloat(t.amount||0),0);
 
