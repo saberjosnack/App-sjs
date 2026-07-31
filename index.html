@@ -9511,6 +9511,7 @@
   /* ================= 🧑‍💼 HR — رواتب وساعات عمل وسلف ووجبات ================= */
   let HR_FILTER = { from:'', to:'' };
   let HR_SEARCH = '';
+  let HR_SHOW_INACTIVE = false; // 🔧 افتراضيًا نخبّي الموظفين المعطّلين (المؤرشفين) عن القائمة الرئيسية، بس تقدري تظهريهم وقت ما بدك
   function hrsBetween(a,b){ return Math.max(0,(new Date(b)-new Date(a))/3600000); }
   // 🔧 مهم جدًا: عمّان بتوقيت UTC+3 طول السنة (بدون توقيت صيفي). أي مقارنة تاريخ بدون تحديد
   // المنطقة الزمنية بيفترضها Postgres UTC — يعني "00:00:00" اليوم بتصير فعليًا 3:00 صباحًا بتوقيت
@@ -9700,6 +9701,9 @@
           <button class="mini edit" style="align-self:end" onclick="printHRPDF()">📄 PDF منسّق</button>
         </div>
         <input id="hr_search" placeholder="🔍 ابحث باسم الموظف..." value="${esc(HR_SEARCH)}" oninput="HR_SEARCH=this.value;renderHrTable()" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px">
+        <label style="display:flex;align-items:center;gap:8px;font-weight:700;font-size:.85rem;margin-bottom:8px;cursor:pointer">
+          <input type="checkbox" ${HR_SHOW_INACTIVE?'checked':''} onchange="HR_SHOW_INACTIVE=this.checked;renderHrTable()"> إظهار الموظفين المعطّلين (المؤرشفين) بالقائمة
+        </label>
         <div style="color:var(--muted);font-size:.78rem;font-weight:600">💡 موظفو HR منفصلين تمامًا عن موظفي تسجيل الدخول للنظام — هدول قائمة أسماء (زي "🍽️ وجبات الموظفين") مالها علاقة بصلاحيات أو PIN. سجّل ساعات العمل يدويًا لكل واحد من زر "🕐 تسجيل ساعات" (أو خليهم يسجلوا حضورهم بنفسهم من بوابة الموظف).</div>
       </div>
       <div id="hrTimeLogsBox"></div>
@@ -9718,7 +9722,8 @@
     const wrap = document.getElementById('hrTableWrap'); if(!wrap) return;
     const rows = window.__HR_ROWS||[];
     const hrQ = (HR_SEARCH||'').trim().toLowerCase();
-    const filteredRows = hrQ ? rows.filter(r=>(r.emp.name||'').toLowerCase().includes(hrQ)) : rows;
+    let filteredRows = hrQ ? rows.filter(r=>(r.emp.name||'').toLowerCase().includes(hrQ)) : rows;
+    if(!HR_SHOW_INACTIVE) filteredRows = filteredRows.filter(r=>r.emp.is_active!==false);
     wrap.innerHTML = `<div class="tbl-wrap"><table class="tbl">
         <tr><th>الموظف</th><th>سعر الساعة</th><th>ساعات العمل</th><th>أيام الحضور</th><th>الوجبات</th><th>قيمة الوجبات</th><th>السلف</th><th>خصم الشيفتات</th><th>خصومات</th><th>مكافآت</th><th>صافي المستحق</th><th></th></tr>
         ${filteredRows.map(r=>`<tr class="${r.emp.is_active===false?'off':''}">
