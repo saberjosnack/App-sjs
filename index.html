@@ -1231,6 +1231,13 @@
     // 🔧 مهم: لو صار خطأ شبكة مؤقت (نت ضعيف مثلًا)، ما لازم نمسح الصلاحيات المحفوظة سابقًا بالذاكرة —
     // كانت هاي بالضبط سبب "الموظف بيفقد صلاحياته بعد تحديث الصفحة لحد ما يسجّل خروج ودخول من جديد".
     if(error){ console.error('loadCustomRoles failed, keeping previous CUSTOM_ROLES:', error); return CUSTOM_ROLES; }
+    // 🔧 مهم كمان: أدوار النظام الأساسية (كاشير/كول سنتر) بتتخزن بنفس جدول roles (is_system=true)،
+    // بس كانت تعديلاتها بتنحفظ بقاعدة البيانات وما حدا يرجع يقراها عند تحديث الصفحة — فكانت ترجع
+    // للقيم الافتراضية المكتوبة بالكود بمجرد ما حدا يعمل F5. هلق منزامنها في كل مرة نحمّل فيها الأدوار.
+    (data||[]).forEach(r=>{
+      if(r.is_system && r.name==='كاشير') ROLE_DEFAULT_PERMS.cashier = Object.entries(r.permissions||{}).filter(([k,v])=>v).map(([k])=>k);
+      if(r.is_system && r.name==='كول سنتر') ROLE_DEFAULT_PERMS.callcenter = Object.entries(r.permissions||{}).filter(([k,v])=>v).map(([k])=>k);
+    });
     CUSTOM_ROLES = data||[];
     return CUSTOM_ROLES;
   }
@@ -1593,7 +1600,7 @@
         if(data[0].is_active === false){ sessionStorage.removeItem('sjs_me'); location.reload(); return; } // بس لو صراحة معطّل
         ME = data[0];
         sessionStorage.setItem('sjs_me', JSON.stringify(ME));
-        if(ME.role==='custom') await loadCustomRoles();
+        await loadCustomRoles();
         applyRoles();
       }).catch(()=>{});
     }
@@ -1689,11 +1696,15 @@
       READY_WAIT_MIN = parseInt(SETTINGS.ready_wait_min); if(isNaN(READY_WAIT_MIN)||READY_WAIT_MIN<=0) READY_WAIT_MIN = 7;
       applyTheme();
       await loadActiveScheduledDiscount();
-      if(ME && ME.role==='custom'){
-        await loadCustomRoles();
-        applyRoles(); // 🔧 مهم: أول تطبيق كان بيصير قبل ما توصل صلاحيات الدور المخصص أصلًا، فكانت تنعرض أقل صلاحية (شكل كاشير) لحد ما يعمل المستخدم تحديث يدوي للصفحة
-        const whoName2 = document.getElementById('whoName');
-        if(whoName2) whoName2.textContent = '👤 ' + ME.full_name + ' (' + (CUSTOM_ROLES.find(r=>r.id===ME.role_id)?.name || 'دور مخصص') + ')';
+      if(ME){
+        await loadCustomRoles(); // 🔧 لازم لكل الأدوار (كاشير/كول سنتر/مخصص) — هون بنزامن صلاحيات الأدوار الأساسية المعدّلة من قاعدة البيانات
+        if(ME.role==='custom'){
+          applyRoles(); // 🔧 مهم: أول تطبيق كان بيصير قبل ما توصل صلاحيات الدور المخصص أصلًا، فكانت تنعرض أقل صلاحية (شكل كاشير) لحد ما يعمل المستخدم تحديث يدوي للصفحة
+          const whoName2 = document.getElementById('whoName');
+          if(whoName2) whoName2.textContent = '👤 ' + ME.full_name + ' (' + (CUSTOM_ROLES.find(r=>r.id===ME.role_id)?.name || 'دور مخصص') + ')';
+        } else {
+          applyRoles(); // 🔧 نفس السبب: لازم نطبّق الصلاحيات المزامنة حديثًا لدور كاشير/كول سنتر كمان
+        }
       }
       const branchSel = document.getElementById('branchSel');
       if (branchSel) branchSel.innerHTML = '<option value="">⚠️ اختر الفرع...</option>' + BRANCHES.map(x=>`<option value="${x.id}">🏪 ${esc(x.name_ar)}</option>`).join('');
