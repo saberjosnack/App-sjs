@@ -13789,10 +13789,9 @@ try {
       EMP_OPEN_LOG = openLog||null;
       if(EMP_OPEN_LOG) startGeofenceWatch(); else stopGeofenceWatch();
 
-      // 🔒 مهم جدًا: لو المدير قفل شهر هالموظف (حتى لو نفس اليوم قبل ما ينتهي الشهر التقويمي)، لازم نبلّش
-      // نحسب "هالشهر" من اليوم يلي بعد آخر قفل، مش من أول الشهر التقويمي — وإلا الموظف بيشوف مستحقاته
-      // محسوبة مرتين (مرة جوا "الرصيد السابق" المقفول، ومرة تانية "طازة" لنفس الأيام) ويطالب بمبلغ أكبر غلط.
-      const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0,0,0,0);
+      // 🔧 مهم: نحسب أول الشهر بتوقيت عمّان الثابت (زي شاشة الأدمن بالظبط)، مش بتوقيت جهاز الموظف نفسه —
+      // لو موبايل الموظف مضبوط عالتوقيت العالمي أو منطقة تانية، كان الحد بينزاح كذا ساعة ويصير فرق بالحساب
+      const monthStart = new Date(localMonthStartStr()+'T00:00:00+03:00');
       const { data: lastClosure } = await db.from('hr_month_closures').select('period_to').eq('employee_id', EMP.id).order('period_to',{ascending:false}).limit(1).maybeSingle();
       if(lastClosure?.period_to){
         const closureEnd = new Date(lastClosure.period_to);
@@ -14144,7 +14143,7 @@ try {
     // 🔧 مهم: نفس نطاق التاريخ (الشهر الحالي) المستخدم بكل مكان تاني بالنظام —
     // كان هاد الحساب يجمع كل تاريخ الموظف من أول يوم (بدون حد)، فيطلع رقم مختلف
     // عن الشاشة الرئيسية وعن كشف الأدمن يلي بيحسبوا الشهر الحالي بس
-    const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0,0,0,0);
+    const monthStart = new Date(localMonthStartStr()+'T00:00:00+03:00');
     // 🔒 نفس منطق حماية "قفل الشهر" — إذا انقفل شهر لهاد الموظف، نحسب من بعده مباشرة عشان ما يتكرر الحساب
     const { data: lastClosureNd } = await db.from('hr_month_closures').select('period_to').eq('employee_id', empId).order('period_to',{ascending:false}).limit(1).maybeSingle();
     if(lastClosureNd?.period_to){
