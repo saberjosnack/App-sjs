@@ -9609,38 +9609,41 @@
     (closuresRes?.data||[]).forEach(c=>{ if(!lastClosureByEmp[c.employee_id]) lastClosureByEmp[c.employee_id] = c.period_to; });
 
     const rows = empList.map(e=>{
-      const myAtt = attendance.filter(a=>a.employee_id===e.id);
+      const closureDate = lastClosureByEmp[e.id];
+      // 🔒 لو هالموظف عنده شهر مقفول يتقاطع مع فترة الفلتر الحالية، نستبعد أي حركة كانت أصلًا
+      // جوا الفترة المقفولة (قبل أو يوم القفل نفسه) — لأنها محسوبة أصلًا جوا "الرصيد السابق"
+      const afterClosure = (d) => !closureDate || !d || new Date(d) > new Date(closureDate+'T23:59:59');
+      const myAtt = attendance.filter(a=>a.employee_id===e.id && afterClosure(a.work_date));
       const manualHours = myAtt.reduce((a,x)=>a+parseFloat(x.hours||0), 0);
-      const myLogs = timeLogs.filter(l=>l.employee_id===e.id);
+      const myLogs = timeLogs.filter(l=>l.employee_id===e.id && afterClosure(l.clock_in));
       // 🚩 أي جلسة حضور واحدة أطول من 16 ساعة متواصلة غالبًا نسيان تسجيل خروج، مش دوام حقيقي —
       // منستبعدها من حساب الراتب تلقائيًا ومنعلّم عليها بتنبيه، لحد ما الأدمن "يعتمدها" يدويًا
       // (لبعض الموظفين فعلًا بيشتغلوا شيفتات أطول من 16 ساعة أحيانًا) أو يصحح وقت الخروج
       const suspiciousLogs = myLogs.filter(l=>((new Date(l.clock_out)-new Date(l.clock_in))/3600000) > 16 && !l.reviewed_ok);
       const validLogs = myLogs.filter(l=>((new Date(l.clock_out)-new Date(l.clock_in))/3600000) <= 16 || l.reviewed_ok);
       const portalHours = validLogs.reduce((a,l)=>a+((new Date(l.clock_out)-new Date(l.clock_in))/3600000), 0);
-      const myBreaks = breaksAll.filter(b=>b.employee_id===e.id);
+      const myBreaks = breaksAll.filter(b=>b.employee_id===e.id && afterClosure(b.started_at));
       const breakExcessHours = calcBreakExcessHours(myBreaks);
       const hours = Math.max(0, manualHours + portalHours - breakExcessHours);
       const days = myAtt.length + validLogs.length;
-      const advTotal = advances.filter(a=>a.employee_id===e.id).reduce((a,x)=>a+parseFloat(x.amount||0),0);
-      const myMeals = mealOrders.filter(o=>o.employee_meal_id ? o.employee_meal_id===e.id : o.employee_tab_name===e.name);
+      const advTotal = advances.filter(a=>a.employee_id===e.id && afterClosure(a.created_at)).reduce((a,x)=>a+parseFloat(x.amount||0),0);
+      const myMeals = mealOrders.filter(o=>(o.employee_meal_id ? o.employee_meal_id===e.id : o.employee_tab_name===e.name) && afterClosure(o.created_at));
       const mealsCount = myMeals.length;
       const mealsTotal = myMeals.reduce((a,o)=>a+parseFloat(o.total||0),0);
       const myShiftAdj = shiftAdjustments.filter(a=>{
         const linkedStaff = STAFF.find(s=>s.id===a.staff_id);
-        if(linkedStaff?.linked_hr_id) return linkedStaff.linked_hr_id===e.id;
-        return a.staff_name===e.name;
+        const matches = linkedStaff?.linked_hr_id ? linkedStaff.linked_hr_id===e.id : a.staff_name===e.name;
+        return matches && afterClosure(a.created_at);
       });
       const shiftDeduction = myShiftAdj.reduce((a,x)=>a+Math.abs(x.amount||0),0);
       // ➖ خصومات (شكاوي عملاء أو خصم يدوي) و 🎁 مكافآت المدير — كلاهما بنفس فترة HR_FILTER
-      const myDeductions = deductions.filter(d=>d.employee_id===e.id);
+      const myDeductions = deductions.filter(d=>d.employee_id===e.id && afterClosure(d.created_at));
       const deductionsTotal = myDeductions.reduce((a,x)=>a+parseFloat(x.amount||0),0);
-      const myRewards = rewards.filter(r=>r.employee_id===e.id);
+      const myRewards = rewards.filter(r=>r.employee_id===e.id && afterClosure(r.created_at));
       const rewardsTotal = myRewards.reduce((a,x)=>a+parseFloat(x.amount||0),0);
       const gross = hours * (e.hourly_wage||0);
       const opening = parseFloat(e.opening_balance||0);
       const net = gross - advTotal - mealsTotal - shiftDeduction - deductionsTotal + rewardsTotal + opening;
-      const closureDate = lastClosureByEmp[e.id];
       const closureOverlap = closureDate && HR_FILTER.from <= closureDate;
       return { emp:e, hours, days, advTotal, mealsCount, mealsTotal, shiftDeduction, deductionsTotal, rewardsTotal, opening, gross, net, suspiciousLogs, breakExcessHours, closureOverlap, closureDate };
     });
