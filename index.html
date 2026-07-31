@@ -9552,7 +9552,7 @@
       HR_FILTER.from = localMonthStartStr();
       HR_FILTER.to = localTodayStr();
     }
-    const [empRes, attRes, advRes, ordRes, shiftAdjRes, tlRes, dedRes, rwdRes, brRes] = await Promise.all([
+    const [empRes, attRes, advRes, ordRes, shiftAdjRes, tlRes, dedRes, rwdRes, brRes, closuresRes] = await Promise.all([
       db.from('meal_names').select('*').order('name'), // 🔧 كل الموظفين (فعّال وغير فعّال) — كانوا يستبعدوا الغير فعّالين من الأساس فما كانوا يظهروا أبدًا حتى للتفعيل
       db.from('hr_attendance').select('employee_id, work_date, hours')
         .gte('work_date', HR_FILTER.from).lte('work_date', HR_FILTER.to),
@@ -9573,6 +9573,7 @@
         .gte('created_at', localDayStart(HR_FILTER.from)).lte('created_at', localDayEnd(HR_FILTER.to)),
       db.from('hr_breaks').select('employee_id, started_at, ended_at').not('ended_at','is',null)
         .gte('started_at', localDayStart(HR_FILTER.from)).lte('started_at', localDayEnd(HR_FILTER.to)),
+      db.from('hr_month_closures').select('employee_id, period_to').order('period_to',{ascending:false}),
     ]);
     if(empRes.error){
       C.innerHTML = `<div class="alert-red">⚠️ ${esc(empRes.error.message||'خطأ بجلب موظفي HR')}</div>`;
@@ -9601,6 +9602,10 @@
     const deductions = dedRes.data||[];
     const rewards = rwdRes.data||[];
     const breaksAll = brRes.data||[];
+    // 🔒 آخر شهر مقفول لكل موظف — نستخدمها نحذّر لو فلتر الشاشة الحالي بيتقاطع مع فترة مقفولة أصلًا
+    // (نفس السبب يلي خلى ميرا تطلع مضاعفة — الفلتر ضل واقف عالفترة نفسها بعد القفل)
+    const lastClosureByEmp = {};
+    (closuresRes?.data||[]).forEach(c=>{ if(!lastClosureByEmp[c.employee_id]) lastClosureByEmp[c.employee_id] = c.period_to; });
 
     const rows = empList.map(e=>{
       const myAtt = attendance.filter(a=>a.employee_id===e.id);
@@ -9634,7 +9639,9 @@
       const gross = hours * (e.hourly_wage||0);
       const opening = parseFloat(e.opening_balance||0);
       const net = gross - advTotal - mealsTotal - shiftDeduction - deductionsTotal + rewardsTotal + opening;
-      return { emp:e, hours, days, advTotal, mealsCount, mealsTotal, shiftDeduction, deductionsTotal, rewardsTotal, opening, gross, net, suspiciousLogs, breakExcessHours };
+      const closureDate = lastClosureByEmp[e.id];
+      const closureOverlap = closureDate && HR_FILTER.from <= closureDate;
+      return { emp:e, hours, days, advTotal, mealsCount, mealsTotal, shiftDeduction, deductionsTotal, rewardsTotal, opening, gross, net, suspiciousLogs, breakExcessHours, closureOverlap, closureDate };
     });
     const totalNet = rows.reduce((a,r)=>a+r.net,0);
     window.__HR_ROWS = rows;
@@ -9715,7 +9722,7 @@
     wrap.innerHTML = `<div class="tbl-wrap"><table class="tbl">
         <tr><th>الموظف</th><th>سعر الساعة</th><th>ساعات العمل</th><th>أيام الحضور</th><th>الوجبات</th><th>قيمة الوجبات</th><th>السلف</th><th>خصم الشيفتات</th><th>خصومات</th><th>مكافآت</th><th>صافي المستحق</th><th></th></tr>
         ${filteredRows.map(r=>`<tr class="${r.emp.is_active===false?'off':''}">
-          <td><b>${esc(r.emp.name)}</b>${r.emp.is_active===false?' <span style="color:var(--red);font-size:.75rem;font-weight:800">(غير فعّال)</span>':''}</td>
+          <td><b>${esc(r.emp.name)}</b>${r.emp.is_active===false?' <span style="color:var(--red);font-size:.75rem;font-weight:800">(غير فعّال)</span>':''}${r.closureOverlap?` <span title="فترة الفلتر الحالي بتتقاطع مع شهر مقفول لهاد الموظف (آخر قفل: ${r.closureDate}) — الرقم ممكن يطلع مضاعف، حرّكي الفلتر لبعد تاريخ القفل" style="color:var(--warn);font-size:.75rem;font-weight:800">⚠️ متقاطع مع قفل سابق</span>`:''}</td>
           <td>${fmt(r.emp.hourly_wage||0)}</td>
           <td>${r.hours.toFixed(1)}</td>
           <td>${r.days}</td>
@@ -13769,7 +13776,15 @@ try {
       EMP_OPEN_LOG = openLog||null;
       if(EMP_OPEN_LOG) startGeofenceWatch(); else stopGeofenceWatch();
 
+      // 🔒 مهم جدًا: لو المدير قفل شهر هالموظف (حتى لو نفس اليوم قبل ما ينتهي الشهر التقويمي)، لازم نبلّش
+      // نحسب "هالشهر" من اليوم يلي بعد آخر قفل، مش من أول الشهر التقويمي — وإلا الموظف بيشوف مستحقاته
+      // محسوبة مرتين (مرة جوا "الرصيد السابق" المقفول، ومرة تانية "طازة" لنفس الأيام) ويطالب بمبلغ أكبر غلط.
       const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0,0,0,0);
+      const { data: lastClosure } = await db.from('hr_month_closures').select('period_to').eq('employee_id', EMP.id).order('period_to',{ascending:false}).limit(1).maybeSingle();
+      if(lastClosure?.period_to){
+        const closureEnd = new Date(lastClosure.period_to);
+        if(closureEnd > monthStart) monthStart.setTime(closureEnd.getTime());
+      }
       const { data: linkedStaffRows } = await db.from('staff').select('id, role').eq('linked_hr_id', EMP.id);
       const linkedIds = (linkedStaffRows||[]).map(s=>s.id);
       const linkedCcIds = (linkedStaffRows||[]).filter(s=>s.role==='callcenter').map(s=>s.id);
@@ -14115,6 +14130,12 @@ try {
     // كان هاد الحساب يجمع كل تاريخ الموظف من أول يوم (بدون حد)، فيطلع رقم مختلف
     // عن الشاشة الرئيسية وعن كشف الأدمن يلي بيحسبوا الشهر الحالي بس
     const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0,0,0,0);
+    // 🔒 نفس منطق حماية "قفل الشهر" — إذا انقفل شهر لهاد الموظف، نحسب من بعده مباشرة عشان ما يتكرر الحساب
+    const { data: lastClosureNd } = await db.from('hr_month_closures').select('period_to').eq('employee_id', empId).order('period_to',{ascending:false}).limit(1).maybeSingle();
+    if(lastClosureNd?.period_to){
+      const closureEnd = new Date(lastClosureNd.period_to);
+      if(closureEnd > monthStart) monthStart.setTime(closureEnd.getTime());
+    }
     const fromIso = monthStart.toISOString();
     const { data: linkedStaffRows2 } = await db.from('staff').select('id').eq('linked_hr_id', empId);
     const linkedIds2 = (linkedStaffRows2||[]).map(s=>s.id);
