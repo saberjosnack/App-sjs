@@ -10131,6 +10131,11 @@
       if(e1){ toast('✗ '+e1.message); console.error(e1); return; }
       const { error: e2 } = await db.from('meal_names').update({ opening_balance: r.net }).eq('id', empId);
       if(e2){ toast('✗ فشل ترحيل الرصيد: '+e2.message); return; }
+      // 🔧 مهم: السلف يلي انأخدت جوا هالفترة صارت محسوبة ومطوية جوا "الرصيد السابق" الجديد —
+      // لازم نعلّمها "متسددة" (status=repaid) وإلا رح تضل تظهر "قائمة/غير مسددة" بكل شاشة كمان بعد القفل
+      await db.from('hr_advances').update({ status:'repaid', repaid_at: new Date().toISOString() })
+        .eq('employee_id', empId).eq('status','open')
+        .gte('created_at', localDayStart(HR_FILTER.from)).lte('created_at', localDayEnd(HR_FILTER.to));
       toast('✓ اتقفل الشهر وترحّل الرصيد ('+fmt(r.net)+' '+CURRENCY+') لبداية الشهر الجاي');
       closeModal(); renderHR();
     }catch(e){ toast('✗ '+e.message); console.error(e); }
@@ -13834,7 +13839,9 @@ try {
       // 🔧 نفس منطق الأدمن بالضبط: كل سلفة اتاخدت هالشهر بتخصم من الصافي، بغض النظر إذا اتسددت أو لسا —
       // "متسددة" معناها بس إنها انحسبت/اتصفّت بمراجعة سابقة، مش إنها ما بتأثر عالشهر يلي اتاخدت فيه
       const advTakenThisMonth = adv.filter(a=>new Date(a.created_at)>=monthStart).reduce((a,x)=>a+parseFloat(x.amount||0),0);
-      const advOutstanding = adv.reduce((a,x)=>a+parseFloat(x.amount||0),0);
+      // 🔧 "القائم" لازم يعني السلف يلي لسا status='open' (مو متسددة) — قبل هيك كانت بتجمع كل سلفة
+      // اتاخدت بأي وقت حتى لو انطوت أصلًا جوا "الرصيد السابق" بقفل شهر سابق (تظهر مكررة كإنها لسا دين)
+      const advOutstanding = adv.filter(x=>x.status==='open').reduce((a,x)=>a+parseFloat(x.amount||0),0);
       const meals = mealsRes.data||[];
       const mealsTotal = meals.reduce((a,o)=>a+parseFloat(o.total||0),0);
       const shiftDed = (shiftAdjRes.data||[]).reduce((a,x)=>a+Math.abs(x.amount||0),0);
@@ -14164,7 +14171,7 @@ try {
     const breakExcess = calcBreakExcessHours(brRes.data||[]);
     const hours = Math.max(0, manualHours+portalHours-breakExcess);
     const gross = hours*(hourlyWage||0);
-    const advOutstanding = (advRes.data||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
+    const advOutstanding = (advRes.data||[]).filter(x=>x.status==='open').reduce((a,x)=>a+parseFloat(x.amount||0),0);
     const mealsTotal = (mealsRes.data||[]).reduce((a,o)=>a+parseFloat(o.total||0),0);
     const shiftDed = (shiftAdjRes.data||[]).reduce((a,x)=>a+Math.abs(x.amount||0),0);
     const deductionsTotal = (dedRes.data||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
