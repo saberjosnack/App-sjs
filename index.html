@@ -9623,7 +9623,7 @@
       const closureDate = lastClosureByEmp[e.id];
       // 🔒 لو هالموظف عنده شهر مقفول يتقاطع مع فترة الفلتر الحالية، نستبعد أي حركة كانت أصلًا
       // جوا الفترة المقفولة (قبل أو يوم القفل نفسه) — لأنها محسوبة أصلًا جوا "الرصيد السابق"
-      const afterClosure = (d) => !closureDate || !d || new Date(d) > new Date(closureDate+'T23:59:59');
+      const afterClosure = (d) => !closureDate || !d || new Date(d) >= new Date(closureDate);
       const myAtt = attendance.filter(a=>a.employee_id===e.id && afterClosure(a.work_date));
       const manualHours = myAtt.reduce((a,x)=>a+parseFloat(x.hours||0), 0);
       const myLogs = timeLogs.filter(l=>l.employee_id===e.id && afterClosure(l.clock_in));
