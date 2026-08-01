@@ -9623,7 +9623,7 @@
       const closureDate = lastClosureByEmp[e.id];
       // 🔒 لو هالموظف عنده شهر مقفول يتقاطع مع فترة الفلتر الحالية، نستبعد أي حركة كانت أصلًا
       // جوا الفترة المقفولة (قبل أو يوم القفل نفسه) — لأنها محسوبة أصلًا جوا "الرصيد السابق"
-      const afterClosure = (d) => !closureDate || !d || new Date(d) >= new Date(closureDate);
+      const afterClosure = (d) => !closureDate || !d || new Date(d) >= new Date(closureDate+'T00:00:00+03:00');
       const myAtt = attendance.filter(a=>a.employee_id===e.id && afterClosure(a.work_date));
       const manualHours = myAtt.reduce((a,x)=>a+parseFloat(x.hours||0), 0);
       const myLogs = timeLogs.filter(l=>l.employee_id===e.id && afterClosure(l.clock_in));
@@ -13805,7 +13805,7 @@ try {
       const monthStart = new Date(localMonthStartStr()+'T00:00:00+03:00');
       const { data: lastClosure } = await db.from('hr_month_closures').select('period_to').eq('employee_id', EMP.id).order('period_to',{ascending:false}).limit(1).maybeSingle();
       if(lastClosure?.period_to){
-        const closureEnd = new Date(lastClosure.period_to);
+        const closureEnd = new Date(lastClosure.period_to+'T00:00:00+03:00');
         if(closureEnd > monthStart) monthStart.setTime(closureEnd.getTime());
       }
       const { data: linkedStaffRows } = await db.from('staff').select('id, role').eq('linked_hr_id', EMP.id);
@@ -14158,7 +14158,7 @@ try {
     // 🔒 نفس منطق حماية "قفل الشهر" — إذا انقفل شهر لهاد الموظف، نحسب من بعده مباشرة عشان ما يتكرر الحساب
     const { data: lastClosureNd } = await db.from('hr_month_closures').select('period_to').eq('employee_id', empId).order('period_to',{ascending:false}).limit(1).maybeSingle();
     if(lastClosureNd?.period_to){
-      const closureEnd = new Date(lastClosureNd.period_to);
+      const closureEnd = new Date(lastClosureNd.period_to+'T00:00:00+03:00');
       if(closureEnd > monthStart) monthStart.setTime(closureEnd.getTime());
     }
     const fromIso = monthStart.toISOString();
