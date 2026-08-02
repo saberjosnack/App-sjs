@@ -10484,11 +10484,17 @@
     });
     const periodNet = brDateFiltered.reduce((a,t)=>a+parseFloat(t.amount||0),0);
 
-    // ديون الموردين (فواتير غير مدفوعة)
-    const { data: unpaid } = await db.from('purchases').select('id,supplier,total,purchase_date').eq('payment_status','unpaid');
+    // ديون الموردين (فواتير غير مدفوعة كليًا أو جزئيًا) — لازم نحسب "المتبقي" (الإجمالي - المدفوع)
+    // مش بس الفواتير "unpaid" بالكامل، وإلا أي فاتورة مدفوعة جزئيًا (partial) كانت تضيع من الحساب تمامًا
+    const { data: unpaid } = await db.from('purchases').select('id,supplier,total,paid_amount,payment_status,purchase_date').in('payment_status',['unpaid','partial']);
     const bySupplierDebt = {};
-    (unpaid||[]).forEach(p=>{ bySupplierDebt[p.supplier] = (bySupplierDebt[p.supplier]||0) + parseFloat(p.total||0); });
-    const totalDebt = (unpaid||[]).reduce((a,p)=>a+parseFloat(p.total||0),0);
+    let totalDebt = 0;
+    (unpaid||[]).forEach(p=>{
+      const remaining = parseFloat(p.total||0) - parseFloat(p.paid_amount||0);
+      if(remaining <= 0.005) return; // احتياط: تجاهل أي فاتورة متبقيها صفر رغم حالتها
+      bySupplierDebt[p.supplier] = (bySupplierDebt[p.supplier]||0) + remaining;
+      totalDebt += remaining;
+    });
 
     let filtered = all.filter(t=>{
       const d = t.created_at.split('T')[0];
