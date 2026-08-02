@@ -629,6 +629,7 @@
         <button data-a="activityLog" onclick="admTab('activityLog')" style="background:#2b2b2b;color:#fff;border-color:#000">📜 سجل الأحداث</button>
         <button data-a="sett" onclick="admTab('sett')">🔧 إعدادات</button>
         <button data-a="shifts" onclick="admTab('shifts')">🔄 شيفتات</button>
+        <button data-a="productTimeline" onclick="admTab('productTimeline')" style="background:#c8f0e0;border-color:#0d9c6c">📜 خط سير المنتج</button>
       </div>
       <div id="admContent"></div>
     </section>
@@ -1206,6 +1207,7 @@
       tab_ccPoints: 'نقاط مبيعات الكول سنتر',
       tab_shiftSchedule: 'جدول الدوام المحدد (الكل)',
       tab_shifts: 'شيفتات',
+      tab_productTimeline: 'خط سير المنتج',
     },
     '🔓 صلاحيات إدارية دقيقة (بدائل قابلة للاختيار لوحدها)': {
       fin_approvals: 'الموافقات المالية (مصاريف، تسوية مشتريات، دفعات موردين، خصم يدوي حر، الخزينة)',
@@ -5348,7 +5350,7 @@
     items:'items_manage', cats:'cats_manage', codes:'codes_manage', schedDisc:'codes_manage', staff:'staff_manage', roles:'admin_only', branches:'branches_manage', sett:'settings_manage', devices:'devices_manage',
     ingredients:'inventory_view', recipes:'inventory_view',
     inventory:'inventory_audit', transfers:'inventory_transfer', warehouse:'tab_warehouse', treasury:'tab_treasury', hr:'tab_hr', chats:'tab_chats', dailyAudits:'tab_dailyAudits', hrLocations:'tab_hrLocations', dutyHours:'tab_dutyHours', hrClosures:'tab_hrClosures', ordersScreen:'tab_ordersScreen',
-    complaints:'tab_complaints', violations:'tab_violations', deductions:'tab_deductions', rewards:'tab_rewards', activityLog:'tab_activityLog', manufacturing:'tab_manufacturing', satisfaction:'tab_satisfaction', ccPoints:'tab_ccPoints', shiftSchedule:'tab_shiftSchedule', shifts:'tab_shifts',
+    complaints:'tab_complaints', violations:'tab_violations', deductions:'tab_deductions', rewards:'tab_rewards', activityLog:'tab_activityLog', manufacturing:'tab_manufacturing', satisfaction:'tab_satisfaction', ccPoints:'tab_ccPoints', shiftSchedule:'tab_shiftSchedule', shifts:'tab_shifts', productTimeline:'tab_productTimeline',
     expenses:'expenses_view', purchases:'purchases_view',
     platforms:'platforms_view', empmeals:'empmeals_view', topcust:'topcust_view', waste:'waste_log', suppliers:'purchases_view',
   };
@@ -5620,6 +5622,7 @@
       loadShiftsPage();
       renderShiftAdjustments();
     }
+    if(admView==='productTimeline'){ renderProductTimeline(); return; }
     if(admView==='complaints'){
       C.innerHTML = `<div id="complaintsBox"><div class="empty-note">جاري التحميل...</div></div>`;
       renderComplaints();
@@ -6838,9 +6841,20 @@
     // 🔧 الوصفات المرتبطة بصنف مؤرشف/مخفي كانت تضل تظهر هون رغم إخفاء الصنف من كل مكان تاني — هلأ منستبعدها،
     // وبترجع تظهر تلقائيًا فور ما ترجعي تفعّلي الصنف من جديد
     RECIPES_DATA=(data||[]).filter(r=>r.menu_items?.is_available!==false);
+    // 🔍 أصناف فعّالة (ظاهرة بالكاشير) بدون أي وصفة معرّفة إطلاقًا — كل بيع لهاي الأصناف ما بيخصم
+    // ولا مكوّن من المخزون أبدًا، وهاد غالبًا السبب الأساسي وراء فروقات الجرد المستمرة والكبيرة
+    const recipedItemIds = new Set((data||[]).map(r=>r.menu_item_id));
+    const itemsWithoutRecipe = ITEMS.filter(i=>i.is_available && i.item_type!=='composite' && !recipedItemIds.has(i.id));
     const C=document.getElementById('admContent');
     C.innerHTML=`<button class="add-btn" onclick="recipeForm()">＋ وصفة جديدة</button>
       <button class="mini ok" style="background:#1D6F42;margin-bottom:10px" onclick="exportRecipesExcel()">📥 تصدير Excel</button>
+      ${itemsWithoutRecipe.length ? `<div class="panel" style="border:2px solid var(--red);margin-bottom:14px">
+        <h4 style="color:var(--red);margin-bottom:8px">⚠️ ${itemsWithoutRecipe.length} صنف ظاهر بدون وصفة — بيعهم ما بيخصم أي مكوّن من المخزون!</h4>
+        <div style="font-size:.85rem;color:var(--muted);font-weight:700;margin-bottom:8px">هاي الأصناف تتباع عادي بالكاشير، بس ما إلها وصفة معرّفة، فأي بيع منها ما بيأثر على مخزون المكونات إطلاقًا — هاد غالبًا سبب أساسي لفروقات الجرد المستمرة.</div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px">
+          ${itemsWithoutRecipe.map(i=>`<button class="mini edit" onclick="recipeForm(null,'${i.id}')">＋ ${esc(i.name_ar)}</button>`).join('')}
+        </div>
+      </div>` : ''}
       <div class="tbl-wrap"><table class="tbl">
         <tr><th>الصنف</th><th>التكلفة</th><th>سعر البيع</th><th>Food Cost%</th><th>الربح</th><th></th></tr>
         ${RECIPES_DATA.map(r=>{
@@ -6897,13 +6911,14 @@
     printRaw(text, html);
   }
   let riIdx=1;
-  function recipeForm(id){
+  function recipeForm(id, preselectItemId){
     const r=RECIPES_DATA.find(x=>x.id===id)||{};
     const existItems=r.recipe_items||[];
+    const selectedItemId = r.menu_item_id || preselectItemId || '';
     modal(`<h3>${id?'تعديل وصفة':'وصفة جديدة'}</h3>
       <div class="fld"><label>الصنف</label><select id="fr_item">
         <option value="">اختر الصنف...</option>
-        ${ITEMS.map(i=>`<option value="${i.id}" ${r.menu_item_id===i.id?'selected':''}>${esc(i.name_ar)}</option>`).join('')}</select></div>
+        ${ITEMS.map(i=>`<option value="${i.id}" ${selectedItemId===i.id?'selected':''}>${esc(i.name_ar)}</option>`).join('')}</select></div>
       <div class="fld"><label>المكونات</label>
         <div id="ri_list">${existItems.map((ri,idx)=>riRow(idx,ri.ingredient_id,ri.quantity)).join('')||riRow(0,'','')}</div>
         <button type="button" class="mini ok" style="margin-top:6px" onclick="addRiRow()">＋ إضافة مكون</button></div>
@@ -6940,6 +6955,103 @@
   /* ================= 🏭 التصنيع (مواد خام ← منتج مصنّع) ================= */
   let MFG_RECIPES = [];
   let mfgRowIdx = 1;
+  /* ================= 📜 خط سير المنتج — كل حركة صارت على مادة من الشراء لغاية البيع/الإتلاف ================= */
+  let PT_FILTER = { ingredient:'', branch:'', from:'', to:'' };
+  const MOVEMENT_TYPE_AR = {
+    purchase:'🛒 شراء', sale:'🧾 بيع', waste:'🗑️ إتلاف', audit:'📋 تصحيح جرد', manual:'✏️ تعديل يدوي',
+    transfer_out:'📤 نقل صادر', transfer_in:'📥 نقل وارد',
+    transfer_out_reverted:'↩️ إلغاء نقل صادر', transfer_in_reverted:'↩️ إلغاء نقل وارد',
+    manufacture_consume:'🏭 استهلاك تصنيع', manufacture_produce:'🏭 إنتاج تصنيع', manufacture_delete_revert:'↩️ إلغاء تصنيع',
+  };
+  async function renderProductTimeline(){
+    const C = document.getElementById('admContent');
+    await loadIngredients();
+    if(!PT_FILTER.from){ const d = new Date(); d.setDate(d.getDate()-30); PT_FILTER.from = d.toISOString().split('T')[0]; PT_FILTER.to = localTodayStr(); }
+    C.innerHTML = `
+      <div class="panel" style="margin-bottom:14px">
+        <h3>📜 خط سير المنتج — من الشراء لغاية البيع أو الإتلاف</h3>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px">
+          <div style="flex:2;min-width:200px"><label style="font-weight:700;font-size:.82rem">المادة</label><br>
+            <select id="pt_ing" style="width:100%"><option value="">اختاري مادة...</option>${INGR.map(i=>`<option value="${i.id}" ${PT_FILTER.ingredient===i.id?'selected':''}>${esc(i.name)} (${esc(i.unit)})</option>`).join('')}</select></div>
+          <div style="flex:1;min-width:150px"><label style="font-weight:700;font-size:.82rem">الفرع</label><br>
+            <select id="pt_branch" style="width:100%"><option value="">كل الفروع</option>${BRANCHES.map(b=>`<option value="${b.id}" ${PT_FILTER.branch===b.id?'selected':''}>${esc(b.name_ar)}</option>`).join('')}</select></div>
+          <div><label style="font-weight:700;font-size:.82rem">من تاريخ</label><br><input type="date" id="pt_from" value="${PT_FILTER.from}"></div>
+          <div><label style="font-weight:700;font-size:.82rem">إلى تاريخ</label><br><input type="date" id="pt_to" value="${PT_FILTER.to}"></div>
+          <button class="mini ok" style="align-self:end" onclick="applyProductTimelineFilter()">🔍 عرض الخط الزمني</button>
+        </div>
+      </div>
+      <div id="pt_result"></div>`;
+    if(PT_FILTER.ingredient) loadProductTimeline();
+  }
+  function applyProductTimelineFilter(){
+    PT_FILTER.ingredient = document.getElementById('pt_ing')?.value||'';
+    PT_FILTER.branch = document.getElementById('pt_branch')?.value||'';
+    PT_FILTER.from = document.getElementById('pt_from')?.value||PT_FILTER.from;
+    PT_FILTER.to = document.getElementById('pt_to')?.value||PT_FILTER.to;
+    if(!PT_FILTER.ingredient){ toast('⚠️ اختاري مادة أول'); return; }
+    loadProductTimeline();
+  }
+  async function loadProductTimeline(){
+    const R = document.getElementById('pt_result'); if(!R) return;
+    R.innerHTML = '<div class="empty-note">... جاري التحميل</div>';
+    try{
+      let q = db.from('inventory_movements').select('*, branches(name_ar)').eq('ingredient_id', PT_FILTER.ingredient)
+        .gte('created_at', localDayStart(PT_FILTER.from)).lte('created_at', localDayEnd(PT_FILTER.to)).order('created_at',{ascending:true});
+      if(PT_FILTER.branch) q = q.eq('branch_id', PT_FILTER.branch);
+      const { data, error } = await q;
+      if(error){ R.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message||'الجدول inventory_movements غير موجود — نفّذ SQL أولاً')}</div>`; return; }
+      const moves = data||[];
+      const ing = INGR.find(i=>i.id===PT_FILTER.ingredient);
+      // 📊 رصيد افتتاحي = الرصيد الحالي (لو مافي فلتر فرع) ناقص صافي كل الحركات جوا الفترة — عشان نقدر نبني رصيد متراكم صحيح من أول سطر
+      let currentTotal = 0;
+      if(PT_FILTER.branch){
+        const { data: bi } = await db.from('branch_inventory').select('stock').eq('branch_id', PT_FILTER.branch).eq('ingredient_id', PT_FILTER.ingredient).maybeSingle();
+        currentTotal = parseFloat(bi?.stock||0);
+      } else {
+        const { data: biAll } = await db.from('branch_inventory').select('stock').eq('ingredient_id', PT_FILTER.ingredient);
+        currentTotal = (biAll||[]).reduce((a,b)=>a+parseFloat(b.stock||0),0);
+      }
+      const netInPeriod = moves.reduce((a,m)=>a+parseFloat(m.qty||0),0);
+      let running = currentTotal - netInPeriod; // الرصيد قبل أول حركة بالفترة (نقطة البداية)
+      const openingStock = running;
+      const byType = {};
+      moves.forEach(m=>{ byType[m.type] = (byType[m.type]||0) + parseFloat(m.qty||0); });
+      const totalPurchased = byType['purchase']||0;
+      const totalSold = Math.abs(byType['sale']||0);
+      const totalWasted = Math.abs(byType['waste']||0);
+      const totalCostMoved = moves.reduce((a,m)=>a+parseFloat(m.total_cost||0),0);
+      R.innerHTML = `
+        <div class="panel" style="margin-bottom:14px">
+          <h4 style="color:var(--maroon);margin-bottom:8px">📊 ملخص "${esc(ing?.name||'—')}" (${esc(ing?.unit||'')}) — ${PT_FILTER.from} → ${PT_FILTER.to}</h4>
+          <div style="display:flex;gap:10px;flex-wrap:wrap">
+            <div class="stat">رصيد افتتاحي<b>${openingStock.toFixed(2)}</b></div>
+            <div class="stat">🛒 إجمالي مشترى<b style="color:var(--ok)">+${totalPurchased.toFixed(2)}</b></div>
+            <div class="stat">🧾 إجمالي مباع<b style="color:var(--red)">-${totalSold.toFixed(2)}</b></div>
+            <div class="stat">🗑️ إجمالي متلف<b style="color:var(--red)">-${totalWasted.toFixed(2)}</b></div>
+            <div class="stat">الرصيد الحالي<b style="color:var(--maroon)">${currentTotal.toFixed(2)}</b></div>
+            <div class="stat">💰 قيمة الحركات (تكلفة)<b style="color:var(--red)">${fmt(totalCostMoved)} ${CURRENCY}</b></div>
+          </div>
+        </div>
+        <div class="tbl-wrap"><table class="tbl">
+          <tr><th>التاريخ والوقت</th><th>النوع</th><th>الفرع</th><th>الكمية</th><th>الرصيد بعدها</th><th>سعر الوحدة</th><th>التكلفة</th><th>ملاحظة</th><th>بواسطة</th></tr>
+          ${moves.map(m=>{
+            running += parseFloat(m.qty||0);
+            const positive = parseFloat(m.qty||0) >= 0;
+            return `<tr>
+              <td style="white-space:nowrap">${new Date(m.created_at).toLocaleString('ar-JO')}</td>
+              <td>${MOVEMENT_TYPE_AR[m.type]||esc(m.type||'—')}</td>
+              <td>${esc(m.branches?.name_ar||'عام')}</td>
+              <td><b style="color:${positive?'var(--ok)':'var(--red)'}">${positive?'+':''}${parseFloat(m.qty||0).toFixed(2)}</b></td>
+              <td><b>${running.toFixed(2)}</b></td>
+              <td>${fmt(m.unit_cost||0)}</td>
+              <td>${fmt(m.total_cost||0)}</td>
+              <td style="font-size:.82rem;color:var(--muted)">${esc(m.note||'—')}</td>
+              <td style="font-size:.82rem">${esc(m.created_by||'—')}</td>
+            </tr>`;
+          }).join('')||'<tr><td colspan="9" class="empty-note">ما في حركات مسجّلة لهاي المادة بهاي الفترة</td></tr>'}
+        </table></div>`;
+    }catch(e){ R.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
+  }
   async function renderManufacturing(){
     await loadIngredients();
     const C = document.getElementById('admContent');
