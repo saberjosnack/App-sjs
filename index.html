@@ -7020,6 +7020,10 @@
     if(!PT_FILTER.ingredient){ toast('⚠️ اختاري مادة أول'); return; }
     loadProductTimeline();
   }
+  function exportProductTimelineExcel(){
+    if(!window.__PT_EXPORT_ROWS || !window.__PT_EXPORT_ROWS.length){ toast('⚠️ ما في بيانات نصدّرها'); return; }
+    exportToExcel(window.__PT_EXPORT_ROWS, 'خط_سير_'+(window.__PT_EXPORT_NAME||'منتج')+'_'+new Date().toISOString().split('T')[0], 'خط السير');
+  }
   async function loadProductTimeline(){
     const R = document.getElementById('pt_result'); if(!R) return;
     R.innerHTML = '<div class="empty-note">... جاري التحميل</div>';
@@ -7049,9 +7053,27 @@
       const totalSold = Math.abs(byType['sale']||0);
       const totalWasted = Math.abs(byType['waste']||0);
       const totalCostMoved = moves.reduce((a,m)=>a+parseFloat(m.total_cost||0),0);
+      // 📥 نخزّن نسخة فيها الرصيد المتراكم لكل صف، جاهزة للتصدير لـExcel
+      let runningForExport = openingStock;
+      window.__PT_EXPORT_ROWS = moves.map(m=>{
+        runningForExport += parseFloat(m.qty||0);
+        return {
+          'التاريخ والوقت': new Date(m.created_at).toLocaleString('ar-JO'),
+          'النوع': MOVEMENT_TYPE_AR[m.type]||m.type||'—',
+          'الفرع': m.branches?.name_ar||'عام',
+          'الكمية': parseFloat(m.qty||0),
+          'الرصيد بعدها': runningForExport,
+          'سعر الوحدة': parseFloat(m.unit_cost||0),
+          'التكلفة': parseFloat(m.total_cost||0),
+          'ملاحظة': m.note||'—',
+          'بواسطة': m.created_by||'—',
+        };
+      });
+      window.__PT_EXPORT_NAME = ing?.name||'منتج';
       R.innerHTML = `
         <div class="panel" style="margin-bottom:14px">
           <h4 style="color:var(--maroon);margin-bottom:8px">📊 ملخص "${esc(ing?.name||'—')}" (${esc(ing?.unit||'')}) — ${PT_FILTER.from} → ${PT_FILTER.to}</h4>
+          <button class="mini ok" style="background:#1D6F42;margin-bottom:10px" onclick="exportProductTimelineExcel()">📥 تصدير Excel</button>
           <div style="display:flex;gap:10px;flex-wrap:wrap">
             <div class="stat">رصيد افتتاحي<b>${openingStock.toFixed(2)}</b></div>
             <div class="stat">🛒 إجمالي مشترى<b style="color:var(--ok)">+${totalPurchased.toFixed(2)}</b></div>
