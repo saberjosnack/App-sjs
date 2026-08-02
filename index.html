@@ -7114,7 +7114,7 @@
     const rawCost = items.reduce((a,i)=>a+(i.quantity||0)*(i.ingredients?.unit_cost||0),0);
     modal(`<h3>🏭 تصنيع — ${esc(r.name)}</h3>
       <div class="fld"><label>الفرع (وين رح تنخصم المواد الخام وتنضاف الكمية المنتجة)</label>
-        <select id="mfg_run_branch"><option value="">اختر الفرع...</option>${BRANCHES.map(b=>`<option value="${b.id}">${esc(b.name_ar)}</option>`).join('')}</select></div>
+        <select id="mfg_run_branch" onchange="updateMfgRunPreview('${recipeId}')"><option value="">اختر الفرع...</option>${BRANCHES.map(b=>`<option value="${b.id}">${esc(b.name_ar)}</option>`).join('')}</select></div>
       <div class="fld"><label>الكمية المطلوب تصنيعها الآن (بوحدة المنتج — الوصفة الأساسية بتنتج ${r.output_quantity})</label>
         <input id="mfg_run_qty" type="number" step="0.01" value="${r.output_quantity}" oninput="updateMfgRunPreview('${recipeId}')"></div>
       <div id="mfg_run_preview" style="background:#fff8e1;border-radius:10px;padding:10px 12px;margin:10px 0;font-size:.85rem"></div>
@@ -7167,16 +7167,38 @@
       </body></html>`;
     printRaw(text, html); // 🖨️ نفس مسار طباعة الفواتير الحقيقي (بلوتوث/شبكة/RawBT) بدل ما يفتح تبويب متصفح بس
   }
-  function updateMfgRunPreview(recipeId){
+  async function updateMfgRunPreview(recipeId){
     const r = MFG_RECIPES.find(x=>x.id===recipeId); if(!r) return;
     const items = r.manufacturing_recipe_items||[];
     const rawCostBase = items.reduce((a,i)=>a+(i.quantity||0)*(i.ingredients?.unit_cost||0),0);
     const qty = parseFloat(document.getElementById('mfg_run_qty')?.value)||0;
+    const branchId = document.getElementById('mfg_run_branch')?.value;
     const scale = r.output_quantity>0 ? qty/r.output_quantity : 0;
     const scaledCost = rawCostBase*scale;
     const prev = document.getElementById('mfg_run_preview'); if(!prev) return;
+    let stockHtml = '';
+    if(branchId && items.length){
+      try{
+        const { data: stockRows } = await db.from('branch_inventory').select('ingredient_id, stock').eq('branch_id', branchId).in('ingredient_id', items.map(i=>i.ingredient_id));
+        const stockByIng = {}; (stockRows||[]).forEach(s=>{ stockByIng[s.ingredient_id] = parseFloat(s.stock||0); });
+        let outOfStock = null, maxPossibleQty = Infinity;
+        items.forEach(it=>{
+          const avail = stockByIng[it.ingredient_id] ?? 0;
+          if(!outOfStock && avail<=0.001) outOfStock = it.ingredients?.name||'مادة';
+          const perOutputUnit = (it.quantity||0) / (r.output_quantity||1);
+          if(perOutputUnit>0){ const possible = avail/perOutputUnit; if(possible<maxPossibleQty) maxPossibleQty = possible; }
+        });
+        if(outOfStock){
+          stockHtml = `<div style="color:#fff;background:var(--red);border-radius:8px;padding:8px 10px;margin-top:8px;font-weight:800">⛔ "${esc(outOfStock)}" خالص من مستودع هاد الفرع — ما فيك تصنّعي</div>`;
+        } else if(maxPossibleQty < qty-0.001){
+          stockHtml = `<div style="color:#fff;background:var(--warn);border-radius:8px;padding:8px 10px;margin-top:8px;font-weight:800">⚠️ المواد المتوفرة كافية بس لتصنيع ${maxPossibleQty.toFixed(2)} ${esc(r.ingredients?.unit||'وحدة')} — قلّلي الكمية</div>`;
+        } else {
+          stockHtml = `<div style="color:#fff;background:var(--ok);border-radius:8px;padding:8px 10px;margin-top:8px;font-weight:800">✅ المواد متوفرة كافية لهاي الكمية</div>`;
+        }
+      }catch(e){ console.error('stock check failed:', e); }
+    }
     prev.innerHTML = `المواد الخام المطلوبة فعليًا:<br>${items.map(i=>`${(i.quantity*scale).toFixed(2)} ${esc(i.ingredients?.unit||'')} ${esc(i.ingredients?.name||'—')}`).join(' + ')}<br>
-      <b>التكلفة التلقائية المحسوبة: <span style="color:var(--red)">${fmt(scaledCost)} ${CURRENCY}</span> (${fmt(qty>0?scaledCost/qty:0)} ${CURRENCY}/وحدة)</b>`;
+      <b>التكلفة التلقائية المحسوبة: <span style="color:var(--red)">${fmt(scaledCost)} ${CURRENCY}</span> (${fmt(qty>0?scaledCost/qty:0)} ${CURRENCY}/وحدة)</b>${stockHtml}`;
   }
   async function saveManufacturingRun(recipeId){
     if(!lockSubmit('saveManufacturingRun')) return;
