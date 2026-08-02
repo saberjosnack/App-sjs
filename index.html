@@ -8600,6 +8600,20 @@
   async function saveInventoryAudit(branchId, branchName){
     if(!lockSubmit('saveInventoryAudit')) return;
     setTimeout(()=>unlockSubmit('saveInventoryAudit'), 15000); // شبكة أمان: يفك القفل لحاله لو صار خطأ غير متوقع
+    // 🔧 مهم جدًا: هاد الفحص كان موجود بس بعد ما التعديلات الفعلية عالمخزون كانت تصير — يعني كان يمنع بس
+    // تكرار "سجل الجرد الملخّص"، بينما نفس الجرد كان يتطبّق على المخزون الحقيقي عدة مرات فعليًا (مرة توثقنا
+    // منها بالضبط: نفس تصحيح الجرد انسجل 5 مرات خلال 5 ثواني). هلق منتحقق أول شي، قبل ما نلمس أي رقم.
+    try{
+      const { data: recentDup } = await db.from('inventory_audits').select('id')
+        .eq('branch_id', branchId).eq('staff_id', ME.id)
+        .gte('created_at', new Date(Date.now()-15000).toISOString())
+        .limit(1);
+      if(recentDup && recentDup.length){
+        toast('⛔ في جرد اتسجل قبل شوي لنفس الفرع — ما رح نكرره');
+        unlockSubmit('saveInventoryAudit');
+        return;
+      }
+    }catch(e){ console.error('duplicate audit pre-check failed:', e); }
     const qtys=[...document.querySelectorAll('.inv_qty')];
     const results = [];
     let updated=0;
@@ -8617,25 +8631,15 @@
       if(Math.abs(diff)>0.001) logMovement(branchId, ingId, diff, 'audit', 'تصحيح جرد (المتوقع '+expected+' ← الفعلي '+actual+')');
       updated++;
     }
-    if(!updated){ toast('⚠️ عدّ مادة واحدة على الأقل'); return; }
+    if(!updated){ toast('⚠️ عدّ مادة واحدة على الأقل'); unlockSubmit('saveInventoryAudit'); return; }
     // تسجيل الجرد بسجل دائم
     const totalVarianceItems = results.filter(r=>Math.abs(r.variance)>0.001).length;
     try{
-      // 🔧 حماية إضافية ضد التكرار: نتأكد ما في سجل جرد مطابق (نفس الفرع ونفس الموظف) بآخر 15 ثانية
-      // قبل ما نسجل — تحسبًا لأي إرسال مزدوج مش ملتقط بحماية النقر (زي شبكة ضعيفة بتعيد الطلب لحالها)
-      const { data: recentDup } = await db.from('inventory_audits').select('id')
-        .eq('branch_id', branchId).eq('staff_id', ME.id)
-        .gte('created_at', new Date(Date.now()-15000).toISOString())
-        .limit(1);
-      if(recentDup && recentDup.length){
-        console.warn('duplicate audit submission blocked — already recorded within last 15s');
-      } else {
-        await db.from('inventory_audits').insert({
-          branch_id: branchId, staff_id: ME.id, staff_name: ME.full_name,
-          items_counted: updated, items_with_variance: totalVarianceItems,
-          details: results
-        });
-      }
+      await db.from('inventory_audits').insert({
+        branch_id: branchId, staff_id: ME.id, staff_name: ME.full_name,
+        items_counted: updated, items_with_variance: totalVarianceItems,
+        details: results
+      });
     }catch(e){ console.error('audit log failed:', e); }
     await logActivity('inventory_audit', 'جرد '+branchName+' — '+updated+' مادة، '+totalVarianceItems+' فرق');
     // 🔔 تنبيه فوري للمالك عبر الشات الداخلي لو الجرد عمله موظف عادي (مش المالك نفسه)
@@ -11801,6 +11805,12 @@ window.__lastEmpMealsData = null;
     try{
       // خصم من مخزون الفرع
       const {data:bi} = await db.from('branch_inventory').select('id,stock').eq('branch_id',branchId).eq('ingredient_id',ingId).maybeSingle();
+      // 🛡️ حماية من غلطة كتابة (زي إضافة صفر زيادة بالغلط، 85 بدل 8.5) — لو الكمية المتلفة أكتر من نص
+      // المخزون الحالي دفعة وحدة، منوقّف ونتأكد قبل ما نسجّل رقم كبير وهمي يفسد كل حسابات الجرد لاحقًا
+      if(!silent && bi && bi.stock>0 && qty > bi.stock*0.5 && qty > 5){
+        const ingName = INGR.find(i=>i.id===ingId)?.name || 'المادة';
+        if(!confirm('⚠️ رقم كبير! عم تسجّلي إتلاف '+qty+' من "'+ingName+'"، وهاد أكتر من نص المخزون الحالي ('+bi.stock+'). تأكدي إنه ما في صفر زيادة بالغلط (مثلاً كتبتي 85 بدل 8.5). متأكدة من الرقم؟')) return;
+      }
       if(!silent && (!bi || (bi.stock||0) < qty)){
         if(!confirm('⚠️ المخزون المتاح ('+((bi?.stock)||0)+') أقل من الكمية المتلفة — تكمل بالتسجيل؟ (المخزون رح ينزل تحت الصفر لحد ما تنزل فاتورة شراء جديدة تصححه)')) return;
       }
