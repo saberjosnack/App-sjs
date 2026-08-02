@@ -3678,10 +3678,24 @@
   /* ================= سجل حركات المخزون الموحّد (المستودع) ================= */
   // type: 'purchase' | 'sale' | 'transfer_out' | 'transfer_in' | 'waste' | 'audit' | 'manual'
   // qty: موجبة = دخول للمخزون، سالبة = خروج منه
-  async function logMovement(branchId, ingredientId, qty, type, note){
+  async function logMovement(branchId, ingredientId, qty, type, note, unitCost){
     try{
+      // 🔧 كانت هاي الدالة (المستخدمة بكل عمليات المخزون — بيع، تصنيع، نقل، إتلاف، جرد، شراء)
+      // ما بتسجّل أي سعر تكلفة إطلاقًا، لأي عملية، بكل السجل — فكانت كل حركات المخزون "بدون سعر".
+      // هلأ منسجّل التكلفة: إما يلي انبعتت صراحةً (أدق، وقت التصنيع/الشراء لحظة معروفة السعر فيها بالظبط)،
+      // أو (لو ما انبعتت) سعر التكلفة الحالي للمادة من جدول ingredients كحل احتياطي أفضل من لا شي.
+      let uc = unitCost;
+      if(uc==null || isNaN(uc)){
+        const cached = (typeof INGR!=='undefined' ? INGR : []).find(i=>i.id===ingredientId);
+        if(cached) uc = parseFloat(cached.unit_cost||0);
+        else {
+          const { data: ingRow } = await db.from('ingredients').select('unit_cost').eq('id', ingredientId).maybeSingle();
+          uc = parseFloat(ingRow?.unit_cost||0);
+        }
+      }
       await db.from('inventory_movements').insert({
         branch_id: branchId, ingredient_id: ingredientId, qty, type,
+        unit_cost: uc, total_cost: uc*Math.abs(qty||0),
         note: note||null, created_by: ME?.full_name||null
       });
     }catch(e){ console.error('logMovement failed (تأكد من تنفيذ SQL جدول inventory_movements):', e); }
@@ -6992,11 +7006,11 @@
         const { data: bi } = await db.from('branch_inventory').select('id,stock').eq('branch_id',run.branch_id).eq('ingredient_id',it.ingredient_id).maybeSingle();
         if(bi) await db.from('branch_inventory').update({ stock:(bi.stock||0)+it.quantity }).eq('id', bi.id);
         else await db.from('branch_inventory').insert({ branch_id:run.branch_id, ingredient_id:it.ingredient_id, stock:it.quantity, min_stock:0 });
-        logMovement(run.branch_id, it.ingredient_id, it.quantity, 'manufacture_delete_revert', 'حذف عملية تصنيع "'+(run.recipe_name||'')+'" — استرجاع مادة خام');
+        logMovement(run.branch_id, it.ingredient_id, it.quantity, 'manufacture_delete_revert', 'حذف عملية تصنيع "'+(run.recipe_name||'')+'" — استرجاع مادة خام', it.unit_cost);
       }
       const { data: outBi } = await db.from('branch_inventory').select('id,stock').eq('branch_id',run.branch_id).eq('ingredient_id',run.output_ingredient_id).maybeSingle();
       if(outBi) await db.from('branch_inventory').update({ stock:Math.max(0,(outBi.stock||0)-run.output_quantity) }).eq('id', outBi.id);
-      logMovement(run.branch_id, run.output_ingredient_id, -run.output_quantity, 'manufacture_delete_revert', 'حذف عملية تصنيع "'+(run.recipe_name||'')+'" — سحب المنتج الناتج');
+      logMovement(run.branch_id, run.output_ingredient_id, -run.output_quantity, 'manufacture_delete_revert', 'حذف عملية تصنيع "'+(run.recipe_name||'')+'" — سحب المنتج الناتج', run.unit_cost);
       const { error: delErr } = await db.from('manufacturing_runs').delete().eq('id', runId);
       if(delErr){ toast('✗ '+delErr.message); return; }
       await logActivity('delete_manufacturing_run', 'حذف عملية تصنيع: '+(run.recipe_name||''));
@@ -7249,14 +7263,14 @@
         const newStock = Math.max(0,(bi?.stock||0)-it.quantity);
         if(bi) await db.from('branch_inventory').update({ stock:newStock }).eq('id', bi.id);
         else await db.from('branch_inventory').insert({ branch_id:branchId, ingredient_id:it.ingredient_id, stock:-it.quantity, min_stock:0 });
-        logMovement(branchId, it.ingredient_id, -it.quantity, 'manufacture_consume', 'تصنيع "'+r.name+'" — استهلاك مادة خام');
+        logMovement(branchId, it.ingredient_id, -it.quantity, 'manufacture_consume', 'تصنيع "'+r.name+'" — استهلاك مادة خام', it.unit_cost);
       }
       // 2) إضافة المنتج الناتج لمخزون نفس الفرع + تحديث سعر التكلفة العام للمادة
       const { data: outBi } = await db.from('branch_inventory').select('id,stock').eq('branch_id',branchId).eq('ingredient_id',r.output_ingredient_id).maybeSingle();
       if(outBi) await db.from('branch_inventory').update({ stock:(outBi.stock||0)+qty }).eq('id', outBi.id);
       else await db.from('branch_inventory').insert({ branch_id:branchId, ingredient_id:r.output_ingredient_id, stock:qty, min_stock:0 });
       await db.from('ingredients').update({ unit_cost: unitCost }).eq('id', r.output_ingredient_id);
-      logMovement(branchId, r.output_ingredient_id, qty, 'manufacture_produce', 'تصنيع "'+r.name+'" — منتج ناتج (تكلفة الوحدة '+fmt(unitCost)+')');
+      logMovement(branchId, r.output_ingredient_id, qty, 'manufacture_produce', 'تصنيع "'+r.name+'" — منتج ناتج (تكلفة الوحدة '+fmt(unitCost)+')', unitCost);
       // 3) تسجيل عملية التصنيع بسجل دائم
       await db.from('manufacturing_runs').insert({
         recipe_id: r.id, recipe_name: r.name, output_ingredient_id: r.output_ingredient_id, output_ingredient_name: r.ingredients?.name||'—',
@@ -7852,7 +7866,7 @@
         const {data:bi}=await db.from('branch_inventory').select('id,stock').eq('branch_id',branch.id).eq('ingredient_id',it.ingredient_id).maybeSingle();
         if(bi) await db.from('branch_inventory').update({stock:(bi.stock||0)+it.quantity}).eq('id',bi.id);
         else await db.from('branch_inventory').insert({branch_id:branch.id,ingredient_id:it.ingredient_id,stock:it.quantity,min_stock:0});
-        logMovement(branch.id, it.ingredient_id, it.quantity, 'purchase', 'فاتورة شراء — '+sup);
+        logMovement(branch.id, it.ingredient_id, it.quantity, 'purchase', 'فاتورة شراء — '+sup, it.unit_cost);
       }
     }
     closeModal();toast('✓ انحفظت الفاتورة والمخزون اتحدث'+(isAllBranches?' بكل الفروع':''));renderPurchases();
