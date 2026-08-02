@@ -6742,8 +6742,12 @@
         <h4 style="color:var(--red);margin-bottom:8px">⚠️ مكونات بأسماء متشابهة/مكرّرة (${dupWarnings.length})</h4>
         <div style="color:var(--muted);font-size:.82rem;font-weight:600;margin-bottom:8px">لو صنف مبيع مربوط بوصفة تستخدم مكون واحد من الاثنين، والمخزون المعروض هو التاني، الخصم رح يصير على مكون والعرض على مكون تاني — فيبين إنه "ما عم ينزل" رغم إنه فعليًا عم ينزل بسجل تاني. وحّد الاسم أو احذف المكرر.</div>
         <div class="tbl-wrap"><table class="tbl">
-          <tr><th>مكون 1</th><th>مكون 2</th></tr>
-          ${dupWarnings.map(([a,b])=>`<tr><td><b>${esc(a.name)}</b></td><td><b>${esc(b.name)}</b></td></tr>`).join('')}
+          <tr><th>مكون 1</th><th>مكون 2</th><th></th></tr>
+          ${dupWarnings.map(([a,b])=>`<tr><td><b>${esc(a.name)}</b></td><td><b>${esc(b.name)}</b></td>
+            <td style="white-space:nowrap">
+              <button class="mini ok" onclick="mergeDuplicateIngredients('${a.id}','${b.id}','${esc(b.name)}')">🔀 ادمج بـ"${esc(a.name)}"</button>
+              <button class="mini ok" onclick="mergeDuplicateIngredients('${b.id}','${a.id}','${esc(a.name)}')">🔀 ادمج بـ"${esc(b.name)}"</button>
+            </td></tr>`).join('')}
         </table></div>
       </div>`:''}
       <button class="add-btn" onclick="ingredientForm()">＋ إضافة مكون</button>
@@ -6787,6 +6791,31 @@
         <select id="ing_replace_sel"><option value="">اختر بديل...</option>${others.map(i=>`<option value="${i.id}">${esc(i.name)} (${esc(i.unit)})</option>`).join('')}</select>
       </div>
       <div class="m-act"><button class="save" onclick="confirmIngredientReplace('${id}','${esc(name)}')">🔄 استبدل واحذف</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
+  }
+  async function mergeDuplicateIngredients(keepId, removeId, removeName){
+    if(!confirm('⚠️ كل الوصفات وفواتير الشراء والمخزون يلي كانت تستخدم "'+removeName+'" رح تصير تستخدم المادة التانية بدلها (بترحيل الكميات)، وبعدها رح نحذف "'+removeName+'" نهائيًا.\nهاد الإجراء نهائي — متأكدة؟')) return;
+    try{
+      await db.from('recipe_items').update({ ingredient_id: keepId }).eq('ingredient_id', removeId);
+      await db.from('purchase_items').update({ ingredient_id: keepId }).eq('ingredient_id', removeId);
+      await db.from('inventory_movements').update({ ingredient_id: keepId }).eq('ingredient_id', removeId).then(()=>{}).catch(()=>{});
+      await db.from('waste_log').update({ ingredient_id: keepId }).eq('ingredient_id', removeId).then(()=>{}).catch(()=>{});
+      await db.from('manufacturing_recipe_items').update({ ingredient_id: keepId }).eq('ingredient_id', removeId).then(()=>{}).catch(()=>{});
+      await db.from('manufacturing_recipes').update({ output_ingredient_id: keepId }).eq('output_ingredient_id', removeId).then(()=>{}).catch(()=>{});
+      await db.from('stock_transfers').update({ ingredient_id: keepId }).eq('ingredient_id', removeId).then(()=>{}).catch(()=>{});
+      await db.from('supplier_ingredients').update({ ingredient_id: keepId }).eq('ingredient_id', removeId).then(()=>{}).catch(()=>{});
+      // 🔀 مهم: قبل ما نحذف مخزون المادة المكرّرة، لازم نضيف كمياتها لمخزون المادة يلي رح تبقى (مش نمسحها ونفقدها)
+      const { data: removeStocks } = await db.from('branch_inventory').select('branch_id, stock').eq('ingredient_id', removeId);
+      for(const rs of (removeStocks||[])){
+        const { data: bi } = await db.from('branch_inventory').select('id, stock').eq('branch_id', rs.branch_id).eq('ingredient_id', keepId).maybeSingle();
+        if(bi) await db.from('branch_inventory').update({ stock: (bi.stock||0) + (rs.stock||0) }).eq('id', bi.id);
+        else await db.from('branch_inventory').insert({ branch_id: rs.branch_id, ingredient_id: keepId, stock: rs.stock||0, min_stock: 0 });
+      }
+      await db.from('branch_inventory').delete().eq('ingredient_id', removeId);
+      const { error } = await db.from('ingredients').delete().eq('id', removeId);
+      if(error){ toast('✗ ما زال في مكان ما بدّلناه — '+error.message); console.error(error); return; }
+      await logActivity('merge_ingredients', 'دمج "'+removeName+'" بمادة تانية');
+      toast('✓ اندمجوا صح والمخزون ترحّل'); renderIngredients();
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
   async function confirmIngredientReplace(oldId, oldName){
     const newId = document.getElementById('ing_replace_sel')?.value;
