@@ -6966,7 +6966,7 @@
       <div class="panel">
         <h4 style="color:var(--maroon);margin-bottom:8px">📜 سجل عمليات التصنيع (${runs.length})</h4>
         <div class="tbl-wrap"><table class="tbl">
-          <tr><th>التاريخ</th><th>الوصفة</th><th>الفرع</th><th>الكمية المنتجة</th><th>التكلفة الكلية</th><th>تكلفة الوحدة</th><th>بواسطة</th></tr>
+          <tr><th>التاريخ</th><th>الوصفة</th><th>الفرع</th><th>الكمية المنتجة</th><th>التكلفة الكلية</th><th>تكلفة الوحدة</th><th>بواسطة</th><th></th></tr>
           ${runs.map(r=>`<tr>
             <td>${new Date(r.created_at).toLocaleString('ar-JO')}</td>
             <td><b>${esc(r.recipe_name||'—')}</b> → ${esc(r.output_ingredient_name||'—')}</td>
@@ -6975,9 +6975,33 @@
             <td><b style="color:var(--red)">${fmt(r.final_cost)}</b></td>
             <td>${fmt(r.unit_cost)}</td>
             <td>${esc(r.created_by||'—')}</td>
-          </tr>`).join('')||'<tr><td colspan="7" class="empty-note">ما في عمليات تصنيع مسجّلة بعد</td></tr>'}
+            <td>${isAdmin()?`<button class="mini del" onclick="deleteMfgRun('${r.id}')">🗑️ حذف</button>`:''}</td>
+          </tr>`).join('')||'<tr><td colspan="8" class="empty-note">ما في عمليات تصنيع مسجّلة بعد</td></tr>'}
         </table></div>
       </div>`;
+  }
+  async function deleteMfgRun(runId){
+    if(!isAdmin()){ toast('⛔ صلاحية المالك فقط'); return; }
+    try{
+      const { data: run, error: fetchErr } = await db.from('manufacturing_runs').select('*').eq('id', runId).single();
+      if(fetchErr || !run){ toast('✗ ما لقيت عملية التصنيع'); return; }
+      if(!confirm('⚠️ حذف عملية تصنيع "'+(run.recipe_name||'')+'" بتاريخ '+new Date(run.created_at).toLocaleString('ar-JO')+'؟\nرح ترجّع المواد الخام المستهلكة لمخزون الفرع، وتشيل الكمية المنتجة منه (تراجع كامل).')) return;
+      // 🔄 نرجّع المواد الخام يلي انخصمت وقت التصنيع + نشيل الكمية المنتجة يلي اتضافت للمستودع
+      const items = run.items||[];
+      for(const it of items){
+        const { data: bi } = await db.from('branch_inventory').select('id,stock').eq('branch_id',run.branch_id).eq('ingredient_id',it.ingredient_id).maybeSingle();
+        if(bi) await db.from('branch_inventory').update({ stock:(bi.stock||0)+it.quantity }).eq('id', bi.id);
+        else await db.from('branch_inventory').insert({ branch_id:run.branch_id, ingredient_id:it.ingredient_id, stock:it.quantity, min_stock:0 });
+        logMovement(run.branch_id, it.ingredient_id, it.quantity, 'manufacture_delete_revert', 'حذف عملية تصنيع "'+(run.recipe_name||'')+'" — استرجاع مادة خام');
+      }
+      const { data: outBi } = await db.from('branch_inventory').select('id,stock').eq('branch_id',run.branch_id).eq('ingredient_id',run.output_ingredient_id).maybeSingle();
+      if(outBi) await db.from('branch_inventory').update({ stock:Math.max(0,(outBi.stock||0)-run.output_quantity) }).eq('id', outBi.id);
+      logMovement(run.branch_id, run.output_ingredient_id, -run.output_quantity, 'manufacture_delete_revert', 'حذف عملية تصنيع "'+(run.recipe_name||'')+'" — سحب المنتج الناتج');
+      const { error: delErr } = await db.from('manufacturing_runs').delete().eq('id', runId);
+      if(delErr){ toast('✗ '+delErr.message); return; }
+      await logActivity('delete_manufacturing_run', 'حذف عملية تصنيع: '+(run.recipe_name||''));
+      toast('✓ انحذفت عملية التصنيع وترجّع المخزون لوضعه قبلها'); renderManufacturing();
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
   function printMfgSheet(recipeId, defaultQty){
     const r = MFG_RECIPES.find(x=>x.id===recipeId); if(!r) return;
@@ -7169,6 +7193,30 @@
     const items = r.manufacturing_recipe_items||[];
     const scale = r.output_quantity>0 ? qty/r.output_quantity : 0;
     const scaledItems = items.map(i=>({ ingredient_id:i.ingredient_id, name:i.ingredients?.name, unit:i.ingredients?.unit, quantity: (i.quantity||0)*scale, unit_cost: i.ingredients?.unit_cost||0 }));
+    // 🔒 نتأكد إنه المستودع فيه مواد كافية قبل ما نبلّش أي خصم فعلي — منجيب الرصيد الحالي لكل مادة خام بنفس الفرع
+    try{
+      const { data: stockRows, error: stockErr } = await db.from('branch_inventory').select('ingredient_id, stock').eq('branch_id', branchId).in('ingredient_id', items.map(i=>i.ingredient_id));
+      if(stockErr){ toast('✗ '+stockErr.message); return; }
+      const stockByIng = {}; (stockRows||[]).forEach(s=>{ stockByIng[s.ingredient_id] = parseFloat(s.stock||0); });
+      // نجيب اسم كل مادة خام حتى لو ما إلها رصيد مسجّل أصلًا (يعني صفر فعليًا)
+      let outOfStock = null, maxPossibleQty = Infinity;
+      for(const it of items){
+        const avail = stockByIng[it.ingredient_id] ?? 0;
+        const name = it.ingredients?.name || 'مادة';
+        if(avail <= 0.001){ outOfStock = name; break; }
+        // كم وحدة منتج ناتج ممكن نصنّع بالحد الأقصى بناءً على هاي المادة لحالها (نسبة للوصفة الأساسية)
+        const perOutputUnit = (it.quantity||0) / (r.output_quantity||1);
+        if(perOutputUnit>0){
+          const possibleFromThis = avail / perOutputUnit;
+          if(possibleFromThis < maxPossibleQty) maxPossibleQty = possibleFromThis;
+        }
+      }
+      if(outOfStock){ toast('⛔ "'+outOfStock+'" خالص من مستودع هاد الفرع — لازم تجيبي مواد أول'); return; }
+      if(maxPossibleQty < qty - 0.001){
+        toast('⛔ المواد المتوفرة كافية بس لتصنيع '+maxPossibleQty.toFixed(2)+' '+(r.ingredients?.unit||'وحدة')+' — قلّلي الكمية المطلوبة أو جيبي مواد أكتر');
+        return;
+      }
+    }catch(e){ toast('✗ '+e.message); return; }
     const rawCost = scaledItems.reduce((a,i)=>a+i.quantity*i.unit_cost,0);
     const finalCost = manual ? manualCost : rawCost;
     const unitCost = qty>0 ? finalCost/qty : 0;
