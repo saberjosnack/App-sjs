@@ -7181,17 +7181,17 @@
       try{
         const { data: stockRows } = await db.from('branch_inventory').select('ingredient_id, stock').eq('branch_id', branchId).in('ingredient_id', items.map(i=>i.ingredient_id));
         const stockByIng = {}; (stockRows||[]).forEach(s=>{ stockByIng[s.ingredient_id] = parseFloat(s.stock||0); });
-        let outOfStock = null, maxPossibleQty = Infinity;
+        let outOfStock = null, maxPossibleQty = Infinity, limitingName = null;
         items.forEach(it=>{
           const avail = stockByIng[it.ingredient_id] ?? 0;
           if(!outOfStock && avail<=0.001) outOfStock = it.ingredients?.name||'مادة';
           const perOutputUnit = (it.quantity||0) / (r.output_quantity||1);
-          if(perOutputUnit>0){ const possible = avail/perOutputUnit; if(possible<maxPossibleQty) maxPossibleQty = possible; }
+          if(perOutputUnit>0){ const possible = avail/perOutputUnit; if(possible<maxPossibleQty){ maxPossibleQty = possible; limitingName = it.ingredients?.name||'مادة'; } }
         });
         if(outOfStock){
           stockHtml = `<div style="color:#fff;background:var(--red);border-radius:8px;padding:8px 10px;margin-top:8px;font-weight:800">⛔ "${esc(outOfStock)}" خالص من مستودع هاد الفرع — ما فيك تصنّعي</div>`;
         } else if(maxPossibleQty < qty-0.001){
-          stockHtml = `<div style="color:#fff;background:var(--warn);border-radius:8px;padding:8px 10px;margin-top:8px;font-weight:800">⚠️ المواد المتوفرة كافية بس لتصنيع ${maxPossibleQty.toFixed(2)} ${esc(r.ingredients?.unit||'وحدة')} — قلّلي الكمية</div>`;
+          stockHtml = `<div style="color:#fff;background:var(--warn);border-radius:8px;padding:8px 10px;margin-top:8px;font-weight:800">⚠️ المادة "${esc(limitingName)}" هي السبب — المواد المتوفرة كافية بس لتصنيع ${maxPossibleQty.toFixed(2)} ${esc(r.ingredients?.unit||'وحدة')} — قلّلي الكمية أو جيبي مادة "${esc(limitingName)}" أكتر</div>`;
         } else {
           stockHtml = `<div style="color:#fff;background:var(--ok);border-radius:8px;padding:8px 10px;margin-top:8px;font-weight:800">✅ المواد متوفرة كافية لهاي الكمية</div>`;
         }
@@ -7221,7 +7221,7 @@
       if(stockErr){ toast('✗ '+stockErr.message); return; }
       const stockByIng = {}; (stockRows||[]).forEach(s=>{ stockByIng[s.ingredient_id] = parseFloat(s.stock||0); });
       // نجيب اسم كل مادة خام حتى لو ما إلها رصيد مسجّل أصلًا (يعني صفر فعليًا)
-      let outOfStock = null, maxPossibleQty = Infinity;
+      let outOfStock = null, maxPossibleQty = Infinity, limitingName = null;
       for(const it of items){
         const avail = stockByIng[it.ingredient_id] ?? 0;
         const name = it.ingredients?.name || 'مادة';
@@ -7230,12 +7230,12 @@
         const perOutputUnit = (it.quantity||0) / (r.output_quantity||1);
         if(perOutputUnit>0){
           const possibleFromThis = avail / perOutputUnit;
-          if(possibleFromThis < maxPossibleQty) maxPossibleQty = possibleFromThis;
+          if(possibleFromThis < maxPossibleQty){ maxPossibleQty = possibleFromThis; limitingName = name; }
         }
       }
       if(outOfStock){ toast('⛔ "'+outOfStock+'" خالص من مستودع هاد الفرع — لازم تجيبي مواد أول'); return; }
       if(maxPossibleQty < qty - 0.001){
-        toast('⛔ المواد المتوفرة كافية بس لتصنيع '+maxPossibleQty.toFixed(2)+' '+(r.ingredients?.unit||'وحدة')+' — قلّلي الكمية المطلوبة أو جيبي مواد أكتر');
+        toast('⛔ المادة "'+limitingName+'" هي السبب — المواد المتوفرة كافية بس لتصنيع '+maxPossibleQty.toFixed(2)+' '+(r.ingredients?.unit||'وحدة')+' — قلّلي الكمية أو جيبي مادة "'+limitingName+'" أكتر');
         return;
       }
     }catch(e){ toast('✗ '+e.message); return; }
