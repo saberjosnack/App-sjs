@@ -1947,13 +1947,14 @@
   async function doEndShift(countedValue, countedCard, countedCliq, ccSkip){
     try {
       const { data: orders } = await db.from('orders')
-        .select('total, subtotal, discount, delivery_fee, payment_method, order_type, status, split_details, cancel_reason, employee_tab_name, order_items(item_name, quantity, unit_price)')
+        .select('total, subtotal, discount, delivery_fee, payment_method, order_type, status, split_details, cancel_reason, employee_tab_name, platform_id, order_items(item_name, quantity, unit_price)')
         .eq('shift_id', currentShift.id);
       const all = orders || [];
       const cancelled = all.filter(o=>o.status==='cancelled');
       // 🧾 الذمم (حساب موظف آجل) — منفصلة تمامًا عن حساب المبيعات، بتتعرض لحالها بس للمرجعية
-      const dhemam = all.filter(o=>o.status!=='cancelled' && o.employee_tab_name);
-      const ok = all.filter(o=>o.status!=='cancelled' && !o.employee_tab_name);
+      const dhemamEmp = all.filter(o=>o.status!=='cancelled' && o.employee_tab_name);
+      const dhemamPlatform = all.filter(o=>o.status!=='cancelled' && o.platform_id);
+      const ok = all.filter(o=>o.status!=='cancelled' && !o.employee_tab_name && !o.platform_id);
       // 💰 المبيعات الحقيقية = بدون الذمم وبدون أجور التوصيل (يلي بتروح للسائق مش إلنا) — كاش/كرت/كليك بس
       const sum = k => ok.reduce((a,o)=>{
         const delFee = o.order_type==='delivery' ? parseFloat(o.delivery_fee||0) : 0;
@@ -2009,7 +2010,8 @@
         topItems,
         delCount: ok.filter(o=>o.order_type==='delivery').length,
         takeCount: ok.filter(o=>o.order_type==='takeaway').length,
-        dhemamCount: dhemam.length, dhemamTotal: dhemam.reduce((a,o)=>a+parseFloat(o.total||0),0),
+        dhemamCount: dhemamEmp.length, dhemamTotal: dhemamEmp.reduce((a,o)=>a+parseFloat(o.total||0),0),
+        platformCount: dhemamPlatform.length, platformTotal: dhemamPlatform.reduce((a,o)=>a+parseFloat(o.total||0),0),
         opening, cashSales, expected, counted: countedValue, diff,
         openingCard, cardSales, expectedCard, countedCard, diffCard,
         openingCliq, cliqSales, expectedCliq, countedCliq, diffCliq,
@@ -2115,6 +2117,9 @@
       ${(r.dhemamCount>0)?`<hr>
       <div class="c"><b>🧾 ذمم موظفين (حساب آجل — غير محسوبة أعلاه)</b></div>
       <table><tr><td>العدد</td><td class="tl">${r.dhemamCount}</td></tr><tr><td>القيمة</td><td class="tl">${fmt(r.dhemamTotal)} ${CURRENCY}</td></tr></table>`:''}
+      ${(r.platformCount>0)?`<hr>
+      <div class="c"><b>📱 طلبات تطبيقات (دين على المنصة — غير محسوبة أعلاه)</b></div>
+      <table><tr><td>العدد</td><td class="tl">${r.platformCount}</td></tr><tr><td>القيمة</td><td class="tl">${fmt(r.platformTotal)} ${CURRENCY}</td></tr></table>`:''}
       ${(r.delivery>0)?`<hr>
       <div class="c" style="color:#666"><small>ℹ️ أجور توصيل هالشيفت (لا تخص المطعم): ${fmt(r.delivery)} ${CURRENCY}</small></div>`:''}
       ${(r.topItems&&r.topItems.length)?`<hr>
@@ -2159,6 +2164,7 @@
         'المجموع الكلي المعدود: '+fmt(r.totalCounted)+'\n'+
         (Math.abs(r.totalDiff)<0.005?'✅ المطابقة الإجمالية: تمام\n':(r.totalDiff<0?'🔴🔴 عجز إجمالي 🔴🔴: ':'🟡 زيادة إجمالية: ')+fmt(Math.abs(r.totalDiff))+' '+CURRENCY+'\n')):'')+
       (r.dhemamCount>0?('────────────────\n🧾 ذمم موظفين (آجل — غير محسوبة أعلاه): '+r.dhemamCount+' — '+fmt(r.dhemamTotal)+' '+CURRENCY+'\n'):'')+
+      (r.platformCount>0?('────────────────\n📱 طلبات تطبيقات (دين على المنصة — غير محسوبة أعلاه): '+r.platformCount+' — '+fmt(r.platformTotal)+' '+CURRENCY+'\n'):'')+
       (r.delivery>0?('ℹ️ أجور توصيل هالشيفت (مش إلنا): '+fmt(r.delivery)+' '+CURRENCY+'\n'):'')+
       ((r.topItems&&r.topItems.length)?('────────────────\n🔝 الأكثر مبيعًا:\n'+r.topItems.map(([nm,d])=>'  • '+nm+': '+d.qty+'× — '+fmt(d.total)).join('\n')+'\n'):'')+
       ((r.cancelledOrders&&r.cancelledOrders.length)?('────────────────\n❌ الطلبات الملغية ('+r.cancelledOrders.length+'):\n'+r.cancelledOrders.map(o=>'  • '+fmt(o.total)+' '+CURRENCY+' — '+(o.cancel_reason||'بدون سبب')).join('\n')+'\n'):'')+
@@ -4249,17 +4255,24 @@
       if (dayStats) {
         if(adm || cc){
           const ok = DAY.filter(o=>o.status!=='cancelled');
-          // 🔧 مهم: "المبيعات" هون كانت بتجمع إجمالي الفاتورة كامل (شامل التوصيل ووجبات الموظفين)،
-          // بينما شاشة "المبيعات" واللوحة بتحسبوها صافي قيمة الأصناف بس (بدون توصيل، وبدون وجبات الموظفين
-          // المدعومة) — نفس التعريف المتفق عليه، حتى يطلع نفس الرقم بكل الشاشات لنفس اليوم المالي.
-          const salesOk = ok.filter(o=>!o.employee_tab_name);
+          // 🔧 مهم: "المبيعات" هون كانت بتجمع إجمالي الفاتورة كامل (شامل التوصيل ووجبات الموظفين وطلبات المنصات)،
+          // بينما شاشة "المصاري" و"المبيعات" الرسمية بتحسبوها صافي قيمة الأصناف الكاش/بنك بس — بدون توصيل،
+          // بدون وجبات الموظفين المدعومة، وبدون طلبات المنصات (فلوسها "دين" على المنصة، مش كاش دخل الدرج فورًا) —
+          // نفس التعريف المتفق عليه، حتى يطلع نفس الرقم بكل الشاشات لنفس اليوم المالي.
+          const salesOk = ok.filter(o=>!o.employee_tab_name && !o.platform_id);
           const sum = salesOk.reduce((s,o)=>s + (+o.total - (+o.delivery_fee||0)), 0);
           const cancelled = DAY.filter(o=>o.status==='cancelled');
+          const platformOrders = ok.filter(o=>o.platform_id);
+          const platformSum = platformOrders.reduce((s,o)=>s+(+o.total-(+o.delivery_fee||0)),0);
+          const empMealOrders = ok.filter(o=>o.employee_tab_name);
+          const empMealSum = empMealOrders.reduce((s,o)=>s+(+o.total),0);
           const ccSelBranch = document.getElementById('dayBranchSel')?.value;
           dayStats.innerHTML = `
             ${cc && ccSelBranch ? '<div class="stat" style="color:var(--muted)">📅 كل طلبات اليوم لهاد الفرع</div>' : ''}
             <div class="stat">طلبات ${cc?'':'اليوم'}<b>${ok.length}</b></div>
-            <div class="stat">المبيعات<b>${fmt(sum)} ${CURRENCY}</b></div>
+            <div class="stat">المبيعات (كاش/بنك صافي)<b>${fmt(sum)} ${CURRENCY}</b></div>
+            <div class="stat">📱 تطبيقات<b>${platformOrders.length} (${fmt(platformSum)} ${CURRENCY})</b></div>
+            <div class="stat">🧑‍🍳 وجبات موظفين<b>${empMealOrders.length} (${fmt(empMealSum)} ${CURRENCY})</b></div>
             <div class="stat">توصيل<b>${ok.filter(o=>o.order_type==='delivery').length}</b></div>
             <div class="stat">استلام<b>${ok.filter(o=>o.order_type==='takeaway').length}</b></div>
             <div class="stat">ملغي<b>${cancelled.length}</b></div>
@@ -6500,15 +6513,18 @@
       // مبيعات كل شيفت — 🔧 إصلاح: صافي المبيعات الحقيقي بس (بدون أجور التوصيل وبدون ذمم الموظفين/التطبيقات)،
       // وكل بند من هدول صار يتحسب لحاله منفصل عشان يظهر كخيار اختياري مش مدموج بالمبيعات
       for(const sh of SH_LIST){
-        const { data: os } = await db.from('orders').select('total, subtotal, discount, delivery_fee, order_type, payment_method, status, employee_tab_name').eq('shift_id', sh.id);
-        const ok = (os||[]).filter(o=>o.status!=='cancelled' && !o.employee_tab_name);
-        const dhemam = (os||[]).filter(o=>o.status!=='cancelled' && o.employee_tab_name);
+        const { data: os } = await db.from('orders').select('total, subtotal, discount, delivery_fee, order_type, payment_method, status, employee_tab_name, platform_id').eq('shift_id', sh.id);
+        const ok = (os||[]).filter(o=>o.status!=='cancelled' && !o.employee_tab_name && !o.platform_id);
+        const dhemamEmp = (os||[]).filter(o=>o.status!=='cancelled' && o.employee_tab_name);
+        const dhemamPlatform = (os||[]).filter(o=>o.status!=='cancelled' && o.platform_id);
         sh.__sales = ok.reduce((a,o)=>a+parseFloat(o.subtotal||0)-parseFloat(o.discount||0),0);
         sh.__orders = ok.length;
         sh.__discount = ok.reduce((a,o)=>a+parseFloat(o.discount||0),0);
         sh.__delivery = ok.filter(o=>o.order_type==='delivery').reduce((a,o)=>a+parseFloat(o.delivery_fee||0),0);
-        sh.__dhemamCount = dhemam.length;
-        sh.__dhemamTotal = dhemam.reduce((a,o)=>a+parseFloat(o.total||0),0);
+        sh.__empCount = dhemamEmp.length;
+        sh.__empTotal = dhemamEmp.reduce((a,o)=>a+parseFloat(o.total||0),0);
+        sh.__platformCount = dhemamPlatform.length;
+        sh.__platformTotal = dhemamPlatform.reduce((a,o)=>a+parseFloat(o.total||0),0);
         const { data: wd } = await db.from('expenses').select('amount').eq('shift_id', sh.id).eq('category','سحب من الدرج');
         sh.__expenses = (wd||[]).reduce((a,w)=>a+parseFloat(w.amount||0),0);
       }
@@ -6543,7 +6559,7 @@
           <label class="chk"><input type="checkbox" id="shShowDhemam" onchange="loadShiftsPage()" ${showDhemam?'checked':''}> 🧾 عرض ذمم التطبيقات/الموظفين</label>
           <label class="chk"><input type="checkbox" id="shShowExpenses" onchange="loadShiftsPage()" ${showExp?'checked':''}> 💸 عرض المصاريف (سحوبات الدرج)</label>
         </div>
-        <table class="tbl"><tr><th>الموظف</th><th>الفرع</th><th>التاريخ</th><th>فتح</th><th>إغلاق</th><th>المدة</th><th>طلبات</th><th>مبيعات (صافي)</th><th>خصومات</th>${showDel?'<th>🛵 أجور توصيل</th>':''}${showDhemam?'<th>🧾 ذمم</th>':''}${showExp?'<th>💸 مصاريف/سحوبات</th>':''}<th>افتتاحي (إجمالي)</th><th>متوقع (إجمالي)</th><th>فعلي (إجمالي)</th><th>المطابقة</th><th></th></tr>
+        <table class="tbl"><tr><th>الموظف</th><th>الفرع</th><th>التاريخ</th><th>فتح</th><th>إغلاق</th><th>المدة</th><th>طلبات</th><th>مبيعات (صافي)</th><th>خصومات</th>${showDel?'<th>🛵 أجور توصيل</th>':''}${showDhemam?'<th>🧑‍🍳 وجبات موظفين</th><th>📱 طلبات تطبيقات</th>':''}${showExp?'<th>💸 مصاريف/سحوبات</th>':''}<th>افتتاحي (إجمالي)</th><th>متوقع (إجمالي)</th><th>فعلي (إجمالي)</th><th>المطابقة</th><th></th></tr>
         ${SH_LIST.map(sh=>{
           const diff = shTotalDiff(sh);
           const hasC = diff!==null;
@@ -6566,7 +6582,7 @@
             <td><b>${fmt(sh.__sales||0)}</b></td>
             <td>${sh.__discount>0?`<b style="color:var(--warn)">${fmt(sh.__discount)}</b>`:'—'}</td>
             ${showDel?`<td style="color:var(--muted)">${sh.__delivery>0?fmt(sh.__delivery):'—'}</td>`:''}
-            ${showDhemam?`<td style="color:var(--muted)">${sh.__dhemamCount>0?sh.__dhemamCount+' — '+fmt(sh.__dhemamTotal):'—'}</td>`:''}
+            ${showDhemam?`<td style="color:var(--muted)">${sh.__empCount>0?sh.__empCount+' — '+fmt(sh.__empTotal):'—'}</td><td style="color:var(--muted)">${sh.__platformCount>0?sh.__platformCount+' — '+fmt(sh.__platformTotal):'—'}</td>`:''}
             ${showExp?`<td style="color:var(--red)">${sh.__expenses>0?fmt(sh.__expenses):'—'}</td>`:''}
             <td>${fmt(totOpening)}</td>
             <td>${totExpected!==null?fmt(totExpected):'—'}</td>
@@ -6588,12 +6604,13 @@
   async function reprintShift(id){
     const sh = SH_LIST.find(x=>x.id===id); if(!sh) return;
     const { data: orders } = await db.from('orders')
-      .select('total, subtotal, discount, delivery_fee, payment_method, order_type, status, split_details, cancel_reason, employee_tab_name, order_items(item_name, quantity, unit_price)')
+      .select('total, subtotal, discount, delivery_fee, payment_method, order_type, status, split_details, cancel_reason, employee_tab_name, platform_id, order_items(item_name, quantity, unit_price)')
       .eq('shift_id', sh.id);
     const all = orders||[];
     const cancelledOrders = all.filter(o=>o.status==='cancelled');
-    const dhemam = all.filter(o=>o.status!=='cancelled' && o.employee_tab_name);
-    const ok = all.filter(o=>o.status!=='cancelled' && !o.employee_tab_name);
+    const dhemamEmp = all.filter(o=>o.status!=='cancelled' && o.employee_tab_name);
+    const dhemamPlatform = all.filter(o=>o.status!=='cancelled' && o.platform_id);
+    const ok = all.filter(o=>o.status!=='cancelled' && !o.employee_tab_name && !o.platform_id);
     const sum = k => ok.reduce((a,o)=>{
       const delFee = o.order_type==='delivery' ? parseFloat(o.delivery_fee||0) : 0;
       return a + (k==='total' ? Math.max(0, parseFloat(o.total||0)-delFee) : parseFloat(o[k]||0));
@@ -6632,7 +6649,8 @@
       cancelled: cancelledOrders.length, cancelledOrders, topItems,
       delCount: ok.filter(o=>o.order_type==='delivery').length,
       takeCount: ok.filter(o=>o.order_type==='takeaway').length,
-      dhemamCount: dhemam.length, dhemamTotal: dhemam.reduce((a,o)=>a+parseFloat(o.total||0),0),
+      dhemamCount: dhemamEmp.length, dhemamTotal: dhemamEmp.reduce((a,o)=>a+parseFloat(o.total||0),0),
+        platformCount: dhemamPlatform.length, platformTotal: dhemamPlatform.reduce((a,o)=>a+parseFloat(o.total||0),0),
       opening, cashSales, expected, counted, diff: counted-expected,
       openingCard, cardSales, expectedCard, countedCard, diffCard: countedCard-expectedCard,
       openingCliq, cliqSales, expectedCliq, countedCliq, diffCliq: countedCliq-expectedCliq,
@@ -13380,16 +13398,19 @@ try {
     const y0 = new Date(t0.getTime() - 86400000);
     // طلبات الفترة + أمس (حتى نفس الساعة)
     const [today, yest, cancels, shifts30] = await Promise.all([
-      db.from('orders').select('total, subtotal, discount, delivery_fee, branch_id, status, order_type, employee_tab_name').gte('created_at', t0.toISOString()).lte('created_at', tEnd.toISOString()),
-      db.from('orders').select('total, subtotal, discount, delivery_fee, created_at, status, employee_tab_name').gte('created_at', y0.toISOString()).lt('created_at', t0.toISOString()),
+      db.from('orders').select('total, subtotal, discount, delivery_fee, branch_id, status, order_type, employee_tab_name, platform_id').gte('created_at', t0.toISOString()).lte('created_at', tEnd.toISOString()),
+      db.from('orders').select('total, subtotal, discount, delivery_fee, created_at, status, employee_tab_name, platform_id').gte('created_at', y0.toISOString()).lt('created_at', t0.toISOString()),
       db.from('orders').select('cancel_reason').eq('status','cancelled').not('cancel_reason','is',null).gte('created_at', new Date(Date.now()-30*86400000).toISOString()),
       db.from('cash_shifts').select('opening_balance, closing_balance, expected_balance, status, staff(full_name)').eq('status','closed').gte('start_time', new Date(Date.now()-30*86400000).toISOString()),
     ]);
-    // 🍽️ وجبات الموظفين مستبعدة من "مبيعات اليوم" — بتتحسب لحالها بس، مو إيراد حقيقي
-    const T = (today.data||[]).filter(o=>o.status!=='cancelled' && !o.employee_tab_name);
+    // 🍽️ وجبات الموظفين وطلبات المنصات (تطبيقات التوصيل) مستبعدين من "مبيعات اليوم" —
+    // وجبات الموظفين مش إيراد حقيقي، وطلبات المنصات فلوسها "دين" على المنصة مش كاش دخل الدرج فورًا
+    const T = (today.data||[]).filter(o=>o.status!=='cancelled' && !o.employee_tab_name && !o.platform_id);
     const mealsToday = (today.data||[]).filter(o=>o.status!=='cancelled' && o.employee_tab_name);
     const mealsTodaySum = mealsToday.reduce((a,o)=>a+parseFloat(o.total||0),0);
-    const sameHour = (yest.data||[]).filter(o=>o.status!=='cancelled' && !o.employee_tab_name && (new Date(o.created_at).getTime() - y0.getTime()) <= (now.getTime() - t0.getTime()));
+    const platformToday = (today.data||[]).filter(o=>o.status!=='cancelled' && o.platform_id);
+    const platformTodaySum = platformToday.reduce((a,o)=>a+parseFloat(o.total||0),0);
+    const sameHour = (yest.data||[]).filter(o=>o.status!=='cancelled' && !o.employee_tab_name && !o.platform_id && (new Date(o.created_at).getTime() - y0.getTime()) <= (now.getTime() - t0.getTime()));
     // 🚗 نفس تعريف "صافي المبيعات" المستخدم بشاشة المبيعات بالضبط — بدون أجور التوصيل، عشان الرقمين يتطابقوا دايمًا
     const sum = a=>a.reduce((x,o)=>x+(parseFloat(o.subtotal||0)-parseFloat(o.discount||0)),0);
     const tSum = sum(T), ySum = sum(sameHour);
@@ -13416,7 +13437,8 @@ try {
       <div class="stat">الخصومات اليوم<b style="color:var(--warn)">${fmt(tDiscSum)} ${CURRENCY}</b></div>
       ${hasCosts?`<div class="stat">ربح اليوم التقريبي<b>${fmt(profit)} ${CURRENCY}</b></div>`:''}
       <div class="stat">ملغي اليوم<b>${(today.data||[]).length - T.length}</b></div>
-      <div class="stat" style="border:1.5px solid var(--muted)">🍽️ وجبات الموظفين (مستبعدة)<b>${mealsToday.length} <small>(${fmt(mealsTodaySum)})</small></b></div>`;
+      <div class="stat" style="border:1.5px solid var(--muted)">🍽️ وجبات الموظفين (مستبعدة)<b>${mealsToday.length} <small>(${fmt(mealsTodaySum)})</small></b></div>
+      <div class="stat" style="border:1.5px solid var(--muted)">📱 طلبات التطبيقات (مستبعدة)<b>${platformToday.length} <small>(${fmt(platformTodaySum)})</small></b></div>`;
 
     // بالفروع — 🔧 إصلاح: نفس تعريف "صافي المبيعات" بالضبط (بدون أجرة التوصيل) — كانت تستخدم
     // o.total الخام (شامل التوصيل) فكانت تطلع أعلى من الرقم الحقيقي وتختلف عن باقي الشاشة
