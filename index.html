@@ -6864,19 +6864,37 @@
   }
 
   /* ---- الوصفات ---- */
+  let RECIPE_VIEW_MODE = 'summary'; // 'summary' أو 'full' (كل المكونات ظاهرة بنفس الوقت للمراجعة)
   async function renderRecipes(){
     await loadIngredients();
     const {data}=await db.from('recipes').select('*, menu_items(name_ar,price,is_available), recipe_items(*, ingredients(name,unit,unit_cost))').order('created_at',{ascending:false});
     // 🔧 الوصفات المرتبطة بصنف مؤرشف/مخفي كانت تضل تظهر هون رغم إخفاء الصنف من كل مكان تاني — هلأ منستبعدها،
     // وبترجع تظهر تلقائيًا فور ما ترجعي تفعّلي الصنف من جديد
-    RECIPES_DATA=(data||[]).filter(r=>r.menu_items?.is_available!==false);
+    RECIPES_DATA=(data||[]).filter(r=>r.menu_items?.is_available!==false)
+      .sort((a,b)=>(a.menu_items?.name_ar||'').localeCompare(b.menu_items?.name_ar||'','ar'));
     // 🔍 أصناف فعّالة (ظاهرة بالكاشير) بدون أي وصفة معرّفة إطلاقًا — كل بيع لهاي الأصناف ما بيخصم
     // ولا مكوّن من المخزون أبدًا، وهاد غالبًا السبب الأساسي وراء فروقات الجرد المستمرة والكبيرة
     const recipedItemIds = new Set((data||[]).map(r=>r.menu_item_id));
     const itemsWithoutRecipe = ITEMS.filter(i=>i.is_available && i.item_type!=='composite' && !recipedItemIds.has(i.id));
+    // 🚩 لكل مكوّن، منحسب متوسط الكمية المستخدمة فيه بكل الوصفات — أي وصفة بتستخدم كمية أكبر بكثير
+    // من المتوسط (زي 10 أضعاف) منعلّم عليها كتنبيه، غالبًا رقم زايد صفر بالغلط وقت إدخال الوصفة
+    const qtyByIngredient = {};
+    RECIPES_DATA.forEach(r=>(r.recipe_items||[]).forEach(ri=>{
+      if(!qtyByIngredient[ri.ingredient_id]) qtyByIngredient[ri.ingredient_id] = [];
+      qtyByIngredient[ri.ingredient_id].push(ri.quantity||0);
+    }));
+    const avgByIngredient = {};
+    Object.entries(qtyByIngredient).forEach(([ingId, list])=>{
+      avgByIngredient[ingId] = list.reduce((a,x)=>a+x,0)/list.length;
+    });
+    const isOutlier = (ingId, qty) => {
+      const avg = avgByIngredient[ingId];
+      return avg>0 && qty > avg*5 && qty > 0.05; // أكبر من 5 أضعاف المتوسط ومو رقم تافه صغير
+    };
     const C=document.getElementById('admContent');
     C.innerHTML=`<button class="add-btn" onclick="recipeForm()">＋ وصفة جديدة</button>
       <button class="mini ok" style="background:#1D6F42;margin-bottom:10px" onclick="exportRecipesExcel()">📥 تصدير Excel</button>
+      <button class="mini ok" style="background:#7b2cbf;margin-bottom:10px" onclick="RECIPE_VIEW_MODE=RECIPE_VIEW_MODE==='full'?'summary':'full';renderRecipes()">${RECIPE_VIEW_MODE==='full'?'📋 عرض ملخّص':'📖 مراجعة شاملة (كل المكونات)'}</button>
       ${itemsWithoutRecipe.length ? `<div class="panel" style="border:2px solid var(--red);margin-bottom:14px">
         <h4 style="color:var(--red);margin-bottom:8px">⚠️ ${itemsWithoutRecipe.length} صنف ظاهر بدون وصفة — بيعهم ما بيخصم أي مكوّن من المخزون!</h4>
         <div style="font-size:.85rem;color:var(--muted);font-weight:700;margin-bottom:8px">هاي الأصناف تتباع عادي بالكاشير، بس ما إلها وصفة معرّفة، فأي بيع منها ما بيأثر على مخزون المكونات إطلاقًا — هاد غالبًا سبب أساسي لفروقات الجرد المستمرة.</div>
@@ -6884,6 +6902,24 @@
           ${itemsWithoutRecipe.map(i=>`<button class="mini edit" onclick="recipeForm(null,'${i.id}')">＋ ${esc(i.name_ar)}</button>`).join('')}
         </div>
       </div>` : ''}
+      ${RECIPE_VIEW_MODE==='full' ? `
+        <div style="font-size:.85rem;color:var(--muted);font-weight:700;margin-bottom:10px">مرتّبة أبجديًا حسب اسم الصنف — أي كمية 🚩 محدّدة تعني إنها أكبر بكثير من متوسط استخدام هالمكوّن ببقية الوصفات (احتمال كبير رقم غلط بالإدخال، زي صفر زيادة).</div>
+        ${RECIPES_DATA.map(r=>{
+          const cost=calcRecipeCost(r),price=parseFloat(r.menu_items?.price||0);
+          return `<div class="panel" style="margin-bottom:10px">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+              <b style="color:var(--maroon);font-size:1.05rem">${esc(r.menu_items?.name_ar||'—')}</b>
+              <span style="font-size:.82rem;color:var(--muted)">تكلفة ${fmt(cost)} / سعر ${fmt(price)} <button class="mini edit" onclick="recipeForm('${r.id}')">تعديل</button></span>
+            </div>
+            <div style="font-size:.88rem">
+              ${(r.recipe_items||[]).map(ri=>{
+                const flag = isOutlier(ri.ingredient_id, ri.quantity||0);
+                return `<span style="display:inline-block;margin:2px 8px 2px 0;padding:3px 8px;border-radius:6px;background:${flag?'#ffe0e0':'#f5f0e8'};${flag?'border:1.5px solid var(--red)':''}">${flag?'🚩 ':''}${esc(ri.ingredients?.name||'—')}: <b>${ri.quantity}</b> ${esc(ri.ingredients?.unit||'')}</span>`;
+              }).join('') || '<span style="color:var(--red)">⚠️ ما في مكونات بهاي الوصفة</span>'}
+            </div>
+          </div>`;
+        }).join('') || '<div class="empty-note">ما في وصفات</div>'}
+      ` : `
       <div class="tbl-wrap"><table class="tbl">
         <tr><th>الصنف</th><th>التكلفة</th><th>سعر البيع</th><th>Food Cost%</th><th>الربح</th><th></th></tr>
         ${RECIPES_DATA.map(r=>{
@@ -6896,7 +6932,7 @@
             <td><button class="mini edit" onclick="recipeForm('${r.id}')">تعديل</button>
                 <button class="mini tog" onclick="showRecipeDetail('${r.id}')">👁️</button></td></tr>`;
         }).join('')||'<tr><td colspan="6" class="empty-note">ما في وصفات</td></tr>'}
-      </table></div>`;
+      </table></div>`}`;
   }
   function calcRecipeCost(r){
     return (r.recipe_items||[]).reduce((s,ri)=>s+(ri.quantity||0)*(ri.ingredients?.unit_cost||0),0);
@@ -8022,7 +8058,10 @@
     }
     for(const it of items){
       const {data:ing}=await db.from('ingredients').select('stock').eq('id',it.ingredient_id).single();
-      await db.from('ingredients').update({stock:(parseFloat(ing?.stock||0)+it.quantity),unit_cost:it.unit_cost}).eq('id',it.ingredient_id);
+      // 🔧 تنظيف: ingredients.stock عمود قديم مهجور — ما في ولا مكان بالكود ينقصه (بس فاتورة الشراء كانت
+      // تزيده)، وما بيتعرض بأي شاشة. المصدر الحقيقي للمخزون بكل التقارير هو branch_inventory دايمًا.
+      // منحدّث سعر التكلفة بس هون (هو المهم فعليًا)، وبنوقف تحديث الرصيد الوهمي نهائيًا.
+      await db.from('ingredients').update({unit_cost:it.unit_cost}).eq('id',it.ingredient_id);
         // تحديث مخزون الفرع المختار (أو كل الفروع)
       const branchesToUpdate = isAllBranches ? BRANCHES : BRANCHES.filter(b=>b.id===window.__purchaseBranchId);
       for(const branch of branchesToUpdate){
@@ -8546,6 +8585,7 @@
 
   /* ---- عرض مخزون الفروع ---- */
   async function doInventory(branchId, branchName){
+    window.__invAuditImgs = [];
     await loadIngredients();
     const {data:inv}=await db.from('branch_inventory').select('*, ingredients(name,unit)').eq('branch_id',branchId);
     const rows=(inv||[]).map(i=>({
@@ -8573,10 +8613,34 @@
         <div id="audit_var_${idx}" style="font-size:.78rem;font-weight:800;margin:-4px 0 6px 0;padding-right:4px"></div>
         </div>`).join('')||'<div class="empty-note">ما في مواد — اضغط "تهيئة مخزون الفروع" أولاً</div>'}
       </div>
+      <div style="background:#fff8e1;border-radius:10px;padding:10px 12px;margin:10px 0">
+        <label style="font-weight:800;font-size:.85rem">📸 صورة إثبات العدّ الفعلي (إجباري)</label>
+        <div style="font-size:.78rem;color:var(--muted);font-weight:600;margin-bottom:6px">صوّري الرف/الفريزر وأنتِ عم تعدّي — دليل إنه العدّ صار فعليًا مش تخمين.</div>
+        <input type="file" id="invAuditFiles" accept="image/*" capture="environment" multiple onchange="addInventoryAuditImages(this)">
+        <div id="invAuditImgPrev" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"></div>
+      </div>
       <div class="m-act">
         <button class="save" onclick="saveInventoryAudit('${branchId}','${esc(branchName)}')">💾 حفظ الجرد وتسجيله</button>
         <button class="cancel" onclick="closeModal()">إلغاء</button>
       </div>`);
+  }
+  window.__invAuditImgs = [];
+  function addInventoryAuditImages(input){
+    const files = input.files; if(!files || !files.length) return;
+    [...files].forEach(f=>{
+      const img = new Image();
+      img.onload = ()=>{
+        const cv = document.createElement('canvas');
+        const scale = Math.min(1, 900/Math.max(img.width, img.height));
+        cv.width = Math.round(img.width*scale); cv.height = Math.round(img.height*scale);
+        cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+        const dataUrl = cv.toDataURL('image/jpeg', 0.75);
+        window.__invAuditImgs.push(dataUrl);
+        const prev = document.getElementById('invAuditImgPrev');
+        if(prev) prev.innerHTML += `<img src="${dataUrl}" style="width:80px;height:80px;object-fit:cover;border-radius:8px;border:1.5px solid var(--line)">`;
+      };
+      img.src = URL.createObjectURL(f);
+    });
   }
   function filterInventoryAuditRows(q){
     q = (q||'').trim().toLowerCase();
@@ -8600,6 +8664,12 @@
   async function saveInventoryAudit(branchId, branchName){
     if(!lockSubmit('saveInventoryAudit')) return;
     setTimeout(()=>unlockSubmit('saveInventoryAudit'), 15000); // شبكة أمان: يفك القفل لحاله لو صار خطأ غير متوقع
+    // 📸 صورة إثبات إجبارية للموظفين (مش للمالك) — عشان نتأكد إنه العدّ صار فعليًا مش تخمين على العين
+    if(!isAdmin() && (!window.__invAuditImgs || !window.__invAuditImgs.length)){
+      toast('⚠️ لازم ترفعي صورة إثبات للعدّ الفعلي قبل ما تحفظي الجرد');
+      unlockSubmit('saveInventoryAudit');
+      return;
+    }
     // 🔧 مهم جدًا: هاد الفحص كان موجود بس بعد ما التعديلات الفعلية عالمخزون كانت تصير — يعني كان يمنع بس
     // تكرار "سجل الجرد الملخّص"، بينما نفس الجرد كان يتطبّق على المخزون الحقيقي عدة مرات فعليًا (مرة توثقنا
     // منها بالضبط: نفس تصحيح الجرد انسجل 5 مرات خلال 5 ثواني). هلق منتحقق أول شي، قبل ما نلمس أي رقم.
@@ -8638,9 +8708,10 @@
       await db.from('inventory_audits').insert({
         branch_id: branchId, staff_id: ME.id, staff_name: ME.full_name,
         items_counted: updated, items_with_variance: totalVarianceItems,
-        details: results
+        details: results, images: window.__invAuditImgs||[]
       });
     }catch(e){ console.error('audit log failed:', e); }
+    window.__invAuditImgs = [];
     await logActivity('inventory_audit', 'جرد '+branchName+' — '+updated+' مادة، '+totalVarianceItems+' فرق');
     // 🔔 تنبيه فوري للمالك عبر الشات الداخلي لو الجرد عمله موظف عادي (مش المالك نفسه)
     if(!isAdmin()){
@@ -9124,8 +9195,10 @@
   function showDaDetail(idx){
     const a = (window.__DA_LIST||[])[idx]; if(!a) return;
     const details = a.details||[];
+    const imgs = a.images||[];
     modal(`<h3>📋 تفصيل الجرد — ${esc(a.branches?.name_ar||'—')}</h3>
       <div style="color:var(--muted);font-weight:700;margin-bottom:10px">${new Date(a.created_at).toLocaleString('ar-JO')} — ${esc(a.staff_name||'—')}</div>
+      ${imgs.length ? `<div style="margin-bottom:10px"><b style="font-size:.85rem">📸 صور إثبات العدّ:</b><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">${imgs.map(u=>`<img src="${u}" onclick="window.open('${u}','_blank')" style="width:90px;height:90px;object-fit:cover;border-radius:8px;border:1.5px solid var(--line);cursor:pointer">`).join('')}</div></div>` : '<div style="color:var(--red);font-weight:700;font-size:.82rem;margin-bottom:10px">⚠️ ما في صور إثبات مرفقة (جرد قديم من قبل تفعيل الميزة)</div>'}
       <div class="tbl-wrap"><table class="tbl">
         <tr><th>المادة</th><th>المتوقع</th><th>الفعلي</th><th>الفرق</th></tr>
         ${details.map(d=>`<tr class="${Math.abs(d.variance)>0.001?'late':''}">
