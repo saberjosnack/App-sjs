@@ -632,6 +632,7 @@
         <button data-a="shifts" onclick="admTab('shifts')">🔄 شيفتات</button>
         <button data-a="productTimeline" onclick="admTab('productTimeline')" style="background:#c8f0e0;border-color:#0d9c6c">📜 خط سير المنتج</button>
         <button data-a="spotCheck" onclick="admTab('spotCheck')" style="background:#ffe0c8;border-color:#e07b1e">🎯 جرد عشوائي (فجائي)</button>
+        <button data-a="breaksScreen" onclick="admTab('breaksScreen')" style="background:#fff0d8;border-color:#c88a00">☕ البريكات</button>
       </div>
       <div id="admContent"></div>
     </section>
@@ -1211,6 +1212,7 @@
       tab_shifts: 'شيفتات',
       tab_productTimeline: 'خط سير المنتج',
       tab_spotCheck: 'شاشة الجرد العشوائي (فجائي)',
+      tab_breaksScreen: 'شاشة البريكات المستقلة',
     },
     '🔓 صلاحيات إدارية دقيقة (بدائل قابلة للاختيار لوحدها)': {
       fin_approvals: 'الموافقات المالية (مصاريف، تسوية مشتريات، دفعات موردين، خصم يدوي حر، الخزينة)',
@@ -5386,7 +5388,7 @@
     items:'items_manage', cats:'cats_manage', codes:'codes_manage', schedDisc:'codes_manage', staff:'staff_manage', roles:'admin_only', branches:'branches_manage', sett:'settings_manage', devices:'devices_manage',
     ingredients:'inventory_view', recipes:'inventory_view',
     inventory:'inventory_audit', transfers:'inventory_transfer', warehouse:'tab_warehouse', treasury:'tab_treasury', hr:'tab_hr', chats:'tab_chats', dailyAudits:'tab_dailyAudits', hrLocations:'tab_hrLocations', dutyHours:'tab_dutyHours', hrClosures:'tab_hrClosures', ordersScreen:'tab_ordersScreen',
-    complaints:'tab_complaints', violations:'tab_violations', deductions:'tab_deductions', rewards:'tab_rewards', activityLog:'tab_activityLog', manufacturing:'tab_manufacturing', satisfaction:'tab_satisfaction', ccPoints:'tab_ccPoints', shiftSchedule:'tab_shiftSchedule', shifts:'tab_shifts', productTimeline:'tab_productTimeline', spotCheck:'tab_spotCheck',
+    complaints:'tab_complaints', violations:'tab_violations', deductions:'tab_deductions', rewards:'tab_rewards', activityLog:'tab_activityLog', manufacturing:'tab_manufacturing', satisfaction:'tab_satisfaction', ccPoints:'tab_ccPoints', shiftSchedule:'tab_shiftSchedule', shifts:'tab_shifts', productTimeline:'tab_productTimeline', spotCheck:'tab_spotCheck', breaksScreen:'tab_breaksScreen',
     expenses:'expenses_view', purchases:'purchases_view',
     platforms:'platforms_view', empmeals:'empmeals_view', topcust:'topcust_view', waste:'waste_log', suppliers:'purchases_view',
   };
@@ -5555,6 +5557,10 @@
           <label class="chk"><input type="checkbox" id="f_hrShowMeals" ${settingOn('hr_portal_show_meals')?'checked':''}> الوجبات</label>
           <label class="chk"><input type="checkbox" id="f_hrShowBalance" ${settingOn('hr_portal_show_balance')?'checked':''}> الرصيد السابق</label>
         </div>
+        <div class="fld" style="margin-top:10px"><label>☕ مدة البريك المسموحة يوميًا (دقيقة)</label>
+          <input type="number" id="f_breakLimit" min="1" step="5" value="${SETTINGS.break_limit_minutes||60}" style="width:150px">
+          <div style="font-size:.76rem;color:var(--muted);font-weight:600;margin-top:4px">أي دقيقة زايدة عن هالحد باليوم الواحد تنخصم تلقائيًا من ساعات دوام الموظف (بوابة HR وشاشة البريكات).</div>
+        </div>
         ${window.SJSPrinter?`
         <div class="fld"><label>🔵 طابعة البلوتوث (لوضع تطبيق أندرويد — بلوتوث)</label>
           <select id="f_printerBT"></select>
@@ -5660,6 +5666,7 @@
     }
     if(admView==='productTimeline'){ renderProductTimeline(); return; }
     if(admView==='spotCheck'){ renderSpotCheck(); return; }
+    if(admView==='breaksScreen'){ renderBreaksScreen(); return; }
     if(admView==='complaints'){
       C.innerHTML = `<div id="complaintsBox"><div class="empty-note">جاري التحميل...</div></div>`;
       renderComplaints();
@@ -6918,10 +6925,26 @@
     // وبترجع تظهر تلقائيًا فور ما ترجعي تفعّلي الصنف من جديد
     RECIPES_DATA=(data||[]).filter(r=>r.menu_items?.is_available!==false)
       .sort((a,b)=>(a.menu_items?.name_ar||'').localeCompare(b.menu_items?.name_ar||'','ar'));
-    // 🔍 أصناف فعّالة (ظاهرة بالكاشير) بدون أي وصفة معرّفة إطلاقًا — كل بيع لهاي الأصناف ما بيخصم
-    // ولا مكوّن من المخزون أبدًا، وهاد غالبًا السبب الأساسي وراء فروقات الجرد المستمرة والكبيرة
+    // 🔍 أصناف بدون أي وصفة معرّفة إطلاقًا — كل بيع لهاي الأصناف ما بيخصم ولا مكوّن من المخزون أبدًا،
+    // وهاد غالبًا السبب الأساسي وراء فروقات الجرد المستمرة والكبيرة. لازم نفحص مصدرين:
+    // 1) أصناف ظاهرة وبتنباع لحالها مباشرة بالكاشير
+    // 2) أصناف مستخدمة كـ"مكوّن" (ثابت أو اختياري) جوا وجبة مركّبة — حتى لو هي نفسها مش ظاهرة/متاحة
+    //    للبيع المباشر (زي "سندويشة مطبق" يلي بتنباع بس جوا "سطل مطبق")! هاي كانت الثغرة الحقيقية —
+    //    الفحص القديم كان يتجاهلها بالكامل لأنها مش "ظاهرة بالكاشير".
     const recipedItemIds = new Set((data||[]).map(r=>r.menu_item_id));
-    const itemsWithoutRecipe = ITEMS.filter(i=>i.is_available && i.item_type!=='composite' && !recipedItemIds.has(i.id));
+    const [{ data: allFixedRows }, { data: allOptionRows }] = await Promise.all([
+      db.from('composite_fixed').select('component_item_id'),
+      db.from('composite_options').select('component_item_id'),
+    ]);
+    const componentItemIds = new Set([
+      ...(allFixedRows||[]).map(f=>f.component_item_id),
+      ...(allOptionRows||[]).map(o=>o.component_item_id),
+    ].filter(Boolean));
+    const directItemsWithoutRecipe = ITEMS.filter(i=>i.is_available && i.item_type!=='composite' && !recipedItemIds.has(i.id));
+    const componentItemsWithoutRecipe = [...componentItemIds]
+      .map(id=>ITEMS.find(i=>i.id===id))
+      .filter(i=>i && !recipedItemIds.has(i.id) && !directItemsWithoutRecipe.find(x=>x.id===i.id));
+    const itemsWithoutRecipe = [...directItemsWithoutRecipe.map(i=>({...i, __reason:'ظاهر بالكاشير مباشرة'})), ...componentItemsWithoutRecipe.map(i=>({...i, __reason:'مستخدم كمكوّن جوا وجبة مركّبة'}))];
     // 🚩 لكل مكوّن، منحسب متوسط الكمية المستخدمة فيه بكل الوصفات — أي وصفة بتستخدم كمية أكبر بكثير
     // من المتوسط (زي 10 أضعاف) منعلّم عليها كتنبيه، غالبًا رقم زايد صفر بالغلط وقت إدخال الوصفة
     const qtyByIngredient = {};
@@ -10100,8 +10123,9 @@
     const t = localTodayStr();
     return t.split('-').slice(0,2).join('-')+'-01';
   }
-  // ☕ لو الموظف خد بريكات أكتر من 60 دقيقة بنفس اليوم (مهما كان السبب)، الزيادة تُخصم من ساعات دوامه المحسوبة
+  // ☕ لو الموظف خد بريكات أكتر من الحد المسموح (SETTINGS.break_limit_minutes، افتراضيًا 60) بنفس اليوم، الزيادة تُخصم من ساعات دوامه المحسوبة
   function calcBreakExcessHours(breaks){
+    const limit = SETTINGS.break_limit_minutes || 60;
     const byDay = {};
     const now = new Date();
     (breaks||[]).forEach(b=>{
@@ -10121,7 +10145,7 @@
       byDay[day] = (byDay[day]||0) + Math.max(0, mins);
     });
     let excessMin = 0;
-    Object.values(byDay).forEach(mins=>{ if(mins>60) excessMin += (mins-60); });
+    Object.values(byDay).forEach(mins=>{ if(mins>limit) excessMin += (mins-limit); });
     return excessMin/60;
   }
   async function renderHR(){
@@ -10465,6 +10489,98 @@
   }
 
   /* ---- سجل الحضور (بوابة الموظف) — عرض وتعديل من الأدمن بس ---- */
+  /* ================= ☕ البريكات — شاشة مستقلة لكل الموظفين مع بعض ================= */
+  let BR_FILTER = { from:'', to:'' };
+  async function renderBreaksScreen(){
+    const C = document.getElementById('admContent');
+    if(!BR_FILTER.from){ BR_FILTER.from = localTodayStr(); BR_FILTER.to = localTodayStr(); }
+    const limit = SETTINGS.break_limit_minutes||60;
+    C.innerHTML = `
+      <div class="panel" style="margin-bottom:14px">
+        <h3>☕ البريكات — كل الموظفين</h3>
+        <div style="font-size:.85rem;color:var(--muted);font-weight:700;margin-top:6px">المسموح ${limit} دقيقة/يوم لكل موظف (قابل للتعديل من ⚙️ الإعدادات). أي دقيقة زايدة بتتخصم تلقائيًا من ساعات الدوام والراتب.</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;align-items:end">
+          <div><label style="font-weight:700;font-size:.82rem">من تاريخ</label><br><input type="date" id="br_from" value="${BR_FILTER.from}"></div>
+          <div><label style="font-weight:700;font-size:.82rem">إلى تاريخ</label><br><input type="date" id="br_to" value="${BR_FILTER.to}"></div>
+          <button class="mini ok" onclick="BR_FILTER.from=document.getElementById('br_from').value;BR_FILTER.to=document.getElementById('br_to').value;renderBreaksScreen()">🔍 عرض</button>
+        </div>
+      </div>
+      <div id="br_result"></div>`;
+    loadBreaksScreen();
+  }
+  async function loadBreaksScreen(){
+    const R = document.getElementById('br_result'); if(!R) return;
+    R.innerHTML = '<div class="empty-note">... جاري التحميل</div>';
+    try{
+      const { data, error } = await db.from('hr_breaks').select('*, meal_names(name)')
+        .gte('started_at', localDayStart(BR_FILTER.from)).lte('started_at', localDayEnd(BR_FILTER.to))
+        .order('started_at',{ascending:false});
+      if(error){ R.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message||'الجدول hr_breaks غير موجود — نفّذ SQL أولاً')}</div>`; return; }
+      const byEmp = {};
+      (data||[]).forEach(b=>{
+        const empId = b.employee_id;
+        if(!byEmp[empId]) byEmp[empId] = { name: b.meal_names?.name||'—', sessions: [] };
+        byEmp[empId].sessions.push(b);
+      });
+      const limit = SETTINGS.break_limit_minutes||60;
+      const rows = Object.entries(byEmp).map(([empId, v])=>{
+        const excessH = calcBreakExcessHours(v.sessions);
+        const totalMin = v.sessions.reduce((a,b)=>{
+          const end = b.ended_at ? new Date(b.ended_at) : new Date();
+          return a + Math.max(0,(end-new Date(b.started_at))/60000);
+        },0);
+        return { empId, name:v.name, sessions:v.sessions, totalMin, excessMin: excessH*60 };
+      }).sort((a,b)=>b.excessMin-a.excessMin);
+      R.innerHTML = `
+        <div class="tbl-wrap"><table class="tbl">
+          <tr><th>الموظف</th><th>عدد البريكات</th><th>إجمالي الدقائق</th><th>الزيادة عن المسموح</th><th></th></tr>
+          ${rows.map(r=>`<tr class="${r.excessMin>0.5?'late':''}">
+            <td><b>${esc(r.name)}</b></td>
+            <td>${r.sessions.length}</td>
+            <td>${Math.round(r.totalMin)} د</td>
+            <td>${r.excessMin>0.5?`<b style="color:var(--red)">+${Math.round(r.excessMin)} د</b>`:'<span style="color:var(--ok)">✅ ضمن الحد</span>'}</td>
+            <td style="white-space:nowrap">
+              <button class="mini tog" onclick="showBreakSessions('${r.empId}')">👁️ التفاصيل</button>
+              <button class="mini del" onclick="quickBreakDeduction('${r.empId}','${esc(r.name)}')">💰 خصم مغادرة غير مسجّلة (2 د.أ)</button>
+            </td>
+          </tr>`).join('')||'<tr><td colspan="5" class="empty-note">ما في بريكات مسجّلة بهاي الفترة</td></tr>'}
+        </table></div>`;
+      window.__BR_BY_EMP = byEmp;
+    }catch(e){ R.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
+  }
+  function showBreakSessions(empId){
+    const v = window.__BR_BY_EMP?.[empId]; if(!v) return;
+    modal(`<h3>☕ بريكات ${esc(v.name)}</h3>
+      <div class="tbl-wrap"><table class="tbl">
+        <tr><th>البداية</th><th>النهاية</th><th>المدة</th></tr>
+        ${v.sessions.map(b=>{
+          const end = b.ended_at ? new Date(b.ended_at) : null;
+          const mins = end ? Math.round((end-new Date(b.started_at))/60000) : Math.round((new Date()-new Date(b.started_at))/60000);
+          return `<tr><td>${new Date(b.started_at).toLocaleString('ar-JO')}</td><td>${end?end.toLocaleString('ar-JO'):'🔴 لسا مفتوح'}</td><td><b>${mins} د</b></td></tr>`;
+        }).join('')}
+      </table></div>
+      <div class="m-act"><button class="cancel" onclick="closeModal()">إغلاق</button></div>`);
+  }
+  // 💰 خصم سريع — مخصص لحالة "الموظف طلع خارج المطعم بدون تسجيل بريك أصلًا" (مش تجاوز حد البريك العادي،
+  // هاد وضع منفصل: غياب/مغادرة غير مسجّلة إطلاقًا). النص صادق وواضح إنه قرار إداري، بدون أي ادّعاء مراقبة غير حقيقي.
+  function quickBreakDeduction(empId, empName){
+    modal(`<h3>💰 خصم مغادرة غير مسجّلة — ${esc(empName)}</h3>
+      <div class="fld"><label>المبلغ (${CURRENCY})</label><input id="qbd_amt" type="number" step="0.01" value="2.00"></div>
+      <div class="fld"><label>السبب</label><textarea id="qbd_reason" rows="3" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:10px">مخالفة: تم رصدك بواسطة نظام مراقبة الكاميرات (Alexa AI) خارج المطعم أثناء الدوام بدون تسجيل بريك</textarea></div>
+      <div class="m-act"><button class="save" onclick="saveQuickBreakDeduction('${empId}','${esc(empName)}')">تسجيل الخصم ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
+  }
+  async function saveQuickBreakDeduction(empId, empName){
+    const amt = parseFloat(document.getElementById('qbd_amt')?.value);
+    const reason = document.getElementById('qbd_reason')?.value.trim();
+    if(!amt || amt<=0){ toast('⚠️ اكتبي مبلغ صحيح'); return; }
+    if(!reason){ toast('⚠️ السبب إجباري'); return; }
+    try{
+      const { error } = await db.from('employee_deductions').insert({ employee_id: empId, employee_name: empName, amount: amt, reason, created_by: ME.full_name });
+      if(error){ toast('✗ '+error.message); return; }
+      await logActivity('break_deduction', 'خصم مغادرة غير مسجّلة لـ'+empName+' — '+fmt(amt));
+      toast('✓ اتسجل الخصم'); closeModal();
+    }catch(e){ toast('✗ '+e.message); }
+  }
   async function hrBreaksView(empId, empName){
     modal(`<h3>☕ البريكات — ${esc(empName)}</h3><div id="hrBrBody" class="empty-note">... جاري التحميل</div>`);
     try{
@@ -10483,7 +10599,7 @@
       });
       const days = Object.keys(byDay).sort((a,b)=>b.localeCompare(a));
       body.innerHTML = `
-        <div style="font-size:.82rem;color:var(--muted);font-weight:700;margin-bottom:10px">الفترة: ${HR_FILTER.from} → ${HR_FILTER.to} — المسموح 60 دقيقة/يوم</div>
+        <div style="font-size:.82rem;color:var(--muted);font-weight:700;margin-bottom:10px">الفترة: ${HR_FILTER.from} → ${HR_FILTER.to} — المسموح ${SETTINGS.break_limit_minutes||60} دقيقة/يوم</div>
         <div style="max-height:420px;overflow-y:auto">
         ${days.map(day=>{
           const items = byDay[day];
@@ -13082,6 +13198,7 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
       hr_portal_show_hours: document.getElementById('f_hrShowHours')?.checked ?? true,
       hr_portal_show_net: document.getElementById('f_hrShowNet')?.checked ?? true,
       hr_portal_show_advances: document.getElementById('f_hrShowAdvances')?.checked ?? true,
+      break_limit_minutes: parseInt(document.getElementById('f_breakLimit')?.value) || 60,
       hr_portal_show_meals: document.getElementById('f_hrShowMeals')?.checked ?? true,
       hr_portal_show_balance: document.getElementById('f_hrShowBalance')?.checked ?? true,
       delivery_whatsapp: f_wanum ? f_wanum.value.trim() : '',
@@ -14509,7 +14626,7 @@ try {
             const breaks = brData||[];
             activeBreak = breaks.find(b=>!b.ended_at) || null;
             const usedMin = breaks.filter(b=>b.ended_at).reduce((a,b)=>a+((new Date(b.ended_at)-new Date(b.started_at))/60000),0);
-            breakRemaining = Math.max(0, 60 - usedMin);
+            breakRemaining = Math.max(0, (SETTINGS.break_limit_minutes||60) - usedMin);
           }
         }catch(e){ console.error('load breaks failed:', e); }
       }
