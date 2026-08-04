@@ -8425,12 +8425,28 @@
         const { data: orders, error: ordersErr } = await ordersQ;
         if(ordersErr){ D.innerHTML = `<div class="alert-red">⚠️ ${esc(ordersErr.message)}</div>`; return; }
         const itemIds = [...new Set((orders||[]).flatMap(o=>(o.order_items||[]).map(l=>l.menu_item_id).filter(Boolean)))];
-        const { data: recipes } = itemIds.length ? await db.from('recipes').select('menu_item_id, recipe_items(ingredient_id, quantity)').in('menu_item_id', itemIds) : {data:[]};
+        // 🔧 مهم: الأصناف المركّبة (وجبات عائلية) ما إلها وصفة مباشرة — مكوناتها الحقيقية جايّة من
+        // "المكونات الثابتة" (composite_fixed)، كل وحدة فيها إلها وصفتها الخاصة. كان هاد الجزء ناقص
+        // كليًا من الحساب، فكل مادة بتنستخدم جوا وجبة مركّبة كانت تطلع "نظري" أقل من حقيقتها.
+        const [{ data: recipes }, { data: fixedRows }] = itemIds.length ? await Promise.all([
+          db.from('recipes').select('menu_item_id, recipe_items(ingredient_id, quantity)').in('menu_item_id', itemIds),
+          db.from('composite_fixed').select('menu_item_id, component_item_id, qty').in('menu_item_id', itemIds),
+        ]) : [{data:[]},{data:[]}];
+        const componentIds = [...new Set((fixedRows||[]).map(f=>f.component_item_id))];
+        const { data: componentRecipes } = componentIds.length ? await db.from('recipes').select('menu_item_id, recipe_items(ingredient_id, quantity)').in('menu_item_id', componentIds) : {data:[]};
         const theoretical = {};
         (orders||[]).forEach(o=>(o.order_items||[]).forEach(l=>{
           const recipe = (recipes||[]).find(r=>r.menu_item_id===l.menu_item_id);
           (recipe?.recipe_items||[]).forEach(ri=>{
             theoretical[ri.ingredient_id] = (theoretical[ri.ingredient_id]||0) + parseFloat(ri.quantity||0)*(l.quantity||0);
+          });
+          // مكونات الوجبة المركّبة الثابتة (زي علبة بطاطا + خبز برجر + سكلوب جوا وجبة عائلية)
+          const myFixed = (fixedRows||[]).filter(f=>f.menu_item_id===l.menu_item_id);
+          myFixed.forEach(f=>{
+            const compRecipe = (componentRecipes||[]).find(r=>r.menu_item_id===f.component_item_id);
+            (compRecipe?.recipe_items||[]).forEach(ri=>{
+              theoretical[ri.ingredient_id] = (theoretical[ri.ingredient_id]||0) + parseFloat(ri.quantity||0)*(f.qty||1)*(l.quantity||0);
+            });
           });
         }));
         // 2️⃣ الاستهلاك "الفعلي المسجّل" — من جدول حركات المخزون، نوع "بيع" بس، بنفس الفترة
