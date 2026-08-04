@@ -8438,8 +8438,12 @@
         if(movesErr){ D.innerHTML = `<div class="alert-red">⚠️ ${esc(movesErr.message||'الجدول inventory_movements غير موجود')}</div>`; return; }
         const actual = {};
         (actualMoves||[]).filter(m=>m.type==='sale' && m.created_at>=fromIso && m.created_at<=toIso).forEach(m=>{
-          actual[m.ingredient_id] = (actual[m.ingredient_id]||0) + Math.abs(parseFloat(m.qty||0));
+          // 🔧 مهم: استرجاعات الإلغاء/التعديل مسجّلة بنفس نوع "بيع" بس بإشارة موجبة (عكس البيع العادي
+          // السالب) — لازم نجمعهم بإشارتهم الحقيقية (نطرح الاسترجاع من البيع) مش ناخد القيمة المطلقة
+          // لكل سطر لحاله، وإلا كل تعديل/إلغاء كان يُحسب "استهلاك إضافي" بالغلط بدل ما يتصفّر صح.
+          actual[m.ingredient_id] = (actual[m.ingredient_id]||0) + parseFloat(m.qty||0);
         });
+        Object.keys(actual).forEach(k=>{ actual[k] = Math.abs(Math.min(0, actual[k])); }); // الاستهلاك الصافي بس (تجاهل أي فائض استرجاع نظري)
         const allIngIds = new Set([...Object.keys(theoretical), ...Object.keys(actual)]);
         const rows = [...allIngIds].map(ingId=>{
           const ing = INGR.find(i=>i.id===ingId);
