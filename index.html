@@ -9062,7 +9062,10 @@
       .select('*, ingredients(name,unit), branches(name_ar)')
       .order('branch_id');
     // 🔒 الموظف العادي (مش مدير) بيشوف بس الفرع اللي هو تابع له، محدّ غيره — والمدير بيشوف كل الفروع
-    const inv = admin ? (invAll||[]) : (invAll||[]).filter(x=>x.branch_id===ME.branch_id);
+    let inv = admin ? (invAll||[]) : (invAll||[]).filter(x=>x.branch_id===ME.branch_id);
+    // 🔧 مهم: نستبعد أي فرع معطّل/مسكّر من شاشة الجرد — ما لازم يضل يظهر كأنه شغّال بعد ما تعطّليه
+    const activeBranchIds = new Set(BRANCHES.map(b=>b.id));
+    inv = inv.filter(x=>activeBranchIds.has(x.branch_id));
     // تنظيم حسب الفرع
     const byBranch = {};
     (inv||[]).forEach(x=>{
@@ -9821,6 +9824,10 @@
       console.error(balErr); return;
     }
     let balances = bal||[];
+    // 🔧 مهم: كان المستودع يعرض أرصدة أي فرع حتى لو معطّل/مسكّر — هلق نستبعدهم، زي ما لازم يصير
+    // لما تعطّلي فرع، ما لازم يضل يظهر بشاشات المخزون والجرد كأنه شغّال
+    const activeBranchIds = new Set(BRANCHES.map(b=>b.id));
+    balances = balances.filter(b=>activeBranchIds.has(b.branch_id));
     if(WH_FILTER.branch) balances = balances.filter(b=>b.branch_id===WH_FILTER.branch);
     if(WH_FILTER.ing) balances = balances.filter(b=>b.ingredient_id===WH_FILTER.ing);
     const totalValue = balances.reduce((a,b)=>a+(b.stock||0)*(b.ingredients?.unit_cost||0),0);
