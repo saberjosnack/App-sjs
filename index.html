@@ -10495,9 +10495,21 @@
     const C = document.getElementById('admContent');
     if(!BR_FILTER.from){ BR_FILTER.from = localTodayStr(); BR_FILTER.to = localTodayStr(); }
     const limit = SETTINGS.break_limit_minutes||60;
+    const { data: allEmps } = await db.from('meal_names').select('id,name').eq('is_active', true).order('name');
     C.innerHTML = `
+      <div class="panel" style="margin-bottom:14px;border:2px solid var(--red)">
+        <h3 style="color:var(--red)">🚨 رصد مغادرة بدون تسجيل بريك</h3>
+        <div style="font-size:.85rem;color:var(--muted);font-weight:700;margin-top:6px">لموظف شفتيه طالع خارج المطعم بدون ما يسجّل بريك أصلًا — بالضبط عشان هيك ما رح تلاقيه بالجدول تحت (مالوش سجل بريك يظهره). اختاريه مباشرة من هون.</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;align-items:end">
+          <select id="br_direct_emp" style="flex:1;min-width:200px">
+            <option value="">اختاري الموظف...</option>
+            ${(allEmps||[]).map(e=>`<option value="${e.id}">${esc(e.name)}</option>`).join('')}
+          </select>
+          <button class="mini del" onclick="const sel=document.getElementById('br_direct_emp');if(!sel.value){toast('⚠️ اختاري الموظف أول');return;}quickBreakDeduction(sel.value, sel.selectedOptions[0].textContent)">💰 تسجيل مخالفة وخصم (2 د.أ)</button>
+        </div>
+      </div>
       <div class="panel" style="margin-bottom:14px">
-        <h3>☕ البريكات — كل الموظفين</h3>
+        <h3>☕ البريكات المسجّلة — كل الموظفين</h3>
         <div style="font-size:.85rem;color:var(--muted);font-weight:700;margin-top:6px">المسموح ${limit} دقيقة/يوم لكل موظف (قابل للتعديل من ⚙️ الإعدادات). أي دقيقة زايدة بتتخصم تلقائيًا من ساعات الدوام والراتب.</div>
         <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;align-items:end">
           <div><label style="font-weight:700;font-size:.82rem">من تاريخ</label><br><input type="date" id="br_from" value="${BR_FILTER.from}"></div>
