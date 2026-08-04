@@ -5015,6 +5015,18 @@
       closeModal();
       loadDashboard();
     }
+    if(p.scope==='purchases'){
+      window.__purFrom = start.toISOString().split('T')[0]; window.__purTo = end.toISOString().split('T')[0];
+      const btnLbl = document.getElementById('purDateBtnLabel'); if(btnLbl) btnLbl.textContent = label;
+      closeModal();
+      renderPurchases();
+    }
+    if(p.scope==='treasury'){
+      TR_FILTER.from = start.toISOString().split('T')[0]; TR_FILTER.to = end.toISOString().split('T')[0];
+      const btnLbl = document.getElementById('trDateBtnLabel'); if(btnLbl) btnLbl.textContent = label;
+      closeModal();
+      renderTreasury();
+    }
     // 🔧 قابلة للتوسيع لباقي الشاشات (اليوميات...) بنفس الطريقة لو احتجناها لاحقًا
   }
   function setQuickFilter(mode){
@@ -6152,8 +6164,12 @@
     try{
       const { error } = await db.from('employee_rewards').insert({ employee_id: staffId, employee_name: staffName, amount: amt, reason: note||'بونص مبيعات كول سنتر', created_by: ME.full_name, cc_bonus: true });
       if(error){ toast('✗ '+error.message); return; }
-      await logActivity('cc_bonus', 'بونص كول سنتر لـ'+staffName+' — '+fmt(amt));
-      toast('✓ اتاعتمد البونص وانضاف لجدول المكافآت'); closeModal(); renderCcPoints();
+      // 🔧 مهم: لما نعتمد بونص لموظف، لازم النقاط والمبيعات يلي اعتمدنا عليها البونص "تصفر" تلقائيًا —
+      // وإلا بتضل ظاهرة وكأنها لسا مستحقة رغم إنه اتصرفت، وهيك كانت تتكرر بونصات لنفس المبيعات بالغلط
+      const { error: resetErr } = await db.from('staff').update({ cc_points_reset_at: new Date().toISOString() }).eq('id', staffId);
+      if(resetErr) console.error('auto-reset after bonus failed:', resetErr);
+      await logActivity('cc_bonus', 'بونص كول سنتر لـ'+staffName+' — '+fmt(amt)+' (وصفّرت نقاطه تلقائيًا)');
+      toast('✓ اتاعتمد البونص، انضاف لجدول المكافآت، وصفّرت نقاط '+staffName+' تلقائيًا'); closeModal(); renderCcPoints();
     }catch(e){ toast('✗ '+e.message); }
   }
   async function renderSatisfaction(){
@@ -7748,7 +7764,11 @@
   let piIdx=0;
   async function renderPurchases(){
     await loadIngredients();
-    const {data}=await db.from('purchases').select('*, purchase_items(*, ingredients(name,unit))').order('purchase_date',{ascending:false}).limit(200);
+    let q = db.from('purchases').select('*, purchase_items(*, ingredients(name,unit))').order('purchase_date',{ascending:false});
+    if(window.__purFrom) q = q.gte('purchase_date', window.__purFrom);
+    if(window.__purTo) q = q.lte('purchase_date', window.__purTo);
+    if(!window.__purFrom && !window.__purTo) q = q.limit(200); // بدون فلتر تاريخ، نحدّ العدد تفاديًا لتحميل كل التاريخ دفعة وحدة
+    const {data} = await q;
     PURCHASES_DATA=data||[];
     const suppliers=[...new Set(PURCHASES_DATA.map(p=>p.supplier).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ar'));
     const filterSup = window.__purFilterSup||'';
@@ -7757,10 +7777,13 @@
     if(filterSup) filtered = filtered.filter(p=>p.supplier===filterSup);
     if(filterIng) filtered = filtered.filter(p=>(p.purchase_items||[]).some(i=>i.ingredient_id===filterIng));
     const total=filtered.reduce((a,x)=>a+parseFloat(x.total||0),0);
+    const dateLabel = (window.__purFrom||window.__purTo) ? (window.__purFrom===window.__purTo ? window.__purFrom : (window.__purFrom||'...')+' → '+(window.__purTo||'...')) : 'آخر 200 فاتورة';
     const C=document.getElementById('admContent');
-    C.innerHTML=`<div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+    C.innerHTML=`<div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:center">
       <button class="add-btn" style="margin:0" onclick="purchaseForm()">＋ فاتورة شراء</button>
       <button class="mini ok" style="background:#1D6F42" onclick="exportPurchasesExcel()">📥 تصدير Excel</button>
+      <button class="mini ok" onclick="openDateRangeModal('purchases')">📅 <span id="purDateBtnLabel">${dateLabel}</span> ▾</button>
+      ${(window.__purFrom||window.__purTo) ? `<button class="mini" onclick="window.__purFrom=null;window.__purTo=null;renderPurchases()">↩️ إلغاء فلتر التاريخ</button>` : ''}
       <div class="stat">إجمالي المشتريات (بعد الفلترة)<b>${fmt(total)} ${CURRENCY}</b></div></div>
       <div class="two" style="margin-bottom:10px">
         <select id="pur_filter_sup" style="flex:1;border:1.5px solid var(--line);border-radius:10px;padding:8px" onchange="window.__purFilterSup=this.value;renderPurchases()">
@@ -11113,9 +11136,12 @@
           <button class="mini ok" style="background:var(--maroon)" onclick="backfillTodaySales()">🔄 ترحيل كل مبيعات اليوم (مرة وحدة)</button>
           <button class="mini ok" style="background:#7b2cbf" onclick="backfillTreasuryBranches()">🏪 إصلاح فروع الحركات القديمة (مرة وحدة)</button>
         </div>
+        <div style="margin-bottom:10px">
+          <button class="mini ok" onclick="openDateRangeModal('treasury')">📅 <span id="trDateBtnLabel">${TR_FILTER.from===TR_FILTER.to?TR_FILTER.from:TR_FILTER.from+' → '+TR_FILTER.to}</span> ▾</button>
+        </div>
         <div class="two" style="flex-wrap:wrap;gap:10px">
-          <div><label style="font-weight:700;font-size:.82rem">من تاريخ</label><br><input type="date" id="tr_from" value="${TR_FILTER.from}" class="dfield"></div>
-          <div><label style="font-weight:700;font-size:.82rem">إلى تاريخ</label><br><input type="date" id="tr_to" value="${TR_FILTER.to}" class="dfield"></div>
+          <div><label style="font-weight:700;font-size:.82rem">من تاريخ (يدوي)</label><br><input type="date" id="tr_from" value="${TR_FILTER.from}" class="dfield"></div>
+          <div><label style="font-weight:700;font-size:.82rem">إلى تاريخ (يدوي)</label><br><input type="date" id="tr_to" value="${TR_FILTER.to}" class="dfield"></div>
           <div><label style="font-weight:700;font-size:.82rem">الحساب</label><br>
             <select id="tr_acc" class="dfield"><option value="">الكل</option><option value="cash" ${TR_FILTER.account==='cash'?'selected':''}>كاش</option><option value="bank" ${TR_FILTER.account==='bank'?'selected':''}>بنك/كليك</option></select></div>
           <div><label style="font-weight:700;font-size:.82rem">النوع</label><br>
