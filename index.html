@@ -3932,6 +3932,13 @@
           .single();
         if(error) throw error;
         ord = data;
+        // 🔧 باگ خطير كان موجود: تعديل طلب موجود ما كان يخصم أي مكونات جديدة من المخزون ولا يحدّث
+        // المصاري إطلاقًا — الخصم والترحيل للخزينة كانوا يصيروا بس وقت إنشاء الطلب لأول مرة. يعني
+        // أي طلب اتعدّل بعدها (زيادة كمية، إضافة صنف) كانت الكمية الإضافية تتاخد وتتقدّم للزبون
+        // بدون ما تنخصم من المخزون أو تنضاف للخزينة أبدًا. هلق: نرجّع (نعكس) تأثير الطلب القديم
+        // بالكامل أول، وبعدين نطبّق تأثير الطلب الجديد (بعد التعديل) — نفس منطق الإلغاء والبيع الجديد.
+        try{ await restoreInventoryForCancel(editingOrder.branch_id, editingOrder.order_items); }catch(e){ console.error('restore old inventory on edit failed:', e); }
+        try{ await postSaleToTreasury({...editingOrder}, -1); }catch(e){ console.error('reverse old treasury on edit failed:', e); }
         await db.from('order_items').delete().eq('order_id', ord.id);
       } else {
         const { data, error } = await db.from('orders')
@@ -3964,10 +3971,10 @@
         catch(e){ console.error('clear vip discount failed:', e); }
       }
 
-      if(!editingOrder){
-        try{ await deductInventoryForSale(branch_id, cartCopy); }catch(e){ console.error('deduct inventory failed:', e); }
-        try{ await postSaleToTreasury({...rec, id:ord.id, order_number:ord.order_number}, 1); }catch(e){ console.error('post sale to treasury failed:', e); }
-      }
+      // 🔧 نفس الإصلاح: الخصم من المخزون وترحيل المبيعات للخزينة لازم يصيروا لكل الحالتين —
+      // طلب جديد، أو طلب اتعدّل (بعد ما رجّعنا فوق تأثير النسخة القديمة منه بالكامل)
+      try{ await deductInventoryForSale(branch_id, cartCopy); }catch(e){ console.error('deduct inventory failed:', e); }
+      try{ await postSaleToTreasury({...rec, id:ord.id, order_number:ord.order_number}, 1); }catch(e){ console.error('post sale to treasury failed:', e); }
 
       // الطلب انحفظ بنجاح بقاعدة البيانات — أي خطأ من هون ورايح هو خطأ طباعة بس، مش خطأ حفظ
       toast(editingOrder ? `✓ تعدّل طلب #${ord.order_number}` : `✓ طلب #${ord.order_number} — انحفظ`);
