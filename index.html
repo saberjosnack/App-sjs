@@ -8420,19 +8420,22 @@
         // 1️⃣ الاستهلاك "النظري" — منعيد حسابه من الصفر مباشرة من الطلبات الحقيقية × كمية كل وصفة،
         // بشكل مستقل تمامًا عن جدول حركات المخزون. لو في فرق بينه وبين "الفعلي المسجّل"، هاد معناه
         // في خلل بمنطق الخصم نفسه وقت البيع (زي وصفة تغيّرت بعد ما صارت مبيعات عليها)
-        let ordersQ = db.from('orders').select('id, status, order_items(menu_item_id, quantity)')
+        let ordersQ = db.from('orders').select('id, status, order_items(menu_item_id, quantity, composition)')
           .neq('status','cancelled').gte('created_at', fromIso).lte('created_at', toIso);
         const { data: orders, error: ordersErr } = await ordersQ;
         if(ordersErr){ D.innerHTML = `<div class="alert-red">⚠️ ${esc(ordersErr.message)}</div>`; return; }
         const itemIds = [...new Set((orders||[]).flatMap(o=>(o.order_items||[]).map(l=>l.menu_item_id).filter(Boolean)))];
         // 🔧 مهم: الأصناف المركّبة (وجبات عائلية) ما إلها وصفة مباشرة — مكوناتها الحقيقية جايّة من
-        // "المكونات الثابتة" (composite_fixed)، كل وحدة فيها إلها وصفتها الخاصة. كان هاد الجزء ناقص
-        // كليًا من الحساب، فكل مادة بتنستخدم جوا وجبة مركّبة كانت تطلع "نظري" أقل من حقيقتها.
+        // مصدرين: "المكونات الثابتة" (composite_fixed) + "الاختيارات يلي حددها الزبون فعليًا وقت
+        // الطلب" (محفوظة بعمود composition لكل سطر طلب). كان الاثنين ناقصين كليًا من الحساب،
+        // فكل مادة بتنستخدم كاختيار أو مكوّن ثابت جوا وجبة مركّبة كانت تطلع "نظري" أقل من حقيقتها.
         const [{ data: recipes }, { data: fixedRows }] = itemIds.length ? await Promise.all([
           db.from('recipes').select('menu_item_id, recipe_items(ingredient_id, quantity)').in('menu_item_id', itemIds),
           db.from('composite_fixed').select('menu_item_id, component_item_id, qty').in('menu_item_id', itemIds),
         ]) : [{data:[]},{data:[]}];
-        const componentIds = [...new Set((fixedRows||[]).map(f=>f.component_item_id))];
+        // نجمع أيدي كل الأصناف يلي ممكن نحتاج وصفتها: المكونات الثابتة + كل الاختيارات المختارة فعليًا بأي طلب
+        const compositionIds = [...new Set((orders||[]).flatMap(o=>(o.order_items||[]).flatMap(l=>(l.composition||[]).map(c=>c.component_item_id))))];
+        const componentIds = [...new Set([...(fixedRows||[]).map(f=>f.component_item_id), ...compositionIds])].filter(Boolean);
         const { data: componentRecipes } = componentIds.length ? await db.from('recipes').select('menu_item_id, recipe_items(ingredient_id, quantity)').in('menu_item_id', componentIds) : {data:[]};
         const theoretical = {};
         (orders||[]).forEach(o=>(o.order_items||[]).forEach(l=>{
@@ -8446,6 +8449,13 @@
             const compRecipe = (componentRecipes||[]).find(r=>r.menu_item_id===f.component_item_id);
             (compRecipe?.recipe_items||[]).forEach(ri=>{
               theoretical[ri.ingredient_id] = (theoretical[ri.ingredient_id]||0) + parseFloat(ri.quantity||0)*(f.qty||1)*(l.quantity||0);
+            });
+          });
+          // ✅ الاختيارات يلي حددها الزبون فعليًا (زي اختيار نوع الخبز/السايد) — نفس منطق الخصم الحقيقي بالضبط
+          (l.composition||[]).forEach(c=>{
+            const compRecipe = (componentRecipes||[]).find(r=>r.menu_item_id===c.component_item_id);
+            (compRecipe?.recipe_items||[]).forEach(ri=>{
+              theoretical[ri.ingredient_id] = (theoretical[ri.ingredient_id]||0) + parseFloat(ri.quantity||0)*(c.qty||0)*(l.quantity||0);
             });
           });
         }));
@@ -10063,11 +10073,22 @@
   // ☕ لو الموظف خد بريكات أكتر من 60 دقيقة بنفس اليوم (مهما كان السبب)، الزيادة تُخصم من ساعات دوامه المحسوبة
   function calcBreakExcessHours(breaks){
     const byDay = {};
+    const now = new Date();
     (breaks||[]).forEach(b=>{
-      if(!b.ended_at) return;
       const day = new Date(b.started_at).toLocaleDateString('en-CA'); // YYYY-MM-DD محلي
-      const mins = (new Date(b.ended_at)-new Date(b.started_at))/60000;
-      byDay[day] = (byDay[day]||0) + mins;
+      let endTime;
+      if(b.ended_at){
+        endTime = new Date(b.ended_at);
+      } else {
+        // 🔧 مهم: بريك نسي الموظف يسكّره (لسا "مفتوح") كان يتجاهل بالكامل من حساب الخصم —
+        // يعني "النسيان" كان عمليًا بيلغي الحد الأقصى للبريك بدل ما يخصم الوقت الزايد. هلق منحسبه
+        // لحد هلق (لو اليوم نفسه)، أو لحد آخر اليوم (لو من يوم سابق ولسا مسجّل مفتوح بالغلط)
+        const isSameDay = day === now.toLocaleDateString('en-CA');
+        if(isSameDay) endTime = now;
+        else { endTime = new Date(b.started_at); endTime.setHours(23,59,59,999); }
+      }
+      const mins = (endTime-new Date(b.started_at))/60000;
+      byDay[day] = (byDay[day]||0) + Math.max(0, mins);
     });
     let excessMin = 0;
     Object.values(byDay).forEach(mins=>{ if(mins>60) excessMin += (mins-60); });
