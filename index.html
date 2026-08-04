@@ -9946,7 +9946,13 @@
       const myBreaks = breaksAll.filter(b=>b.employee_id===e.id && afterClosure(b.started_at));
       const breakExcessHours = calcBreakExcessHours(myBreaks);
       const hours = Math.max(0, manualHours + portalHours - breakExcessHours);
-      const days = myAtt.length + validLogs.length;
+      // 🔧 مهم: "أيام الحضور" لازم تعدّ الأيام الفعلية المختلفة يلي اشتغل فيها الموظف، مش عدد جلسات الدخول
+      // الخام — لو موظف سجّل دخول/خروج أكتر من مرة بنفس اليوم (بريك، نسيان تسجيل خروج وأعاد الدخول...)
+      // كانت كل جلسة تتحسب "يوم" منفصل بالغلط، فتضخّم عدد أيام حضوره رغم إنه يوم واحد فعليًا.
+      const uniqueDays = new Set();
+      myAtt.forEach(a=>{ if(a.work_date) uniqueDays.add(a.work_date); });
+      validLogs.forEach(l=>{ if(l.clock_in) uniqueDays.add(new Date(l.clock_in).toLocaleDateString('en-CA')); });
+      const days = uniqueDays.size;
       const advTotal = advances.filter(a=>a.employee_id===e.id && afterClosure(a.created_at)).reduce((a,x)=>a+parseFloat(x.amount||0),0);
       const myMeals = mealOrders.filter(o=>(o.employee_meal_id ? o.employee_meal_id===e.id : o.employee_tab_name===e.name) && afterClosure(o.created_at));
       const mealsCount = myMeals.length;
