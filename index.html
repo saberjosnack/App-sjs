@@ -8603,7 +8603,6 @@
 
   /* ---- عرض مخزون الفروع ---- */
   async function doInventory(branchId, branchName){
-    window.__invAuditImgs = [];
     await loadIngredients();
     const {data:inv}=await db.from('branch_inventory').select('*, ingredients(name,unit)').eq('branch_id',branchId);
     const rows=(inv||[]).map(i=>({
@@ -8631,34 +8630,10 @@
         <div id="audit_var_${idx}" style="font-size:.78rem;font-weight:800;margin:-4px 0 6px 0;padding-right:4px"></div>
         </div>`).join('')||'<div class="empty-note">ما في مواد — اضغط "تهيئة مخزون الفروع" أولاً</div>'}
       </div>
-      <div style="background:#fff8e1;border-radius:10px;padding:10px 12px;margin:10px 0">
-        <label style="font-weight:800;font-size:.85rem">📸 صورة إثبات العدّ الفعلي (إجباري)</label>
-        <div style="font-size:.78rem;color:var(--muted);font-weight:600;margin-bottom:6px">صوّري الرف/الفريزر وأنتِ عم تعدّي — دليل إنه العدّ صار فعليًا مش تخمين.</div>
-        <input type="file" id="invAuditFiles" accept="image/*" capture="environment" multiple onchange="addInventoryAuditImages(this)">
-        <div id="invAuditImgPrev" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"></div>
-      </div>
       <div class="m-act">
         <button class="save" onclick="saveInventoryAudit('${branchId}','${esc(branchName)}')">💾 حفظ الجرد وتسجيله</button>
         <button class="cancel" onclick="closeModal()">إلغاء</button>
       </div>`);
-  }
-  window.__invAuditImgs = [];
-  function addInventoryAuditImages(input){
-    const files = input.files; if(!files || !files.length) return;
-    [...files].forEach(f=>{
-      const img = new Image();
-      img.onload = ()=>{
-        const cv = document.createElement('canvas');
-        const scale = Math.min(1, 900/Math.max(img.width, img.height));
-        cv.width = Math.round(img.width*scale); cv.height = Math.round(img.height*scale);
-        cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
-        const dataUrl = cv.toDataURL('image/jpeg', 0.75);
-        window.__invAuditImgs.push(dataUrl);
-        const prev = document.getElementById('invAuditImgPrev');
-        if(prev) prev.innerHTML += `<img src="${dataUrl}" style="width:80px;height:80px;object-fit:cover;border-radius:8px;border:1.5px solid var(--line)">`;
-      };
-      img.src = URL.createObjectURL(f);
-    });
   }
   function filterInventoryAuditRows(q){
     q = (q||'').trim().toLowerCase();
@@ -8682,12 +8657,6 @@
   async function saveInventoryAudit(branchId, branchName){
     if(!lockSubmit('saveInventoryAudit')) return;
     setTimeout(()=>unlockSubmit('saveInventoryAudit'), 15000); // شبكة أمان: يفك القفل لحاله لو صار خطأ غير متوقع
-    // 📸 صورة إثبات إجبارية للموظفين (مش للمالك) — عشان نتأكد إنه العدّ صار فعليًا مش تخمين على العين
-    if(!isAdmin() && (!window.__invAuditImgs || !window.__invAuditImgs.length)){
-      toast('⚠️ لازم ترفعي صورة إثبات للعدّ الفعلي قبل ما تحفظي الجرد');
-      unlockSubmit('saveInventoryAudit');
-      return;
-    }
     // 🔧 مهم جدًا: هاد الفحص كان موجود بس بعد ما التعديلات الفعلية عالمخزون كانت تصير — يعني كان يمنع بس
     // تكرار "سجل الجرد الملخّص"، بينما نفس الجرد كان يتطبّق على المخزون الحقيقي عدة مرات فعليًا (مرة توثقنا
     // منها بالضبط: نفس تصحيح الجرد انسجل 5 مرات خلال 5 ثواني). هلق منتحقق أول شي، قبل ما نلمس أي رقم.
@@ -8726,10 +8695,9 @@
       await db.from('inventory_audits').insert({
         branch_id: branchId, staff_id: ME.id, staff_name: ME.full_name,
         items_counted: updated, items_with_variance: totalVarianceItems,
-        details: results, images: window.__invAuditImgs||[]
+        details: results
       });
     }catch(e){ console.error('audit log failed:', e); }
-    window.__invAuditImgs = [];
     await logActivity('inventory_audit', 'جرد '+branchName+' — '+updated+' مادة، '+totalVarianceItems+' فرق');
     // 🔔 تنبيه فوري للمالك عبر الشات الداخلي لو الجرد عمله موظف عادي (مش المالك نفسه)
     if(!isAdmin()){
@@ -9216,7 +9184,7 @@
     const imgs = a.images||[];
     modal(`<h3>📋 تفصيل الجرد — ${esc(a.branches?.name_ar||'—')}</h3>
       <div style="color:var(--muted);font-weight:700;margin-bottom:10px">${new Date(a.created_at).toLocaleString('ar-JO')} — ${esc(a.staff_name||'—')}</div>
-      ${imgs.length ? `<div style="margin-bottom:10px"><b style="font-size:.85rem">📸 صور إثبات العدّ:</b><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">${imgs.map(u=>`<img src="${u}" onclick="window.open('${u}','_blank')" style="width:90px;height:90px;object-fit:cover;border-radius:8px;border:1.5px solid var(--line);cursor:pointer">`).join('')}</div></div>` : '<div style="color:var(--red);font-weight:700;font-size:.82rem;margin-bottom:10px">⚠️ ما في صور إثبات مرفقة (جرد قديم من قبل تفعيل الميزة)</div>'}
+      ${imgs.length ? `<div style="margin-bottom:10px"><b style="font-size:.85rem">📸 صور مرفقة:</b><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">${imgs.map(u=>`<img src="${u}" onclick="window.open('${u}','_blank')" style="width:90px;height:90px;object-fit:cover;border-radius:8px;border:1.5px solid var(--line);cursor:pointer">`).join('')}</div></div>` : ''}
       <div class="tbl-wrap"><table class="tbl">
         <tr><th>المادة</th><th>المتوقع</th><th>الفعلي</th><th>الفرق</th></tr>
         ${details.map(d=>`<tr class="${Math.abs(d.variance)>0.001?'late':''}">
@@ -11806,7 +11774,9 @@ window.__lastEmpMealsData = null;
       <div id="wl_result"></div>`;
     runWasteReport();
   }
+  window.__wasteImgs = [];
   function wasteForm(){
+    window.__wasteImgs = [];
     modal(`<h3>🗑️ تسجيل إتلاف</h3>
       <div class="fld"><label>نوع الإتلاف</label>
         <div style="display:flex;gap:8px">
@@ -11835,7 +11805,30 @@ window.__lastEmpMealsData = null;
         <option>خطأ تحضير</option><option>سقط أرض</option><option>أخرى</option>
       </select></div>
       <div class="fld"><label>ملاحظة إضافية (اختياري)</label><input id="wf_note" placeholder="تفاصيل إضافية..."></div>
+      <div style="background:#fff8e1;border-radius:10px;padding:10px 12px;margin:10px 0">
+        <label style="font-weight:800;font-size:.85rem">📸 صورة إثبات الإتلاف (إجباري)</label>
+        <div style="font-size:.78rem;color:var(--muted);font-weight:600;margin-bottom:6px">صوّري المادة/الصنف التالف قبل ما ترميه — دليل حقيقي بدل ما يكون مجرد رقم مكتوب.</div>
+        <input type="file" id="wasteFiles" accept="image/*" capture="environment" multiple onchange="addWasteImages(this)">
+        <div id="wasteImgPrev" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"></div>
+      </div>
       <div class="m-act"><button class="save" onclick="saveWaste()">تسجيل ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
+  }
+  function addWasteImages(input){
+    const files = input.files; if(!files || !files.length) return;
+    [...files].forEach(f=>{
+      const img = new Image();
+      img.onload = ()=>{
+        const cv = document.createElement('canvas');
+        const scale = Math.min(1, 900/Math.max(img.width, img.height));
+        cv.width = Math.round(img.width*scale); cv.height = Math.round(img.height*scale);
+        cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+        const dataUrl = cv.toDataURL('image/jpeg', 0.75);
+        window.__wasteImgs.push(dataUrl);
+        const prev = document.getElementById('wasteImgPrev');
+        if(prev) prev.innerHTML += `<img src="${dataUrl}" style="width:80px;height:80px;object-fit:cover;border-radius:8px;border:1.5px solid var(--line)">`;
+      };
+      img.src = URL.createObjectURL(f);
+    });
   }
   function setWasteType(type){
     document.getElementById('wf_type_ing').className = type==='ing' ? 'mini ok' : 'mini tog';
@@ -11853,17 +11846,26 @@ window.__lastEmpMealsData = null;
     const note = document.getElementById('wf_note').value.trim();
     if(isNaN(qty)||qty<=0){ toast('⚠️ اكتب كمية صحيحة'); return; }
     if(!branchId){ toast('⚠️ اختر الفرع'); return; }
+    // 📸 صورة إثبات إجبارية للموظفين (مش للمالك) — عشان نتأكد إنه الإتلاف حقيقي مش رقم مكتوب بس
+    if(!isAdmin() && (!window.__wasteImgs || !window.__wasteImgs.length)){
+      toast('⚠️ لازم ترفعي صورة إثبات للإتلاف قبل ما تسجّليه');
+      unlockSubmit('saveWaste');
+      return;
+    }
+    const images = window.__wasteImgs||[];
     if(isItemMode){
       const itemId = document.getElementById('wf_item').value;
       if(!itemId){ toast('⚠️ اختر الصنف'); return; }
-      await saveWasteForItem(itemId, qty, branchId, reason, note);
+      await saveWasteForItem(itemId, qty, branchId, reason, note, images);
+      window.__wasteImgs = [];
       return;
     }
     const ingId = document.getElementById('wf_ing').value;
     if(!ingId){ toast('⚠️ اختر المادة'); return; }
-    await saveWasteForIngredient(ingId, qty, branchId, reason, note);
+    await saveWasteForIngredient(ingId, qty, branchId, reason, note, false, images);
+    window.__wasteImgs = [];
   }
-  async function saveWasteForItem(itemId, qty, branchId, reason, note){
+  async function saveWasteForItem(itemId, qty, branchId, reason, note, images){
     try{
       const item = ITEMS.find(i=>i.id===itemId);
       const [{ data: recipeRows }, { data: fixedRows }] = await Promise.all([
@@ -11886,13 +11888,13 @@ window.__lastEmpMealsData = null;
       const merged = {};
       lines.forEach(l=>{ merged[l.ingredient_id] = (merged[l.ingredient_id]||0) + l.qty; });
       for(const [ingId, ingQty] of Object.entries(merged)){
-        await saveWasteForIngredient(ingId, ingQty, branchId, reason, (note?note+' — ':'')+'من إتلاف صنف: '+(item?.name_ar||'—')+' ×'+qty, true);
+        await saveWasteForIngredient(ingId, ingQty, branchId, reason, (note?note+' — ':'')+'من إتلاف صنف: '+(item?.name_ar||'—')+' ×'+qty, true, images);
       }
       toast('✓ اتسجل إتلاف "'+(item?.name_ar||'الصنف')+'" وانخصمت كل مكوناته من المخزون'); closeModal();
       if(canManageWaste()) renderWaste();
     }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
-  async function saveWasteForIngredient(ingId, qty, branchId, reason, note, silent){
+  async function saveWasteForIngredient(ingId, qty, branchId, reason, note, silent, images){
     try{
       // خصم من مخزون الفرع
       const {data:bi} = await db.from('branch_inventory').select('id,stock').eq('branch_id',branchId).eq('ingredient_id',ingId).maybeSingle();
@@ -11911,7 +11913,7 @@ window.__lastEmpMealsData = null;
       // تسجيل بجدول الإتلاف
       const { error } = await db.from('waste_log').insert({
         branch_id: branchId, ingredient_id: ingId, quantity: qty,
-        staff_id: ME.id, staff_name: ME.full_name, reason, notes: note||null
+        staff_id: ME.id, staff_name: ME.full_name, reason, notes: note||null, images: images||[]
       });
       if(error){ toast('✗ '+error.message); console.error(error); return; }
       logMovement(branchId, ingId, -qty, 'waste', 'إتلاف — '+reason+(note?' — '+note:''));
@@ -11999,10 +12001,20 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
             <td><span style="color:var(--warn);font-weight:800">${esc(w.reason||'—')}</span></td>
             <td><b style="color:var(--maroon)">${esc(w.staff_name||'—')}</b></td>
             <td style="font-size:.82rem;color:var(--muted)">${esc(w.notes||'—')}</td>
-            <td><button class="mini ok" onclick="printWasteLogPDF(${idx})">🖨️ سند</button></td>
+            <td><button class="mini ok" onclick="printWasteLogPDF(${idx})">🖨️ سند</button>${(w.images&&w.images.length)?` <button class="mini tog" onclick="showWasteImages(${idx})">📸 صورة</button>`:''}</td>
           </tr>`).join('')||'<tr><td colspan="8" class="empty-note">ما في إتلافات بهاي الفترة</td></tr>'}
         </table></div>`;
     }catch(e){ R.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
+  }
+  function showWasteImages(idx){
+    const w = WASTE_DATA[idx]; if(!w) return;
+    const imgs = w.images||[];
+    modal(`<h3>📸 صور إتلاف — ${esc(w.ingredients?.name||'—')}</h3>
+      <div style="color:var(--muted);font-weight:700;margin-bottom:10px">${new Date(w.created_at).toLocaleString('ar-JO')} — ${esc(w.staff_name||'—')}</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        ${imgs.map(u=>`<img src="${u}" onclick="window.open('${u}','_blank')" style="width:150px;height:150px;object-fit:cover;border-radius:10px;border:1.5px solid var(--line);cursor:pointer">`).join('') || '<div class="empty-note">ما في صور</div>'}
+      </div>
+      <div class="m-act"><button class="cancel" onclick="closeModal()">إغلاق</button></div>`);
   }
   function printWasteLogPDF(idx){
     const w = WASTE_DATA[idx]; if(!w) return;
