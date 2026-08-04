@@ -579,6 +579,7 @@
         <button data-r="financial" onclick="repTab('financial')">📊 مالي شامل</button>
         <button data-r="expenses" onclick="repTab('expenses')">💸 المصاريف</button>
         <button data-r="purchases" onclick="repTab('purchases')">🛒 المشتريات</button>
+        <button data-r="ingredient_consumption" onclick="repTab('ingredient_consumption')">🧂 استهلاك المكونات</button>
         <button data-r="profit" onclick="repTab('profit')">💰 الأرباح</button>
         <button data-r="foodcost" onclick="repTab('foodcost')">🍔 Food Cost</button>
       </div>
@@ -630,6 +631,7 @@
         <button data-a="sett" onclick="admTab('sett')">🔧 إعدادات</button>
         <button data-a="shifts" onclick="admTab('shifts')">🔄 شيفتات</button>
         <button data-a="productTimeline" onclick="admTab('productTimeline')" style="background:#c8f0e0;border-color:#0d9c6c">📜 خط سير المنتج</button>
+        <button data-a="spotCheck" onclick="admTab('spotCheck')" style="background:#ffe0c8;border-color:#e07b1e">🎯 جرد عشوائي (فجائي)</button>
       </div>
       <div id="admContent"></div>
     </section>
@@ -1208,12 +1210,14 @@
       tab_shiftSchedule: 'جدول الدوام المحدد (الكل)',
       tab_shifts: 'شيفتات',
       tab_productTimeline: 'خط سير المنتج',
+      tab_spotCheck: 'شاشة الجرد العشوائي (فجائي)',
     },
     '🔓 صلاحيات إدارية دقيقة (بدائل قابلة للاختيار لوحدها)': {
       fin_approvals: 'الموافقات المالية (مصاريف، تسوية مشتريات، دفعات موردين، خصم يدوي حر، الخزينة)',
       shift_adj_manage: 'إدارة تسويات الشيفت (عجز/زيادة الدرج) — اعتماد/رفض/حذف',
       delete_records: 'حذف نهائي لسجلات حساسة (عملاء، أصناف، مكونات، جرد، نقل بضاعة)',
       inventory_reveal: 'رؤية الفرق الحقيقي أثناء الجرد (مو جرد أعمى) + كل الفروع بالمخزون',
+      spot_check: 'جرد عشوائي (فجائي) على أصناف مشكوك فيها',
       cross_branch_reports: 'رؤية كل الفروع (بحث الفواتير، سجل اليوم، التقارير) بدل فرعه بس',
       waste_manage: 'إدارة الإتلاف',
     },
@@ -5237,7 +5241,7 @@
           return `<tr><td>${esc(sh.staff?.full_name||'—')}</td><td>${esc(sh.branches?.name_ar||'—')}</td><td>${new Date(sh.start_time).toLocaleString('ar-JO')}</td><td>${sh.end_time?new Date(sh.end_time).toLocaleString('ar-JO'):'<b style="color:var(--ok)">🟢 مفتوح</b>'}</td><td>${fmt(sh.opening_balance)}</td><td>${sh.expected_balance!==null?fmt(sh.expected_balance):'—'}</td><td>${sh.closing_balance!==null?fmt(sh.closing_balance):'—'}</td><td>${m}</td></tr>`;
         }));
     }
-    if(['daily','expenses','purchases','profit','foodcost'].includes(repMode)){ loadRepExtra(repMode); return; }
+    if(['daily','expenses','purchases','profit','foodcost','ingredient_consumption'].includes(repMode)){ loadRepExtra(repMode); return; }
     if(repMode==='cancel'){
       const cn = REP_ORDERS.filter(o=>o.status==='cancelled');
       const lost = cn.reduce((a,o)=>a+parseFloat(o.total||0),0);
@@ -5363,7 +5367,7 @@
     items:'items_manage', cats:'cats_manage', codes:'codes_manage', schedDisc:'codes_manage', staff:'staff_manage', roles:'admin_only', branches:'branches_manage', sett:'settings_manage', devices:'devices_manage',
     ingredients:'inventory_view', recipes:'inventory_view',
     inventory:'inventory_audit', transfers:'inventory_transfer', warehouse:'tab_warehouse', treasury:'tab_treasury', hr:'tab_hr', chats:'tab_chats', dailyAudits:'tab_dailyAudits', hrLocations:'tab_hrLocations', dutyHours:'tab_dutyHours', hrClosures:'tab_hrClosures', ordersScreen:'tab_ordersScreen',
-    complaints:'tab_complaints', violations:'tab_violations', deductions:'tab_deductions', rewards:'tab_rewards', activityLog:'tab_activityLog', manufacturing:'tab_manufacturing', satisfaction:'tab_satisfaction', ccPoints:'tab_ccPoints', shiftSchedule:'tab_shiftSchedule', shifts:'tab_shifts', productTimeline:'tab_productTimeline',
+    complaints:'tab_complaints', violations:'tab_violations', deductions:'tab_deductions', rewards:'tab_rewards', activityLog:'tab_activityLog', manufacturing:'tab_manufacturing', satisfaction:'tab_satisfaction', ccPoints:'tab_ccPoints', shiftSchedule:'tab_shiftSchedule', shifts:'tab_shifts', productTimeline:'tab_productTimeline', spotCheck:'tab_spotCheck',
     expenses:'expenses_view', purchases:'purchases_view',
     platforms:'platforms_view', empmeals:'empmeals_view', topcust:'topcust_view', waste:'waste_log', suppliers:'purchases_view',
   };
@@ -5636,6 +5640,7 @@
       renderShiftAdjustments();
     }
     if(admView==='productTimeline'){ renderProductTimeline(); return; }
+    if(admView==='spotCheck'){ renderSpotCheck(); return; }
     if(admView==='complaints'){
       C.innerHTML = `<div id="complaintsBox"><div class="empty-note">جاري التحميل...</div></div>`;
       renderComplaints();
@@ -7038,7 +7043,124 @@
   /* ================= 🏭 التصنيع (مواد خام ← منتج مصنّع) ================= */
   let MFG_RECIPES = [];
   let mfgRowIdx = 1;
-  /* ================= 📜 خط سير المنتج — كل حركة صارت على مادة من الشراء لغاية البيع/الإتلاف ================= */
+  /* ================= 🎯 جرد عشوائي (فجائي) — على أصناف محددة مشكوك فيها بس، مش كل المخزون ================= */
+  let SPOT_CHECK_ROWS = [];
+  async function renderSpotCheck(){
+    await loadIngredients();
+    SPOT_CHECK_ROWS = [];
+    const C = document.getElementById('admContent');
+    const myBranches = ME.branch_id ? [BRANCHES.find(b=>b.id===ME.branch_id)] : BRANCHES;
+    C.innerHTML = `
+      <div class="panel" style="margin-bottom:14px">
+        <h3>🎯 جرد عشوائي (فجائي)</h3>
+        <div style="font-size:.85rem;color:var(--muted);font-weight:700;margin-top:6px">للفحص السريع على صنف أو كذا صنف مشكوك فيهم بس — بدون ما تحتاجي تجردي المستودع كامل. النتيجة فورية، ومربوطة بـ"خط سير المنتج" لتفاصيل أعمق.</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;align-items:end">
+          <div style="flex:1;min-width:150px"><label style="font-weight:700;font-size:.82rem">الفرع</label><br>
+            <select id="sc_branch"><option value="">اختاري فرع...</option>${myBranches.map(b=>`<option value="${b.id}">${esc(b.name_ar)}</option>`).join('')}</select></div>
+          <div style="flex:2;min-width:200px"><label style="font-weight:700;font-size:.82rem">أضيفي مادة للفحص</label><br>
+            <select id="sc_ing_add" onchange="addSpotCheckRow()"><option value="">اختاري مادة تضيفيها...</option>${INGR.map(i=>`<option value="${i.id}">${esc(i.name)} (${esc(i.unit)})</option>`).join('')}</select></div>
+        </div>
+      </div>
+      <div id="sc_rows"></div>
+      <div class="m-act" id="sc_actions" style="display:none">
+        <button class="save" onclick="saveSpotCheck()">💾 حفظ التقرير</button>
+      </div>
+      <div id="sc_history" style="margin-top:20px"></div>`;
+    renderSpotCheckHistory();
+  }
+  function addSpotCheckRow(){
+    const sel = document.getElementById('sc_ing_add');
+    const ingId = sel.value; if(!ingId) return;
+    if(SPOT_CHECK_ROWS.find(r=>r.ingredient_id===ingId)){ toast('⚠️ المادة مضافة أصلًا'); sel.value=''; return; }
+    const ing = INGR.find(i=>i.id===ingId);
+    SPOT_CHECK_ROWS.push({ ingredient_id: ingId, name: ing?.name, unit: ing?.unit, expected: null, actual: null });
+    sel.value = '';
+    renderSpotCheckRows();
+  }
+  function removeSpotCheckRow(ingId){
+    SPOT_CHECK_ROWS = SPOT_CHECK_ROWS.filter(r=>r.ingredient_id!==ingId);
+    renderSpotCheckRows();
+  }
+  function renderSpotCheckRows(){
+    const wrap = document.getElementById('sc_rows'); if(!wrap) return;
+    document.getElementById('sc_actions').style.display = SPOT_CHECK_ROWS.length ? '' : 'none';
+    wrap.innerHTML = SPOT_CHECK_ROWS.map((r,idx)=>`
+      <div class="panel" style="margin-bottom:10px" id="sc_row_${idx}">
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <b style="flex:1;min-width:150px">${esc(r.name)} <small style="color:var(--muted)">(${esc(r.unit)})</small></b>
+          <input type="number" step="0.01" placeholder="الكمية الفعلية (عدّيها الآن)..." oninput="updateSpotCheckActual('${r.ingredient_id}', this.value)" style="flex:1;min-width:150px;border:1.5px solid var(--line);border-radius:10px;padding:8px 10px">
+          <button class="mini ok" onclick="compareSpotCheckRow('${r.ingredient_id}')">🔍 قارن الآن</button>
+          <button class="mini del" onclick="removeSpotCheckRow('${r.ingredient_id}')">🗑️</button>
+        </div>
+        <div id="sc_result_${idx}" style="margin-top:8px"></div>
+      </div>`).join('');
+  }
+  function updateSpotCheckActual(ingId, val){
+    const r = SPOT_CHECK_ROWS.find(x=>x.ingredient_id===ingId); if(r) r.actual = parseFloat(val);
+  }
+  async function compareSpotCheckRow(ingId){
+    const branchId = document.getElementById('sc_branch')?.value;
+    if(!branchId){ toast('⚠️ اختاري الفرع أول'); return; }
+    const idx = SPOT_CHECK_ROWS.findIndex(r=>r.ingredient_id===ingId);
+    const r = SPOT_CHECK_ROWS[idx]; if(!r) return;
+    if(r.actual==null || isNaN(r.actual)){ toast('⚠️ اكتبي الكمية الفعلية أول'); return; }
+    const { data: bi } = await db.from('branch_inventory').select('stock').eq('branch_id', branchId).eq('ingredient_id', ingId).maybeSingle();
+    r.expected = parseFloat(bi?.stock||0);
+    r.variance = r.actual - r.expected;
+    const resDiv = document.getElementById('sc_result_'+idx);
+    if(!resDiv) return;
+    const ok = Math.abs(r.variance) < 0.01;
+    resDiv.innerHTML = `<div style="background:${ok?'#e0ffe0':'#ffe0e0'};border-radius:8px;padding:10px 12px;font-weight:800">
+      المتوقع بالنظام: ${r.expected.toFixed(2)} — الفعلي: ${r.actual.toFixed(2)} —
+      <span style="color:${ok?'var(--ok)':'var(--red)'}">${ok?'✅ مطابق':(r.variance<0?'🔻 نقص '+Math.abs(r.variance).toFixed(2):'🔺 زيادة '+r.variance.toFixed(2))}</span>
+      ${!ok?`<button class="mini tog" style="margin-right:8px" onclick="jumpToProductTimeline('${ingId}','${branchId}')">📜 افحصي خط السير الكامل</button>`:''}
+    </div>`;
+  }
+  function jumpToProductTimeline(ingId, branchId){
+    admView = 'productTimeline';
+    renderAdmin();
+    setTimeout(()=>{
+      PT_FILTER.ingredient = ingId; PT_FILTER.branch = branchId;
+      const d = new Date(); d.setDate(d.getDate()-30);
+      PT_FILTER.from = d.toISOString().split('T')[0]; PT_FILTER.to = localTodayStr();
+      renderProductTimeline();
+    }, 100);
+  }
+  async function saveSpotCheck(){
+    const branchId = document.getElementById('sc_branch')?.value;
+    if(!branchId){ toast('⚠️ اختاري الفرع'); return; }
+    const checked = SPOT_CHECK_ROWS.filter(r=>r.expected!=null);
+    if(!checked.length){ toast('⚠️ قارني مادة واحدة على الأقل ("🔍 قارن الآن") قبل الحفظ'); return; }
+    try{
+      const { error } = await db.from('spot_check_audits').insert({
+        branch_id: branchId, staff_id: ME.id, staff_name: ME.full_name,
+        items: checked.map(r=>({ ingredient_id:r.ingredient_id, name:r.name, expected:r.expected, actual:r.actual, variance:r.variance })),
+      });
+      if(error){ toast('✗ '+error.message); console.error(error); return; }
+      await logActivity('spot_check_audit', 'جرد عشوائي — '+checked.length+' مادة');
+      toast('✓ اتحفظ التقرير'); SPOT_CHECK_ROWS = []; renderSpotCheck();
+    }catch(e){ toast('✗ '+e.message); }
+  }
+  async function renderSpotCheckHistory(){
+    const H = document.getElementById('sc_history'); if(!H) return;
+    const { data, error } = await db.from('spot_check_audits').select('*, branches(name_ar)').order('created_at',{ascending:false}).limit(30);
+    if(error){ H.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message||'الجدول spot_check_audits غير موجود — نفّذ SQL أولاً')}</div>`; return; }
+    H.innerHTML = `<h4 style="color:var(--maroon);margin-bottom:8px">📜 سجل الجرد العشوائي السابق</h4>
+      <div class="tbl-wrap"><table class="tbl">
+        <tr><th>التاريخ</th><th>الفرع</th><th>بواسطة</th><th>المواد المفحوصة</th><th>الفروقات</th></tr>
+        ${(data||[]).map(a=>{
+          const items = a.items||[];
+          const withVariance = items.filter(i=>Math.abs(i.variance)>=0.01);
+          return `<tr>
+            <td>${new Date(a.created_at).toLocaleString('ar-JO')}</td>
+            <td>${esc(a.branches?.name_ar||'—')}</td>
+            <td><b>${esc(a.staff_name||'—')}</b></td>
+            <td>${items.map(i=>esc(i.name)).join('، ')}</td>
+            <td>${withVariance.length ? withVariance.map(i=>`<span style="color:var(--red);font-weight:800">${esc(i.name)}: ${i.variance>0?'+':''}${i.variance.toFixed(2)}</span>`).join('<br>') : '<span style="color:var(--ok)">✅ الكل مطابق</span>'}</td>
+          </tr>`;
+        }).join('')||'<tr><td colspan="5" class="empty-note">ما في جرد عشوائي مسجّل بعد</td></tr>'}
+      </table></div>`;
+  }
   let PT_FILTER = { ingredient:'', branch:'', from:'', to:'' };
   const MOVEMENT_TYPE_AR = {
     purchase:'🛒 شراء', sale:'🧾 بيع', waste:'🗑️ إتلاف', audit:'📋 تصحيح جرد', manual:'✏️ تعديل يدوي',
@@ -8280,6 +8402,63 @@
           <td><b>${esc(p.supplier||'—')}</b></td>
           <td>${(p.purchase_items||[]).map(i=>i.qty+'×'+esc(i.ingredients?.name||'—')).join('، ')}</td>
           <td><b>${fmt(p.total)}</b></td></tr>`));
+    }
+    if(mode==='ingredient_consumption'){
+      await loadIngredients();
+      D.innerHTML = '<div class="empty-note">... جاري الحساب</div>';
+      const from = document.getElementById('salesFrom')?.value, to = document.getElementById('salesTo')?.value;
+      const fromIso = from ? localDayStart(from) : localDayStart(localTodayStr());
+      const toIso = to ? localDayEnd(to) : localDayEnd(localTodayStr());
+      try{
+        // 1️⃣ الاستهلاك "النظري" — منعيد حسابه من الصفر مباشرة من الطلبات الحقيقية × كمية كل وصفة،
+        // بشكل مستقل تمامًا عن جدول حركات المخزون. لو في فرق بينه وبين "الفعلي المسجّل"، هاد معناه
+        // في خلل بمنطق الخصم نفسه وقت البيع (زي وصفة تغيّرت بعد ما صارت مبيعات عليها)
+        let ordersQ = db.from('orders').select('id, status, order_items(menu_item_id, quantity)')
+          .neq('status','cancelled').gte('created_at', fromIso).lte('created_at', toIso);
+        const { data: orders, error: ordersErr } = await ordersQ;
+        if(ordersErr){ D.innerHTML = `<div class="alert-red">⚠️ ${esc(ordersErr.message)}</div>`; return; }
+        const itemIds = [...new Set((orders||[]).flatMap(o=>(o.order_items||[]).map(l=>l.menu_item_id).filter(Boolean)))];
+        const { data: recipes } = itemIds.length ? await db.from('recipes').select('menu_item_id, recipe_items(ingredient_id, quantity)').in('menu_item_id', itemIds) : {data:[]};
+        const theoretical = {};
+        (orders||[]).forEach(o=>(o.order_items||[]).forEach(l=>{
+          const recipe = (recipes||[]).find(r=>r.menu_item_id===l.menu_item_id);
+          (recipe?.recipe_items||[]).forEach(ri=>{
+            theoretical[ri.ingredient_id] = (theoretical[ri.ingredient_id]||0) + parseFloat(ri.quantity||0)*(l.quantity||0);
+          });
+        }));
+        // 2️⃣ الاستهلاك "الفعلي المسجّل" — من جدول حركات المخزون، نوع "بيع" بس، بنفس الفترة
+        const { data: actualMoves, error: movesErr } = await fetchAllRows('inventory_movements', 'ingredient_id, qty, type, created_at');
+        if(movesErr){ D.innerHTML = `<div class="alert-red">⚠️ ${esc(movesErr.message||'الجدول inventory_movements غير موجود')}</div>`; return; }
+        const actual = {};
+        (actualMoves||[]).filter(m=>m.type==='sale' && m.created_at>=fromIso && m.created_at<=toIso).forEach(m=>{
+          actual[m.ingredient_id] = (actual[m.ingredient_id]||0) + Math.abs(parseFloat(m.qty||0));
+        });
+        const allIngIds = new Set([...Object.keys(theoretical), ...Object.keys(actual)]);
+        const rows = [...allIngIds].map(ingId=>{
+          const ing = INGR.find(i=>i.id===ingId);
+          const th = theoretical[ingId]||0, ac = actual[ingId]||0;
+          const variance = ac - th;
+          return { name: ing?.name||'مادة محذوفة', unit: ing?.unit||'', theoretical: th, actual: ac, variance };
+        }).sort((a,b)=>Math.abs(b.variance)-Math.abs(a.variance));
+        const bigMismatches = rows.filter(r=>Math.abs(r.variance) > Math.max(r.theoretical*0.05, 0.5));
+        D.innerHTML = `
+          <div style="font-size:.85rem;color:var(--muted);font-weight:700;margin-bottom:10px">
+            "النظري" = محسوب من جديد الآن مباشرة من الطلبات الحقيقية × كمية كل وصفة (مستقل عن أي جدول آخر).
+            "الفعلي المسجّل" = من سجل حركات المخزون الحقيقي وقت البيع. أي فرق كبير بينهم معناه خلل بمنطق الخصم نفسه (زي وصفة تغيّرت بعد ما صارت مبيعات عليها)، مش سرقة بالضرورة.
+          </div>
+          ${bigMismatches.length ? `<div class="panel" style="border:2px solid var(--red);margin-bottom:14px">
+            <h4 style="color:var(--red);margin-bottom:8px">⚠️ ${bigMismatches.length} مادة فيها فرق كبير (أكتر من 5% أو نص وحدة) بين النظري والمسجّل فعليًا</h4>
+          </div>` : '<div class="panel" style="border:2px solid var(--ok);margin-bottom:14px"><b style="color:var(--ok)">✅ كل المواد متطابقة تقريبًا بين النظري والمسجّل — منطق الخصم شغّال صح لهاي الفترة</b></div>'}
+          <div class="tbl-wrap"><table class="tbl">
+            <tr><th>المادة</th><th>نظري (من الوصفات)</th><th>فعلي مسجّل (من المخزون)</th><th>الفرق</th></tr>
+            ${rows.map(r=>`<tr class="${Math.abs(r.variance)>Math.max(r.theoretical*0.05,0.5)?'late':''}">
+              <td><b>${esc(r.name)}</b></td>
+              <td>${r.theoretical.toFixed(2)} ${esc(r.unit)}</td>
+              <td>${r.actual.toFixed(2)} ${esc(r.unit)}</td>
+              <td><b style="color:${Math.abs(r.variance)<0.01?'var(--ok)':(r.variance>0?'var(--red)':'var(--warn)')}">${r.variance>0?'+':''}${r.variance.toFixed(2)}</b></td>
+            </tr>`).join('')||'<tr><td colspan="4" class="empty-note">ما في بيانات بهاي الفترة</td></tr>'}
+          </table></div>`;
+      }catch(e){ D.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
     }
   if(mode==='profit'){
       const range = getRepRange(); // 🔧 إصلاح: كان يقرأ التاريخ مباشرة بدون احترام فلتر "هذا الشهر" السريع
