@@ -2284,18 +2284,40 @@
   function openDrawerRequest(){
     if(!perm('drawer_open')){ toast('⛔ ما عندك صلاحية فتح الدرج'); return; }
     if(!currentShift){ toast('⚠️ لازم يكون عندك شيفت مفتوح'); return; }
+    const threshold = SETTINGS.drawer_pin_threshold ?? 10;
     modal(`<h3>🔓 فتح الدرج — سحب مبلغ</h3>
       <div style="color:var(--muted);font-size:.82rem;font-weight:700;margin-bottom:10px">هاد المبلغ رح ينخصم من الكاش المتوقع بدرجك وقت الإغلاق، وبينضاف كمصروف بانتظار موافقة المدير.</div>
-      <div class="fld"><label>المبلغ (${CURRENCY})</label><input id="dr_amt" type="number" step="0.01" placeholder="مثال: 10"></div>
+      <div class="fld"><label>المبلغ (${CURRENCY})</label><input id="dr_amt" type="number" step="0.01" placeholder="مثال: 10" oninput="toggleDrawerPinField(${threshold})"></div>
       <div class="fld"><label>السبب *</label><input id="dr_reason" placeholder="مثال: ثمن جرة غاز"></div>
+      <div id="dr_pin_wrap" class="fld hidden">
+        <label>🔒 رقم المالك السري (المبلغ أكبر من ${fmt(threshold)} ${CURRENCY})</label>
+        <input id="dr_pin" type="password" inputmode="numeric" placeholder="أدخلي رقم المالك السري للتأكيد">
+      </div>
       <div class="m-act"><button class="save" onclick="saveDrawerRequest()">تأكيد السحب ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
+  }
+  function toggleDrawerPinField(threshold){
+    const amt = parseFloat(document.getElementById('dr_amt')?.value)||0;
+    const wrap = document.getElementById('dr_pin_wrap');
+    if(wrap) wrap.classList.toggle('hidden', amt<=threshold);
   }
   async function saveDrawerRequest(){
     if(!lockSubmit('saveDrawerRequest')) return;
     const amt = parseFloat(document.getElementById('dr_amt').value);
     const reason = document.getElementById('dr_reason').value.trim();
+    const threshold = SETTINGS.drawer_pin_threshold ?? 10;
     if(isNaN(amt)||amt<=0){ toast('⚠️ اكتب مبلغ صحيح'); unlockSubmit('saveDrawerRequest'); return; }
     if(!reason){ toast('⚠️ السبب إجباري'); unlockSubmit('saveDrawerRequest'); return; }
+    // 🔒 مبلغ أكبر من الحد المسموح بدون تأكيد — لازم رقم سري المالك (نتحقق عن طريق نفس آلية تسجيل
+    // الدخول الآمنة، وما بنسمح إلا لو صاحب الرقم فعليًا مالك/أدمن حقيقي)
+    if(amt > threshold){
+      const pin = normalizeDigits(document.getElementById('dr_pin')?.value||'');
+      if(!pin){ toast('⚠️ لازم رقم المالك السري لسحب مبلغ أكبر من '+fmt(threshold)); unlockSubmit('saveDrawerRequest'); return; }
+      try{
+        const { data, error: pinErr } = await db.functions.invoke('rapid-handler', { body: { pin } });
+        if(pinErr || !data || data.error || !data.staff){ toast('⛔ الرقم السري غلط'); unlockSubmit('saveDrawerRequest'); return; }
+        if(data.staff.role !== 'admin'){ toast('⛔ هاد الرقم مش رقم المالك — السحب فوق '+fmt(threshold)+' يحتاج تأكيد المالك تحديدًا'); unlockSubmit('saveDrawerRequest'); return; }
+      }catch(e){ toast('✗ فشل التحقق من الرقم السري: '+e.message); unlockSubmit('saveDrawerRequest'); return; }
+    }
     try{
       const { error } = await db.from('expenses').insert({
         expense_date: new Date().toISOString().split('T')[0],
@@ -5563,6 +5585,10 @@
         <div class="fld" style="margin-top:10px"><label>☕ مدة البريك المسموحة يوميًا (دقيقة)</label>
           <input type="number" id="f_breakLimit" min="1" step="5" value="${SETTINGS.break_limit_minutes||60}" style="width:150px">
           <div style="font-size:.76rem;color:var(--muted);font-weight:600;margin-top:4px">أي دقيقة زايدة عن هالحد باليوم الواحد تنخصم تلقائيًا من ساعات دوام الموظف (بوابة HR وشاشة البريكات).</div>
+        </div>
+        <div class="fld" style="margin-top:10px"><label>🔓 حد سحب الدرج بدون رقم سري (${CURRENCY})</label>
+          <input type="number" id="f_drawerPinThreshold" min="0" step="1" value="${SETTINGS.drawer_pin_threshold ?? 10}" style="width:150px">
+          <div style="font-size:.76rem;color:var(--muted);font-weight:600;margin-top:4px">أي سحب درج أكبر من هالمبلغ بيطلب رقم سري المالك للتأكيد قبل ما يتنفذ. سحب أقل أو يساوي هالمبلغ بيمشي عادي بدون رقم سري.</div>
         </div>
         ${window.SJSPrinter?`
         <div class="fld"><label>🔵 طابعة البلوتوث (لوضع تطبيق أندرويد — بلوتوث)</label>
@@ -13378,6 +13404,7 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
       hr_portal_show_net: document.getElementById('f_hrShowNet')?.checked ?? true,
       hr_portal_show_advances: document.getElementById('f_hrShowAdvances')?.checked ?? true,
       break_limit_minutes: parseInt(document.getElementById('f_breakLimit')?.value) || 60,
+      drawer_pin_threshold: parseFloat(document.getElementById('f_drawerPinThreshold')?.value) ?? 10,
       hr_portal_show_meals: document.getElementById('f_hrShowMeals')?.checked ?? true,
       hr_portal_show_balance: document.getElementById('f_hrShowBalance')?.checked ?? true,
       delivery_whatsapp: f_wanum ? f_wanum.value.trim() : '',
