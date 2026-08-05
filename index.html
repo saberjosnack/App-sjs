@@ -3254,11 +3254,12 @@
       text += `🧑‍🍳 وجبة موظف: ${ord.employee_tab_name}\n`;
     }
     text += '─'.repeat(32) + '\n';
-    lines.forEach(l => {
+    lines.forEach((l, idx) => {
       const qty = l.qty ?? l.quantity;
       const nm = l.item ? l.item.name_ar : (l.item_name||'').split(' — 🧩')[0];
       const compDesc = l.compositionDesc || (l.item_name && l.item_name.includes(' — 🧩') ? l.item_name.split(' — 🧩')[1] : '');
       const pr = l.item ? l.item.price : l.unit_price;
+      if(idx>0) text += '·'.repeat(32) + '\n';
       text += `${qty}× ${nm.padEnd(20)} ${(pr*qty).toFixed(2)}\n`;
       if (compDesc) text += `  🧩 ${compDesc}\n`;
       if (l.note || l.notes) text += `  📝 ${l.note || l.notes}\n`;
