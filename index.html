@@ -633,6 +633,7 @@
         <button data-a="productTimeline" onclick="admTab('productTimeline')" style="background:#c8f0e0;border-color:#0d9c6c">📜 خط سير المنتج</button>
         <button data-a="spotCheck" onclick="admTab('spotCheck')" style="background:#ffe0c8;border-color:#e07b1e">🎯 جرد عشوائي (فجائي)</button>
         <button data-a="breaksScreen" onclick="admTab('breaksScreen')" style="background:#fff0d8;border-color:#c88a00">☕ البريكات</button>
+        <button data-a="supplierPayments" onclick="admTab('supplierPayments')" style="background:#d8f0ff;border-color:#0d6efd">💳 دفعات الموردين</button>
       </div>
       <div id="admContent"></div>
     </section>
@@ -1213,6 +1214,7 @@
       tab_productTimeline: 'خط سير المنتج',
       tab_spotCheck: 'شاشة الجرد العشوائي (فجائي)',
       tab_breaksScreen: 'شاشة البريكات المستقلة',
+      tab_supplierPayments: 'كل دفعات الموردين (شاملة)',
     },
     '🔓 صلاحيات إدارية دقيقة (بدائل قابلة للاختيار لوحدها)': {
       fin_approvals: 'الموافقات المالية (مصاريف، تسوية مشتريات، دفعات موردين، خصم يدوي حر، الخزينة)',
@@ -5388,7 +5390,7 @@
     items:'items_manage', cats:'cats_manage', codes:'codes_manage', schedDisc:'codes_manage', staff:'staff_manage', roles:'admin_only', branches:'branches_manage', sett:'settings_manage', devices:'devices_manage',
     ingredients:'inventory_view', recipes:'inventory_view',
     inventory:'inventory_audit', transfers:'inventory_transfer', warehouse:'tab_warehouse', treasury:'tab_treasury', hr:'tab_hr', chats:'tab_chats', dailyAudits:'tab_dailyAudits', hrLocations:'tab_hrLocations', dutyHours:'tab_dutyHours', hrClosures:'tab_hrClosures', ordersScreen:'tab_ordersScreen',
-    complaints:'tab_complaints', violations:'tab_violations', deductions:'tab_deductions', rewards:'tab_rewards', activityLog:'tab_activityLog', manufacturing:'tab_manufacturing', satisfaction:'tab_satisfaction', ccPoints:'tab_ccPoints', shiftSchedule:'tab_shiftSchedule', shifts:'tab_shifts', productTimeline:'tab_productTimeline', spotCheck:'tab_spotCheck', breaksScreen:'tab_breaksScreen',
+    complaints:'tab_complaints', violations:'tab_violations', deductions:'tab_deductions', rewards:'tab_rewards', activityLog:'tab_activityLog', manufacturing:'tab_manufacturing', satisfaction:'tab_satisfaction', ccPoints:'tab_ccPoints', shiftSchedule:'tab_shiftSchedule', shifts:'tab_shifts', productTimeline:'tab_productTimeline', spotCheck:'tab_spotCheck', breaksScreen:'tab_breaksScreen', supplierPayments:'tab_supplierPayments',
     expenses:'expenses_view', purchases:'purchases_view',
     platforms:'platforms_view', empmeals:'empmeals_view', topcust:'topcust_view', waste:'waste_log', suppliers:'purchases_view',
   };
@@ -5667,6 +5669,7 @@
     if(admView==='productTimeline'){ renderProductTimeline(); return; }
     if(admView==='spotCheck'){ renderSpotCheck(); return; }
     if(admView==='breaksScreen'){ renderBreaksScreen(); return; }
+    if(admView==='supplierPayments'){ renderSupplierPayments(); return; }
     if(admView==='complaints'){
       C.innerHTML = `<div id="complaintsBox"><div class="empty-note">جاري التحميل...</div></div>`;
       renderComplaints();
@@ -10491,6 +10494,113 @@
   /* ---- سجل الحضور (بوابة الموظف) — عرض وتعديل من الأدمن بس ---- */
   /* ================= ☕ البريكات — شاشة مستقلة لكل الموظفين مع بعض ================= */
   let BR_FILTER = { from:'', to:'' };
+  /* ================= 💳 كل دفعات الموردين — شاملة، بالتاريخ والتفصيل الكامل ================= */
+  let SP_FILTER = { from:'', to:'', supplier:'' };
+  const PAY_METHOD_AR = { cash:'💵 كاش', bank_transfer:'🏦 تحويل بنكي', cliq:'📱 كليك', card:'💳 بطاقة' };
+  const ACC_AR = { cash:'💵 مصاري الفرع', capital:'🏦 رأس المال', bank:'🏦 كليك/بنك' };
+  async function renderSupplierPayments(){
+    const C = document.getElementById('admContent');
+    if(!SP_FILTER.from){ const d = new Date(); d.setDate(d.getDate()-30); SP_FILTER.from = d.toISOString().split('T')[0]; SP_FILTER.to = localTodayStr(); }
+    const { data: allPays } = await db.from('supplier_payments').select('supplier').order('supplier');
+    const suppliers = [...new Set((allPays||[]).map(p=>p.supplier).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ar'));
+    C.innerHTML = `
+      <div class="panel" style="margin-bottom:14px">
+        <h3>💳 كل دفعات الموردين</h3>
+        <div style="font-size:.85rem;color:var(--muted);font-weight:700;margin-top:6px">كل دفعة اتسددت لأي مورد، بتاريخها وتفاصيلها الكاملة — بغض النظر عن المورد أو الفاتورة.</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;align-items:end">
+          <div><label style="font-weight:700;font-size:.82rem">من تاريخ</label><br><input type="date" id="sp_from" value="${SP_FILTER.from}"></div>
+          <div><label style="font-weight:700;font-size:.82rem">إلى تاريخ</label><br><input type="date" id="sp_to" value="${SP_FILTER.to}"></div>
+          <div style="flex:1;min-width:180px"><label style="font-weight:700;font-size:.82rem">المورد</label><br>
+            <select id="sp_supplier" style="width:100%"><option value="">كل الموردين</option>${suppliers.map(s=>`<option value="${esc(s)}" ${SP_FILTER.supplier===s?'selected':''}>${esc(s)}</option>`).join('')}</select></div>
+          <button class="mini ok" onclick="SP_FILTER.from=document.getElementById('sp_from').value;SP_FILTER.to=document.getElementById('sp_to').value;SP_FILTER.supplier=document.getElementById('sp_supplier').value;renderSupplierPayments()">🔍 عرض</button>
+          <button class="mini ok" style="background:#1D6F42" onclick="exportSupplierPaymentsExcel()">📥 تصدير Excel</button>
+          <button class="mini ok" onclick="printSupplierPaymentsFull()">🖨️ طباعة كشف كامل</button>
+        </div>
+      </div>
+      <div id="sp_result"></div>`;
+    loadSupplierPayments();
+  }
+  async function loadSupplierPayments(){
+    const R = document.getElementById('sp_result'); if(!R) return;
+    R.innerHTML = '<div class="empty-note">... جاري التحميل</div>';
+    try{
+      let q = db.from('supplier_payments').select('*, purchases(purchase_date,total), branches(name_ar)')
+        .gte('created_at', localDayStart(SP_FILTER.from)).lte('created_at', localDayEnd(SP_FILTER.to))
+        .order('created_at',{ascending:false});
+      if(SP_FILTER.supplier) q = q.eq('supplier', SP_FILTER.supplier);
+      const { data, error } = await q;
+      if(error){ R.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message||'الجدول supplier_payments غير موجود')}</div>`; return; }
+      const payments = data||[];
+      window.__SP_DATA = payments;
+      const total = payments.reduce((a,p)=>a+parseFloat(p.amount||0),0);
+      const byAccount = {};
+      payments.forEach(p=>{ byAccount[p.account] = (byAccount[p.account]||0) + parseFloat(p.amount||0); });
+      R.innerHTML = `
+        <div class="panel" style="margin-bottom:14px">
+          <div style="display:flex;gap:10px;flex-wrap:wrap">
+            <div class="stat">عدد الدفعات<b>${payments.length}</b></div>
+            <div class="stat">إجمالي المدفوع<b style="color:var(--red)">${fmt(total)} ${CURRENCY}</b></div>
+            ${Object.entries(byAccount).map(([acc,amt])=>`<div class="stat">${ACC_AR[acc]||esc(acc)}<b>${fmt(amt)} ${CURRENCY}</b></div>`).join('')}
+          </div>
+        </div>
+        <div class="tbl-wrap"><table class="tbl">
+          <tr><th>التاريخ والوقت</th><th>المورد</th><th>المبلغ</th><th>طريقة الدفع</th><th>من حساب</th><th>الفرع</th><th>مرتبطة بفاتورة</th><th>ملاحظة</th><th>بواسطة</th></tr>
+          ${payments.map(p=>`<tr>
+            <td style="white-space:nowrap">${new Date(p.created_at).toLocaleString('ar-JO')}</td>
+            <td><b>${esc(p.supplier||'—')}</b></td>
+            <td><b style="color:var(--red)">${fmt(p.amount)} ${CURRENCY}</b></td>
+            <td>${PAY_METHOD_AR[p.payment_method]||esc(p.payment_method||'—')}</td>
+            <td>${ACC_AR[p.account]||esc(p.account||'—')}</td>
+            <td>${esc(p.branches?.name_ar||'عام')}</td>
+            <td>${p.purchases?`فاتورة ${new Date(p.purchases.purchase_date).toLocaleDateString('ar-JO')} (${fmt(p.purchases.total)} ${CURRENCY})`:'—'}</td>
+            <td style="font-size:.82rem;color:var(--muted)">${esc(p.note||'—')}</td>
+            <td style="font-size:.82rem">${esc(p.created_by||'—')}</td>
+          </tr>`).join('')||'<tr><td colspan="9" class="empty-note">ما في دفعات مسجّلة بهاي الفترة</td></tr>'}
+        </table></div>`;
+    }catch(e){ R.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
+  }
+  function exportSupplierPaymentsExcel(){
+    const rows = (window.__SP_DATA||[]).map(p=>({
+      'التاريخ والوقت': new Date(p.created_at).toLocaleString('ar-JO'),
+      'المورد': p.supplier||'—',
+      'المبلغ': parseFloat(p.amount||0),
+      'طريقة الدفع': PAY_METHOD_AR[p.payment_method]||p.payment_method||'—',
+      'من حساب': ACC_AR[p.account]||p.account||'—',
+      'الفرع': p.branches?.name_ar||'عام',
+      'مرتبطة بفاتورة': p.purchases ? (new Date(p.purchases.purchase_date).toLocaleDateString('ar-JO')+' — '+fmt(p.purchases.total)+' '+CURRENCY) : '—',
+      'ملاحظة': p.note||'—',
+      'بواسطة': p.created_by||'—',
+    }));
+    if(!rows.length){ toast('⚠️ ما في بيانات نصدّرها'); return; }
+    exportToExcel(rows, 'دفعات_الموردين_'+SP_FILTER.from+'_'+SP_FILTER.to, 'دفعات الموردين');
+  }
+  function printSupplierPaymentsFull(){
+    const payments = window.__SP_DATA||[];
+    if(!payments.length){ toast('⚠️ ما في بيانات نطبعها'); return; }
+    const total = payments.reduce((a,p)=>a+parseFloat(p.amount||0),0);
+    const win = window.open('', '_blank');
+    win.document.write(`<html dir="rtl"><head><meta charset="utf-8"><title>كشف دفعات الموردين</title>
+      <style>body{font-family:Arial;padding:20px}table{width:100%;border-collapse:collapse;font-size:.85rem}th,td{border:1px solid #999;padding:6px 8px;text-align:center}th{background:#5a1a1a;color:#FDE507}h1{text-align:center}
+      @media print{button{display:none}}</style></head><body>
+      <h1>📄 كشف دفعات الموردين — Saber Jo Snack</h1>
+      <div style="text-align:center;font-weight:700;margin-bottom:14px">${SP_FILTER.from} → ${SP_FILTER.to}${SP_FILTER.supplier?' — المورد: '+esc(SP_FILTER.supplier):' — كل الموردين'}</div>
+      <div style="text-align:center;font-weight:900;font-size:1.2rem;margin-bottom:14px">إجمالي المدفوع: ${fmt(total)} ${CURRENCY} — عدد الدفعات: ${payments.length}</div>
+      <table><tr><th>التاريخ</th><th>المورد</th><th>المبلغ</th><th>طريقة الدفع</th><th>من حساب</th><th>الفرع</th><th>ملاحظة</th><th>بواسطة</th></tr>
+      ${payments.map(p=>`<tr>
+        <td>${new Date(p.created_at).toLocaleString('ar-JO')}</td>
+        <td>${esc(p.supplier||'—')}</td>
+        <td>${fmt(p.amount)}</td>
+        <td>${PAY_METHOD_AR[p.payment_method]||esc(p.payment_method||'—')}</td>
+        <td>${ACC_AR[p.account]||esc(p.account||'—')}</td>
+        <td>${esc(p.branches?.name_ar||'عام')}</td>
+        <td>${esc(p.note||'—')}</td>
+        <td>${esc(p.created_by||'—')}</td>
+      </tr>`).join('')}
+      </table>
+      <button onclick="window.print()" style="margin-top:20px;padding:10px 20px">🖨️ طباعة</button>
+      </body></html>`);
+    win.document.close();
+  }
   async function renderBreaksScreen(){
     const C = document.getElementById('admContent');
     if(!BR_FILTER.from){ BR_FILTER.from = localTodayStr(); BR_FILTER.to = localTodayStr(); }
@@ -14717,6 +14827,7 @@ try {
             <button onclick="empClockIn()" style="width:100%;background:var(--ok);color:#fff;border:none;border-radius:14px;padding:18px;font-weight:900;font-size:1.1rem;cursor:pointer">▶️ تسجيل دخول</button>
           `}
         </div>
+        <button onclick="empChangePinForm()" style="width:100%;background:#fff;color:var(--maroon);border:1.5px solid var(--maroon);border-radius:12px;padding:12px;font-weight:800;font-size:.95rem;cursor:pointer;margin-bottom:14px">🔑 تغيير الرقم السري</button>
 
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
           ${settingOn('hr_portal_show_hours')?`<div class="stat">ساعات هالشهر<b>${hoursThisMonth.toFixed(1)}</b></div>`:''}
@@ -14937,6 +15048,37 @@ try {
       toast('✅ تم تسجيل الدخول'+(fence.name?' — '+fence.name:''));
       loadEmpPortal();
     }catch(e){ toast('⛔ '+e.message); }
+  }
+  function empChangePinForm(){
+    modal(`<h3>🔑 تغيير الرقم السري</h3>
+      <div style="font-size:.82rem;color:var(--muted);font-weight:700;margin-bottom:10px">الرقم الجديد رح يشتغل هون بالبوابة، وكمان بشاشة الكاشير لو حسابك مربوط فيها — نفس الرقم السري بمكان واحد.</div>
+      <div class="fld"><label>الرقم السري الحالي</label><input id="epc_old" type="password" inputmode="numeric" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;font-size:1rem"></div>
+      <div class="fld"><label>الرقم السري الجديد</label><input id="epc_new1" type="password" inputmode="numeric" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;font-size:1rem"></div>
+      <div class="fld"><label>تأكيد الرقم الجديد</label><input id="epc_new2" type="password" inputmode="numeric" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;font-size:1rem"></div>
+      <div class="m-act"><button class="save" onclick="saveEmpPinChange()">حفظ ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
+  }
+  async function saveEmpPinChange(){
+    const oldPin = normalizeDigits(document.getElementById('epc_old')?.value||'');
+    const newPin1 = normalizeDigits(document.getElementById('epc_new1')?.value||'');
+    const newPin2 = normalizeDigits(document.getElementById('epc_new2')?.value||'');
+    if(!oldPin || !newPin1 || !newPin2){ toast('⚠️ عبّي كل الخانات'); return; }
+    if(oldPin !== String(EMP.pin||'')){ toast('⛔ الرقم السري الحالي غلط'); return; }
+    if(newPin1 !== newPin2){ toast('⚠️ الرقم الجديد وتأكيده مش متطابقين'); return; }
+    if(newPin1.length < 4){ toast('⚠️ الرقم السري لازم يكون 4 أرقام على الأقل'); return; }
+    if(newPin1 === oldPin){ toast('⚠️ هاد نفس الرقم القديم — اختاري رقم مختلف'); return; }
+    try{
+      const { error: e1 } = await db.from('meal_names').update({ pin: newPin1 }).eq('id', EMP.id);
+      if(e1){ toast('✗ '+e1.message); return; }
+      EMP.pin = newPin1;
+      // 🔗 لو حسابها مربوط بحساب كاشير (linked_hr_id)، منحدّث نفس الرقم هناك كمان — التريغر بقاعدة
+      // البيانات بيتكفّل يحدّث pin_hash تلقائيًا، فبتقدر تسجّل دخول بالكاشير بنفس الرقم الجديد فورًا
+      const { data: linkedStaff } = await db.from('staff').select('id').eq('linked_hr_id', EMP.id);
+      if(linkedStaff && linkedStaff.length){
+        await db.from('staff').update({ pin: newPin1 }).in('id', linkedStaff.map(s=>s.id));
+      }
+      toast('✓ اتغيّر الرقم السري بنجاح'+(linkedStaff&&linkedStaff.length?' (وتزامن مع حساب الكاشير)':''));
+      closeModal();
+    }catch(e){ toast('✗ '+e.message); }
   }
   async function empClockOut(){
     if(!EMP_OPEN_LOG) return;
