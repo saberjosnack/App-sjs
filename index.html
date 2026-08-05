@@ -12809,7 +12809,7 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
       <button class="mini ok" style="margin:8px 0" onclick="runPlatformStatement('${platformId}','${esc(platformName)}')">📊 عرض كشف الحساب</button>
       <div style="background:#fff8e1;border-radius:10px;padding:10px 12px;margin:10px 0">
         <label style="font-weight:800;font-size:.85rem">🔢 أو دفعة بأرقام طلبات محددة (زي أرقام الملاحظات يلي بتميّزيها)</label>
-        <div style="font-size:.76rem;color:var(--muted);font-weight:600;margin:4px 0 6px">اكتبي أرقام الطلبات مفصولة بفاصلة أو مسافة (مثلاً: 1234, 1240, 1255) — بتلقّط بس هالطلبات بالتحديد بغض النظر عن التاريخ.</div>
+        <div style="font-size:.76rem;color:var(--muted);font-weight:600;margin:4px 0 6px">اكتبي أرقام طلبات المنصة نفسها (يلي بتكتبيها بخانة الملاحظات) مفصولة بفاصلة أو مسافة (مثلاً: 1234, 1240, 1255) — بيدوّر داخل الملاحظات ويلقّط بس هالطلبات بالتحديد بغض النظر عن التاريخ.</div>
         <textarea id="stmt_order_nums" rows="2" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:8px 10px" placeholder="1234, 1240, 1255, ..."></textarea>
         <button class="mini ok" style="margin-top:6px" onclick="runPlatformStatementByOrderNums('${platformId}','${esc(platformName)}')">🔍 احسب هالطلبات بس</button>
       </div>
@@ -12821,20 +12821,23 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
   }
   async function runPlatformStatementByOrderNums(platformId, platformName){
     const raw = document.getElementById('stmt_order_nums')?.value||'';
-    const nums = raw.split(/[,\s،]+/).map(n=>n.trim()).filter(Boolean).map(n=>parseInt(n)).filter(n=>!isNaN(n));
+    const nums = raw.split(/[,\s،]+/).map(n=>n.trim()).filter(Boolean);
     if(!nums.length){ toast('⚠️ اكتبي رقم طلب واحد على الأقل'); return; }
     const R = document.getElementById('stmt_result');
     R.innerHTML = '<div class="empty-note">... جاري الحساب</div>';
     try{
+      // 🔧 مهم: الأرقام يلي بتكتبيها هي رقم طلب المنصة نفسها (زي اشياءي) المكتوب داخل "الملاحظات"،
+      // مش رقم الطلب الداخلي تبع النظام — فمنبحث جوا نص الملاحظات (مش عمود order_number)
+      const orFilter = nums.map(n=>`notes.ilike.%${n}%`).join(',');
       const { data: orders, error } = await db.from('orders')
         .select('id, order_number, created_at, total, status, notes, platform_settled, branches(name_ar), order_items(item_name, quantity, unit_price)')
         .eq('platform_id', platformId)
-        .in('order_number', nums)
+        .or(orFilter)
         .order('created_at', {ascending:false});
       if(error){ R.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message)}</div>`; return; }
       const found = (orders||[]).filter(o=>o.status!=='cancelled');
-      const foundNums = new Set(found.map(o=>o.order_number));
-      const missing = nums.filter(n=>!foundNums.has(n));
+      // نتأكد أي رقم من يلي كتبتيهم فعلًا انلقى بملاحظة طلب واحد على الأقل، ونحذّر لو رقم ضاع
+      const missing = nums.filter(n=>!found.some(o=>(o.notes||'').includes(n)));
       const platform = PLATFORMS_DATA.find(p=>p.id===platformId);
       const commissionPct = parseFloat(platform?.commission_percent||0);
       window.__lastStatementData = { platformId, platformName, from:null, to:null, orders: found, commissionPct };
@@ -12842,7 +12845,7 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
       renderStatementTable();
       if(missing.length){
         const R2 = document.getElementById('stmt_result');
-        if(R2) R2.innerHTML = `<div class="alert-red" style="margin-bottom:10px">⚠️ ما لقيت هالأرقام لهاي المنصة: ${missing.join('، ')} — تأكدي من الرقم أو إنه مسجّل صح على هاي المنصة</div>` + R2.innerHTML;
+        if(R2) R2.innerHTML = `<div class="alert-red" style="margin-bottom:10px">⚠️ ما لقيت هالأرقام مكتوبة بملاحظات أي طلب لهاي المنصة: ${missing.join('، ')} — تأكدي من الرقم أو إنه مكتوب بنفس الشكل بالملاحظة</div>` + R2.innerHTML;
       }
     }catch(e){ R.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
   }
