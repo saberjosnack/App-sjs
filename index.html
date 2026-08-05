@@ -7895,7 +7895,8 @@
       const newPaid = paidSoFar + amt;
       const newStatus = (newPaid >= parseFloat(p.total||0) - 0.005) ? acc : 'partial';
       await db.from('purchases').update({ payment_status: newStatus, paid_amount: newPaid, paid_at: new Date().toISOString(), payment_method: payMethod }).eq('id', id);
-      await db.from('supplier_payments').insert({ supplier: p.supplier, amount: amt, account: acc, payment_method: payMethod, purchase_id: id, branch_id: p.branch_id||null, note: note||null, created_by: ME.full_name });
+      const { error: eSp1 } = await db.from('supplier_payments').insert({ supplier: p.supplier, amount: amt, account: acc, payment_method: payMethod, purchase_id: id, branch_id: p.branch_id||null, note: note||null, created_by: ME.id, created_by_name: ME.full_name });
+      if(eSp1){ toast('⚠️ الدفعة اتسجلت على الفاتورة بس فشل تسجيلها بسجل دفعات الموردين: '+eSp1.message); console.error('supplier_payments insert failed:', eSp1); }
       if(acc==='capital') await addCapitalTx(-amt, 'purchase', id, 'دفعة فاتورة شراء ('+payMethod+') — '+(p.supplier||''));
       else await addTreasuryTx(acc, -amt, 'purchase', id, 'دفعة فاتورة شراء ('+payMethod+') — '+(p.supplier||''), p.branch_id||null);
       closeModal(); toast('✓ اتسجلت الدفعة'); renderPurchases();
@@ -7934,7 +7935,8 @@
         const newPaid = parseFloat(inv.paid_amount||0) + applyAmt;
         const newStatus = (newPaid >= parseFloat(inv.total||0) - 0.005) ? acc : 'partial';
         await db.from('purchases').update({ payment_status: newStatus, paid_amount: newPaid, paid_at: new Date().toISOString() }).eq('id', inv.id);
-        await db.from('supplier_payments').insert({ supplier: supplierName, amount: applyAmt, account: acc, purchase_id: inv.id, branch_id: inv.branch_id||null, note: note||'دفعة عامة', created_by: ME.full_name });
+        const { error: eSp2 } = await db.from('supplier_payments').insert({ supplier: supplierName, amount: applyAmt, account: acc, purchase_id: inv.id, branch_id: inv.branch_id||null, note: note||'دفعة عامة', created_by: ME.id, created_by_name: ME.full_name });
+        if(eSp2) console.error('supplier_payments insert failed:', eSp2);
         left -= applyAmt;
       }
       const applied = amt - left;
@@ -8238,10 +8240,12 @@
     if(error){toast('✗ '+error.message);return;}
     if(payStatus==='capital'){
       await addCapitalTx(-total, 'purchase', pur.id, 'فاتورة شراء — '+sup);
-      await db.from('supplier_payments').insert({ supplier:sup, amount:total, account:'capital', purchase_id:pur.id, branch_id: isAllBranches?null:window.__purchaseBranchId, note:'دفع كامل وقت الفاتورة', created_by: ME.full_name });
+      const { error: eSp3 } = await db.from('supplier_payments').insert({ supplier:sup, amount:total, account:'capital', purchase_id:pur.id, branch_id: isAllBranches?null:window.__purchaseBranchId, note:'دفع كامل وقت الفاتورة', created_by: ME.id, created_by_name: ME.full_name });
+      if(eSp3) console.error('supplier_payments insert failed:', eSp3);
     } else if(payStatus!=='unpaid'){
       await addTreasuryTx(payStatus, -total, 'purchase', pur.id, 'فاتورة شراء — '+sup, isAllBranches ? null : window.__purchaseBranchId);
-      await db.from('supplier_payments').insert({ supplier:sup, amount:total, account:payStatus, purchase_id:pur.id, branch_id: isAllBranches?null:window.__purchaseBranchId, note:'دفع كامل وقت الفاتورة', created_by: ME.full_name });
+      const { error: eSp4 } = await db.from('supplier_payments').insert({ supplier:sup, amount:total, account:payStatus, purchase_id:pur.id, branch_id: isAllBranches?null:window.__purchaseBranchId, note:'دفع كامل وقت الفاتورة', created_by: ME.id, created_by_name: ME.full_name });
+      if(eSp4) console.error('supplier_payments insert failed:', eSp4);
     }
     const { error: itemsErr } = await db.from('purchase_items').insert(items.map(x=>({
       ingredient_id: x.ingredient_id, qty: x.quantity, unit_price: x.unit_cost, unit_cost: x.unit_cost, purchase_order_id: pur.id
@@ -10554,7 +10558,7 @@
             <td>${esc(p.branches?.name_ar||'عام')}</td>
             <td>${p.purchases?`فاتورة ${new Date(p.purchases.purchase_date).toLocaleDateString('ar-JO')} (${fmt(p.purchases.total)} ${CURRENCY})`:'—'}</td>
             <td style="font-size:.82rem;color:var(--muted)">${esc(p.note||'—')}</td>
-            <td style="font-size:.82rem">${esc(p.created_by||'—')}</td>
+            <td style="font-size:.82rem">${esc(p.created_by_name||'—')}</td>
           </tr>`).join('')||'<tr><td colspan="9" class="empty-note">ما في دفعات مسجّلة بهاي الفترة</td></tr>'}
         </table></div>`;
     }catch(e){ R.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
@@ -10569,7 +10573,7 @@
       'الفرع': p.branches?.name_ar||'عام',
       'مرتبطة بفاتورة': p.purchases ? (new Date(p.purchases.purchase_date).toLocaleDateString('ar-JO')+' — '+fmt(p.purchases.total)+' '+CURRENCY) : '—',
       'ملاحظة': p.note||'—',
-      'بواسطة': p.created_by||'—',
+      'بواسطة': p.created_by_name||'—',
     }));
     if(!rows.length){ toast('⚠️ ما في بيانات نصدّرها'); return; }
     exportToExcel(rows, 'دفعات_الموردين_'+SP_FILTER.from+'_'+SP_FILTER.to, 'دفعات الموردين');
@@ -10594,7 +10598,7 @@
         <td>${ACC_AR[p.account]||esc(p.account||'—')}</td>
         <td>${esc(p.branches?.name_ar||'عام')}</td>
         <td>${esc(p.note||'—')}</td>
-        <td>${esc(p.created_by||'—')}</td>
+        <td>${esc(p.created_by_name||'—')}</td>
       </tr>`).join('')}
       </table>
       <button onclick="window.print()" style="margin-top:20px;padding:10px 20px">🖨️ طباعة</button>
