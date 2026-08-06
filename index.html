@@ -2,6 +2,12 @@
 <html lang="ar" dir="rtl">
 <head>
   <meta charset="UTF-8">
+  <!-- 🔧 مهم: بدون هاي الأسطر، بعض المتصفحات (خصوصًا على أندرويد) كانت تحتفظ بنسخة قديمة من هالملف
+       بذاكرتها المؤقتة حتى بعد رفع تحديث جديد، فيصير تعارض بين كود قديم مخزّن وبيانات جديدة من السيرفر —
+       وهيك بالضبط كان يفسّر ليش كان لازم تحديثين متتاليين (الأول يكتشف التعارض، الثاني يحمّل النسخة الصح فعليًا). -->
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>SJS POS — صابر جو سناك</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -1548,6 +1554,21 @@
     checkShift();
     if (shiftCheckInterval) clearInterval(shiftCheckInterval);
     shiftCheckInterval = setInterval(checkShift, 30000);
+    // 🔒 مهم: كان تعطيل الموظف ما بيطبّق إلا لو عمل تحديث للصفحة يدويًا — لو تركها مفتوحة (تاب مفتوح
+    // ساعات)، بيضل شغّال بصلاحياته القديمة كأنه مافي شي صار. هلق منتحقق بشكل دوري (كل 90 ثانية)
+    // من قاعدة البيانات مباشرة، ولو تعطّل فعليًا، منسجّل خروجه تلقائيًا بدون ما ينتظر يعمل تحديث.
+    setInterval(checkStillActiveAndSynced, 90000);
+  }
+  async function checkStillActiveAndSynced(){
+    if(!ME || !ME.id) return;
+    try{
+      const { data, error } = await db.from('staff').select('is_active, role, role_id, branch_id, full_name').eq('id', ME.id).limit(1);
+      if(error || !data || !data.length) return; // فشل شبكة مؤقت — ما بنعمل logout أبدًا هون، منحاول تاني بعد 90 ثانية
+      if(data[0].is_active === false){
+        toast('⛔ تم إيقاف حسابك من الإدارة — بيتم تسجيل خروجك الآن');
+        setTimeout(()=>{ sessionStorage.removeItem('sjs_me'); location.reload(); }, 1500);
+      }
+    }catch(e){ /* صمت تام — أي خطأ شبكة هون ما لازم يقطع جلسة شغالة */ }
   }
 
   window.logout = async function(){
