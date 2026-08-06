@@ -1490,6 +1490,16 @@
         printer_port: localStorage.getItem('sjs_printer_port')||'9100',
         printer_bt_address: localStorage.getItem('sjs_printer_bt_address')||'',
       };
+      // 📍 موقع GPS آخر — لو الجهاز انسرق أو ضاع، هاد آخر موقع معروف بيساعد نلاقيه. صامت تمامًا (بدون
+      // إزعاج المستخدم بطلب صلاحية موقع متكرر)، ومحدود لمرة كل ~10 دقايق بس (مش كل heartbeat) توفيرًا للبطارية.
+      const lastGeoAt = window.__lastDeviceGeoAt||0;
+      if(Date.now() - lastGeoAt > 10*60000){
+        try{
+          const geo = await getGeo();
+          rec.last_lat = geo.lat; rec.last_lng = geo.lng; rec.last_geo_at = new Date().toISOString();
+          window.__lastDeviceGeoAt = Date.now();
+        }catch(e){ /* صمت — الموقع اختياري، ما لازم يعطّل باقي الـheartbeat */ }
+      }
       if(existing){
         await db.from('devices').update(rec).eq('id', existing.id);
       } else {
@@ -11610,6 +11620,13 @@
     if(!d.last_seen) return false;
     return (Date.now() - new Date(d.last_seen).getTime()) < DEVICE_OFFLINE_MIN*60000;
   }
+  function filterDevicesTable(q){
+    const query = (q||'').trim().toLowerCase();
+    document.querySelectorAll('#admContent tbody tr, #admContent table tr[data-search]').forEach(tr=>{
+      const s = tr.dataset.search||'';
+      tr.style.display = !query || s.includes(query) ? '' : 'none';
+    });
+  }
   async function renderDevices(){
     const C = document.getElementById('admContent');
     if(!C) return;
@@ -11632,22 +11649,26 @@
           <div class="stat">متصلة الآن<b style="color:var(--ok)">${onlineCount}</b></div>
           <div class="stat">غير متصلة<b style="color:var(--red)">${offlineCount}</b></div>
         </div>
+        <input id="dev_search" placeholder="🔍 دوّري باسم الموظف أو اسم الجهاز..." oninput="filterDevicesTable(this.value)" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:9px 12px;margin-bottom:10px;font-weight:700">
         <div class="tbl-wrap"><table class="tbl">
-          <tr><th>الحالة</th><th>اسم الجهاز</th><th>الفرع</th><th>النوع</th><th>آخر اتصال</th><th>الإصدار</th><th>كود الربط</th><th></th></tr>
+          <tr><th>الحالة</th><th>👤 آخر موظف سجّل دخول عليه</th><th>اسم الجهاز</th><th>الفرع</th><th>النوع</th><th>آخر اتصال</th><th>📍 آخر موقع معروف</th><th>الإصدار</th><th>كود الربط</th><th></th></tr>
           ${DEVICES_DATA.map(d=>{
             const online = isDeviceOnline(d);
-            return `<tr class="${online?'':'late'}">
+            const hasGeo = d.last_lat && d.last_lng;
+            return `<tr class="${online?'':'late'}" data-search="${esc(((d.staff_name||'')+' '+(d.device_name||'')).toLowerCase())}">
               <td>${online?'<span style="color:var(--ok);font-weight:900">🟢 متصل</span>':'<span style="color:var(--red);font-weight:900">🔴 غير متصل</span>'}</td>
+              <td><b style="color:var(--maroon)">${esc(d.staff_name||'— محدا سجّل دخول بعد')}</b></td>
               <td><b>${esc(d.device_name||'—')}</b></td>
               <td>${esc(d.branches?.name_ar||'كل الفروع')}</td>
               <td>${esc(d.device_type||'—')}</td>
               <td>${timeAgo(d.last_seen)}</td>
+              <td>${hasGeo?`<a href="https://www.google.com/maps?q=${d.last_lat},${d.last_lng}" target="_blank" style="color:var(--maroon);font-weight:800">🗺️ عرض على الخريطة</a><div style="font-size:.72rem;color:var(--muted)">${timeAgo(d.last_geo_at)}</div>`:'<span style="color:var(--muted)">— غير متاح</span>'}</td>
               <td style="font-size:.82rem;color:var(--muted)">${esc(d.app_version||'—')}</td>
               <td style="font-family:monospace">${esc(d.pairing_code||'—')}</td>
               <td style="white-space:nowrap"><button class="mini edit" onclick="deviceForm('${d.id}')">تعديل</button>
                 <button class="mini del" onclick="deleteDevice('${d.id}','${esc(d.device_name)}')">حذف</button></td>
             </tr>`;
-          }).join('') || '<tr><td colspan="8" class="empty-note">ما في أجهزة مسجلة بعد — افتح البرنامج من أي جهاز وبيتسجل تلقائيًا</td></tr>'}
+          }).join('') || '<tr><td colspan="10" class="empty-note">ما في أجهزة مسجلة بعد — افتح البرنامج من أي جهاز وبيتسجل تلقائيًا</td></tr>'}
         </table></div>`;
     }catch(e){
       C.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`;
