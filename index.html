@@ -1473,19 +1473,21 @@
   }
   async function sendDeviceHeartbeat(){
     try{
-      if(!ME) return;
+      const who = ME || EMP; if(!who) return;
+      const isPortal = !ME && !!EMP;
       const deviceId = getDeviceId();
       const {data: existing} = await db.from('devices').select('id, device_name').eq('device_id', deviceId).maybeSingle();
+      const label = who.full_name || who.name || '';
       const rec = {
         device_id: deviceId,
-        device_name: existing?.device_name || (detectDeviceType()+' - '+(ME.branches?.name_ar||ME.full_name)),
+        device_name: existing?.device_name || (detectDeviceType()+' - '+(isPortal?'📱 بوابة الموظف - ':'')+(who.branches?.name_ar||label)),
         pairing_code: getPairingCode(),
-        branch_id: ME.branch_id || null,
+        branch_id: who.branch_id || null,
         device_type: detectDeviceType(),
         app_version: APP_VERSION,
         last_seen: new Date().toISOString(),
-        staff_id: ME.id,
-        staff_name: ME.full_name,
+        staff_id: who.id,
+        staff_name: label,
         printer_method: localStorage.getItem('sjs_printer_method')||'auto',
         printer_ip: localStorage.getItem('sjs_printer_ip')||'',
         printer_port: localStorage.getItem('sjs_printer_port')||'9100',
@@ -1510,7 +1512,7 @@
   // 📍 نلتقط الموقع فقط لما يصير تفاعل حقيقي من المستخدم (كليك بأي مكان بالصفحة) — هاد الشرط يلي
   // المتصفحات بتطلبه عشان توافق على طلب الموقع بصمت بدون ما تفشل. محدود لمرة كل 15 دقيقة توفيرًا للبطارية.
   document.addEventListener('click', function(){
-    if(!ME) return;
+    if(!ME && !EMP) return;
     const lastAt = window.__cachedGeoAt||0;
     if(Date.now() - lastAt < 15*60000) return;
     getGeo().then(geo=>{ window.__cachedGeo = geo; window.__cachedGeoAt = Date.now(); }).catch(()=>{ /* صمت — الموقع اختياري */ });
@@ -14026,7 +14028,7 @@ try {
   async function toggleStaff(id,v){ try { const r=await db.from('staff').update({is_active:v}).eq('id',id); if(r.error){toast('✗ '+r.error.message);console.error(r.error);return;} toast(v?'✓ مفعّل':'✓ معطّل'); renderAdmin(); } catch(e) { toast('✗ '+e.message); console.error(e); } }
   async function renderDailyTasks(){
     const C=document.getElementById('admContent');
-    window.__tasksDate = window.__tasksDate || new Date().toISOString().slice(0,10);
+    window.__tasksDate = window.__tasksDate || localTodayStr();
     const { data: hrEmployees, error: hrErr } = await db.from('meal_names').select('*').order('name');
     if(hrErr){ C.innerHTML = `<div class="alert-red">⚠️ خطأ بجلب موظفي HR: ${esc(hrErr.message||'غير معروف')}</div>`; console.error(hrErr); return; }
     const { data: tasks, error } = await db.from('daily_tasks').select('*').eq('task_date', window.__tasksDate).order('created_at');
@@ -14038,7 +14040,7 @@ try {
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px">
         <label style="font-weight:800">📅 التاريخ:</label>
         <input type="date" id="tasksDateInput" value="${window.__tasksDate}" onchange="window.__tasksDate=this.value;renderDailyTasks()" style="border:1.5px solid var(--line);border-radius:10px;padding:8px 12px">
-        <button class="mini edit" onclick="window.__tasksDate=new Date().toISOString().slice(0,10);renderDailyTasks()">اليوم</button>
+        <button class="mini edit" onclick="window.__tasksDate=localTodayStr();renderDailyTasks()">اليوم</button>
       </div>
       ${activeStaff.map(s=>{
         const list = byStaff[s.id]||[];
@@ -14899,11 +14901,14 @@ try {
       document.getElementById('empPortalLogin').classList.add('hidden');
       document.getElementById('empPortalApp').classList.remove('hidden');
       document.getElementById('ep_name').textContent = data.name;
+      setTimeout(sendDeviceHeartbeat, 1500);
+      if(!window.__empHeartbeatInterval) window.__empHeartbeatInterval = setInterval(sendDeviceHeartbeat, 45000);
       await loadEmpPortal();
     }catch(e){ console.error(e); errEl.textContent = '⚠️ صار خطأ، جرب تاني'; }
   }
   function empPortalLogout(){
     stopGeofenceWatch();
+    if(window.__empHeartbeatInterval){ clearInterval(window.__empHeartbeatInterval); window.__empHeartbeatInterval = null; }
     EMP = null; EMP_OPEN_LOG = null;
     document.getElementById('empPortalApp').classList.add('hidden');
     document.getElementById('loginScreen').classList.remove('hidden');
