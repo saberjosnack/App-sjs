@@ -14027,10 +14027,11 @@ try {
   async function renderDailyTasks(){
     const C=document.getElementById('admContent');
     window.__tasksDate = window.__tasksDate || new Date().toISOString().slice(0,10);
-    if(!STAFF.length){ const {data}=await db.from('staff').select('*, branches(name_ar)').order('full_name'); STAFF=data||[]; }
+    const { data: hrEmployees, error: hrErr } = await db.from('meal_names').select('*').order('name');
+    if(hrErr){ C.innerHTML = `<div class="alert-red">⚠️ خطأ بجلب موظفي HR: ${esc(hrErr.message||'غير معروف')}</div>`; console.error(hrErr); return; }
     const { data: tasks, error } = await db.from('daily_tasks').select('*').eq('task_date', window.__tasksDate).order('created_at');
     if(error){ C.innerHTML = `<div class="alert-red">⚠️ خطأ بجلب المهام: ${esc(error.message||'غير معروف')}</div>`; console.error(error); return; }
-    const activeStaff = STAFF.filter(s=>s.is_active).sort((a,b)=>(a.full_name||'').localeCompare(b.full_name||'','ar'));
+    const activeStaff = (hrEmployees||[]).filter(s=>s.is_active!==false).sort((a,b)=>(a.name||'').localeCompare(b.name||'','ar'));
     const byStaff = {};
     (tasks||[]).forEach(t=>{ (byStaff[t.staff_id] = byStaff[t.staff_id]||[]).push(t); });
     C.innerHTML = `
@@ -14044,7 +14045,7 @@ try {
         const done = list.filter(t=>t.is_done).length;
         return `<div class="mbox" style="margin-bottom:12px">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-            <b style="color:var(--maroon)">${esc(s.full_name)}</b>
+            <b style="color:var(--maroon)">${esc(s.name)}</b>
             <span style="font-size:.8rem;color:var(--muted);font-weight:700">${list.length?`${done}/${list.length} خلص`:'—'}</span>
           </div>
           <div id="tasksList_${s.id}">
@@ -14067,8 +14068,8 @@ try {
     const input = document.getElementById('newTask_'+staffId);
     const text = (input?.value||'').trim();
     if(!text){ toast('⚠️ اكتب نص المهمة'); return; }
-    const staff = STAFF.find(s=>s.id===staffId);
-    const { error } = await db.from('daily_tasks').insert({ staff_id: staffId, branch_id: staff?.branch_id||null, task_date: window.__tasksDate, task_text: text, created_by: ME.id });
+    const { data: emp } = await db.from('meal_names').select('branch_id').eq('id', staffId).maybeSingle();
+    const { error } = await db.from('daily_tasks').insert({ staff_id: staffId, branch_id: emp?.branch_id||null, task_date: window.__tasksDate, task_text: text, created_by: ME.id });
     if(error){ toast('✗ '+error.message); console.error(error); return; }
     toast('✓ انضافت المهمة'); renderDailyTasks();
   }
