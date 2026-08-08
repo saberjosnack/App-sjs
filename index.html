@@ -14078,6 +14078,11 @@ try {
     if(error){ toast('✗ '+error.message); console.error(error); return; }
     renderDailyTasks();
   }
+  async function empToggleTask(id, done){
+    const { error } = await db.from('daily_tasks').update({ is_done: done, done_at: done?new Date().toISOString():null }).eq('id', id);
+    if(error){ toast('✗ '+error.message); console.error(error); return; }
+    loadEmpPortal();
+  }
   async function deleteDailyTask(id){
     if(!confirm('حذف هاي المهمة؟')) return;
     const { error } = await db.from('daily_tasks').delete().eq('id', id);
@@ -15001,6 +15006,10 @@ try {
       }
       window.__empActiveBreak = activeBreak;
 
+      // 📝 مهام اليوم المعطاة لهاد الموظف من "📝 مهام الموظفين اليومية"
+      const { data: myTasks } = await db.from('daily_tasks').select('*').eq('staff_id', EMP.id).eq('task_date', localTodayStr()).order('created_at');
+      const tasksToday = myTasks||[];
+
       body.innerHTML = `
         ${(EMP.shift_window_from && EMP.shift_window_to) ? `<div style="background:#fff8e1;border-radius:12px;padding:10px 14px;text-align:center;margin-bottom:10px;font-weight:800;color:#8a6d00">🕐 دوامك المحدد: من ${EMP.shift_window_from} لغاية ${EMP.shift_window_to}</div>` : ''}
         ${linkedCcIds.length ? `<div style="background:linear-gradient(135deg,#e0f0ff,#fff8e1);border:1.5px solid #0d6efd;border-radius:14px;padding:14px;text-align:center;margin-bottom:10px">
@@ -15039,6 +15048,14 @@ try {
           `}
         </div>
         <button onclick="empChangePinForm()" style="width:100%;background:#fff;color:var(--maroon);border:1.5px solid var(--maroon);border-radius:12px;padding:12px;font-weight:800;font-size:.95rem;cursor:pointer;margin-bottom:14px">🔑 تغيير الرقم السري</button>
+        ${tasksToday.length ? `<div style="background:#fff;border-radius:16px;padding:16px;margin-bottom:14px;box-shadow:var(--shadow)">
+          <div style="font-weight:900;color:var(--maroon);margin-bottom:10px">📝 مهامك اليوم (${tasksToday.filter(t=>t.is_done).length}/${tasksToday.length} خلص)</div>
+          ${tasksToday.map(t=>`
+            <label style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);cursor:pointer">
+              <input type="checkbox" ${t.is_done?'checked':''} onchange="empToggleTask('${t.id}',this.checked)" style="width:20px;height:20px">
+              <span style="flex:1;${t.is_done?'text-decoration:line-through;color:var(--muted)':''}">${esc(t.task_text)}</span>
+            </label>`).join('')}
+        </div>` : ''}
 
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
           ${settingOn('hr_portal_show_hours')?`<div class="stat">ساعات هالشهر<b>${hoursThisMonth.toFixed(1)}</b></div>`:''}
