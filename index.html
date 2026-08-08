@@ -602,6 +602,7 @@
         <button data-a="codes" onclick="admTab('codes')">🎟️ أكواد الخصم</button>
         <button data-a="schedDisc" onclick="admTab('schedDisc')" style="background:#ffe0e9;border-color:#e91e8c">🏷️ خصومات مجدولة</button>
         <button data-a="staff" onclick="admTab('staff')">👥 الموظفين</button>
+        <button data-a="dailyTasks" onclick="admTab('dailyTasks')" style="background:#fff3c4;border-color:#e8890c">📝 مهام الموظفين اليومية</button>
         <button data-a="roles" onclick="admTab('roles')">🛡️ الأدوار</button>
         <button data-a="branches" onclick="admTab('branches')">🏪 الفروع</button>
         <button data-a="inventory" onclick="admTab('inventory')" style="background:var(--yellow);border-color:#d9c400">📋 جرد المخزون</button>
@@ -5542,6 +5543,7 @@
     if(admView==='ordersScreen'){ renderOrdersScreen(); return; }
     if(admView==='platforms'){ renderPlatforms(); return; }
     if(admView==='devices'){ renderDevices(); return; }
+    if(admView==='dailyTasks'){ renderDailyTasks(); return; }
     if(admView==='empmeals'){ renderEmpMeals(); return; }
     if(admView==='topcust'){ renderTopCustomers(); return; }
     if(admView==='waste'){ renderWaste(); return; }
@@ -7732,7 +7734,7 @@
   /* ---- المصاريف ---- */
   const EXP_CATS=['إيجار','كهرباء وماء','رواتب','إعلانات وتسويق','صيانة','توصيل','تغليف','نظافة','مشتريات متنوعة','أخرى'];
   async function renderExpenses(){
-    const {data, error}=await db.from('expenses').select('*').order('expense_date',{ascending:false}).limit(200);
+    const {data, error}=await db.from('expenses').select('*').neq('category','سحب من الدرج').order('expense_date',{ascending:false}).limit(200);
     if(error){
       document.getElementById('admContent').innerHTML = `<div class="alert-red">⚠️ خطأ بجلب المصاريف: ${esc(error.message||'غير معروف')}</div>`;
       console.error('renderExpenses error:', error);
@@ -13769,10 +13771,10 @@ try {
     const q = (document.getElementById('staffSearch')?.value||'').trim().toLowerCase();
     const list = q ? STAFF.filter(s=>(s.full_name||'').toLowerCase().includes(q) || (ROLE_AR[s.role]||s.role||'').toLowerCase().includes(q)) : STAFF;
     const ratings = window.__STAFF_RATINGS||{};
-    wrap.innerHTML = `<div class="tbl-wrap"><table class="tbl"><tr><th>الاسم</th><th>الدور</th><th>الفرع</th><th>PIN</th><th>⭐ التقييمات</th><th>الحالة</th><th></th></tr>${list.map(s=>{
+    wrap.innerHTML = `<div class="tbl-wrap"><table class="tbl"><tr><th>الاسم</th><th>📱 الهاتف</th><th>الدور</th><th>الفرع</th><th>PIN</th><th>⭐ التقييمات</th><th>الحالة</th><th></th></tr>${list.map(s=>{
       const r = ratings[s.id]||{positive:0,negative:0};
-      return `<tr class="${s.is_active?'':'off'}"><td>${esc(s.full_name)}</td><td>${ROLE_AR[s.role]||esc(s.role)}</td><td>${esc(s.branches?.name_ar||'كل الفروع')}</td><td>${s.pin}</td><td>${(r.positive||r.negative)?`<span style="color:var(--ok)">😊 ${r.positive}</span> / <span style="color:var(--muted)">😐 ${r.negative}</span>`:'—'}</td><td>${s.is_active?'✅':'🚫'}</td><td style="white-space:nowrap"><button class="mini edit" onclick="staffForm('${s.id}')">تعديل</button>${s.id!==ME.id?`<button class="mini tog" onclick="toggleStaff('${s.id}',${!s.is_active})">${s.is_active?'تعطيل/أرشفة':'تفعيل'}</button><button class="mini del" onclick="deleteStaff('${s.id}','${esc(s.full_name)}')">حذف نهائي</button>`:''}</td></tr>`;
-    }).join('')||'<tr><td colspan="7" class="empty-note">ما في نتائج</td></tr>'}</table></div>`;
+      return `<tr class="${s.is_active?'':'off'}"><td>${esc(s.full_name)}${s.notes?`<br><small style="color:var(--muted)" title="${esc(s.notes)}">📝 ${esc(s.notes.length>28?s.notes.slice(0,28)+'…':s.notes)}</small>`:''}</td><td>${esc(s.phone||'—')}</td><td>${ROLE_AR[s.role]||esc(s.role)}</td><td>${esc(s.branches?.name_ar||'كل الفروع')}</td><td>${s.pin}</td><td>${(r.positive||r.negative)?`<span style="color:var(--ok)">😊 ${r.positive}</span> / <span style="color:var(--muted)">😐 ${r.negative}</span>`:'—'}</td><td>${s.is_active?'✅':'🚫'}</td><td style="white-space:nowrap"><button class="mini edit" onclick="staffForm('${s.id}')">تعديل</button>${s.id!==ME.id?`<button class="mini tog" onclick="toggleStaff('${s.id}',${!s.is_active})">${s.is_active?'تعطيل/أرشفة':'تفعيل'}</button><button class="mini del" onclick="deleteStaff('${s.id}','${esc(s.full_name)}')">حذف نهائي</button>`:''}</td></tr>`;
+    }).join('')||'<tr><td colspan="8" class="empty-note">ما في نتائج</td></tr>'}</table></div>`;
   }
   async function showHrLinkChecker(){
     modal(`<h3>🔗 تحقّق من ربط الأسماء مع HR</h3><div id="hrLinkCheckerBody" class="empty-note">... جاري الفحص</div>`);
@@ -13852,6 +13854,7 @@ try {
         </label>`).join('')}`).join('');
     modal(`<h3>${id?'تعديل موظف':'موظف جديد'}</h3>
       <div class="fld"><label>الاسم</label><input id="f_sn" value="${esc(st.full_name||'')}"></div>
+      <div class="fld"><label>📱 رقم الهاتف</label><input id="f_sphone" inputmode="tel" value="${esc(st.phone||'')}"></div>
       <div class="fld"><label>المستخدم</label><input id="f_su" value="${esc(st.username||'')}"></div>
       <div class="fld"><label>PIN (4 أرقام)</label><input id="f_sp" inputmode="numeric" maxlength="4" value="${esc(st.pin||'')}"></div>
       <div class="fld"><label>الدور</label><select id="f_sr" onchange="resetPermsToRole(this.value)">
@@ -13877,6 +13880,7 @@ try {
         </select>
         <div style="font-size:.78rem;color:var(--muted);font-weight:600;margin-top:4px">لو هاد الموظف عنده كمان راتب/رصيد بـHR (نفس الشخص)، اربطه هون عشان عجز/زيادة الشيفت تنزل عليه صح بدون ما تعتمد على تطابق الاسم.</div>
       </div>
+      <div class="fld"><label>📝 ملاحظات</label><textarea id="f_snotes" rows="3" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;font-family:inherit">${esc(st.notes||'')}</textarea></div>
       <div class="fld" id="permsBox"><label>الصلاحيات * <span id="permsHint" style="font-weight:600">(عدّل زي ما بدك — بتنحفظ لهاد الموظف تحديدًا)</span></label>
         <div style="display:flex;gap:8px;margin:6px 0">
           <button type="button" class="mini ok" onclick="document.querySelectorAll('.permChk').forEach(c=>c.checked=true)">تحديد الكل</button>
@@ -13943,7 +13947,7 @@ try {
         return;
       }
     }
-    const rec={full_name: f_sn ? f_sn.value.trim() : '', username: f_su ? f_su.value.trim() : '', pin: f_sp ? f_sp.value.trim() : '', role: roleVal, role_id: roleId, branch_id: f_sb ? f_sb.value||null : null, permissions, linked_hr_id: document.getElementById('f_hrLink')?.value || null, shift_window_from: document.getElementById('f_swf')?.value||null, shift_window_to: document.getElementById('f_swt')?.value||null};
+    const rec={full_name: f_sn ? f_sn.value.trim() : '', phone: document.getElementById('f_sphone')?.value.trim()||null, notes: document.getElementById('f_snotes')?.value.trim()||null, username: f_su ? f_su.value.trim() : '', pin: f_sp ? f_sp.value.trim() : '', role: roleVal, role_id: roleId, branch_id: f_sb ? f_sb.value||null : null, permissions, linked_hr_id: document.getElementById('f_hrLink')?.value || null, shift_window_from: document.getElementById('f_swf')?.value||null, shift_window_to: document.getElementById('f_swt')?.value||null};
     if(!rec.full_name||!rec.username||!/^\d{4}$/.test(rec.pin)){ toast('⚠️ جميع الحقول مطلوبة'); return; }
     if(rec.role==='cashier'&&!rec.branch_id){ toast('⚠️ الكاشير يحتاج فرع'); return; }
     const dup=STAFF.find(x=>x.pin===rec.pin&&x.id!==id&&x.is_active);
@@ -13963,6 +13967,65 @@ try {
     toast('✓ انحذف الموظف'); renderAdmin();
   }
   async function toggleStaff(id,v){ try { const r=await db.from('staff').update({is_active:v}).eq('id',id); if(r.error){toast('✗ '+r.error.message);console.error(r.error);return;} toast(v?'✓ مفعّل':'✓ معطّل'); renderAdmin(); } catch(e) { toast('✗ '+e.message); console.error(e); } }
+  async function renderDailyTasks(){
+    const C=document.getElementById('admContent');
+    window.__tasksDate = window.__tasksDate || new Date().toISOString().slice(0,10);
+    if(!STAFF.length){ const {data}=await db.from('staff').select('*, branches(name_ar)').order('full_name'); STAFF=data||[]; }
+    const { data: tasks, error } = await db.from('daily_tasks').select('*').eq('task_date', window.__tasksDate).order('created_at');
+    if(error){ C.innerHTML = `<div class="alert-red">⚠️ خطأ بجلب المهام: ${esc(error.message||'غير معروف')}</div>`; console.error(error); return; }
+    const activeStaff = STAFF.filter(s=>s.is_active).sort((a,b)=>(a.full_name||'').localeCompare(b.full_name||'','ar'));
+    const byStaff = {};
+    (tasks||[]).forEach(t=>{ (byStaff[t.staff_id] = byStaff[t.staff_id]||[]).push(t); });
+    C.innerHTML = `
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px">
+        <label style="font-weight:800">📅 التاريخ:</label>
+        <input type="date" id="tasksDateInput" value="${window.__tasksDate}" onchange="window.__tasksDate=this.value;renderDailyTasks()" style="border:1.5px solid var(--line);border-radius:10px;padding:8px 12px">
+        <button class="mini edit" onclick="window.__tasksDate=new Date().toISOString().slice(0,10);renderDailyTasks()">اليوم</button>
+      </div>
+      ${activeStaff.map(s=>{
+        const list = byStaff[s.id]||[];
+        const done = list.filter(t=>t.is_done).length;
+        return `<div class="mbox" style="margin-bottom:12px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <b style="color:var(--maroon)">${esc(s.full_name)}</b>
+            <span style="font-size:.8rem;color:var(--muted);font-weight:700">${list.length?`${done}/${list.length} خلص`:'—'}</span>
+          </div>
+          <div id="tasksList_${s.id}">
+            ${list.length? list.map(t=>`
+              <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)">
+                <input type="checkbox" ${t.is_done?'checked':''} onchange="toggleDailyTask('${t.id}',this.checked)" style="width:19px;height:19px">
+                <span style="flex:1;${t.is_done?'text-decoration:line-through;color:var(--muted)':''}">${esc(t.task_text)}</span>
+                <button class="mini del" onclick="deleteDailyTask('${t.id}')">حذف</button>
+              </div>`).join('') : '<div class="empty-note">ما في مهام اليوم</div>'}
+          </div>
+          <div style="display:flex;gap:8px;margin-top:8px">
+            <input id="newTask_${s.id}" placeholder="مهمة جديدة..." style="flex:1;border:1.5px solid var(--line);border-radius:10px;padding:8px 12px" onkeydown="if(event.key==='Enter')addDailyTask('${s.id}')">
+            <button class="mini ok" onclick="addDailyTask('${s.id}')">＋ إضافة</button>
+          </div>
+        </div>`;
+      }).join('')}
+    `;
+  }
+  async function addDailyTask(staffId){
+    const input = document.getElementById('newTask_'+staffId);
+    const text = (input?.value||'').trim();
+    if(!text){ toast('⚠️ اكتب نص المهمة'); return; }
+    const staff = STAFF.find(s=>s.id===staffId);
+    const { error } = await db.from('daily_tasks').insert({ staff_id: staffId, branch_id: staff?.branch_id||null, task_date: window.__tasksDate, task_text: text, created_by: ME.id });
+    if(error){ toast('✗ '+error.message); console.error(error); return; }
+    toast('✓ انضافت المهمة'); renderDailyTasks();
+  }
+  async function toggleDailyTask(id, done){
+    const { error } = await db.from('daily_tasks').update({ is_done: done, done_at: done?new Date().toISOString():null }).eq('id', id);
+    if(error){ toast('✗ '+error.message); console.error(error); return; }
+    renderDailyTasks();
+  }
+  async function deleteDailyTask(id){
+    if(!confirm('حذف هاي المهمة؟')) return;
+    const { error } = await db.from('daily_tasks').delete().eq('id', id);
+    if(error){ toast('✗ '+error.message); console.error(error); return; }
+    toast('✓ انحذفت'); renderDailyTasks();
+  }
   function branchForm(id){ const list=window.__ALLBR||BRANCHES; const b=list.find(x=>x.id===id)||{}; modal(`<h3>${id?'تعديل فرع':'فرع جديد'}</h3><div class="fld"><label>الاسم (عربي)</label><input id="f_bn" value="${esc(b.name_ar||'')}"></div><div class="fld"><label>العنوان</label><input id="f_be" value="${esc(b.address||'')}"></div><div class="m-act"><button class="save" onclick="saveBranch('${id||''}')">حفظ</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`); }
   async function saveBranch(id){
     if(!lockSubmit('saveBranch')) return;
