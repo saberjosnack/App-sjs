@@ -10303,6 +10303,7 @@
     // 📱 رقم هاتف الموظف — منسحب تلقائيًا من حساب تسجيل الدخول المرتبط (لا داعي لإدخاله مرتين)
     const phoneByHrId = {};
     (staffPhoneRes?.data||[]).forEach(s=>{ if(s.phone) phoneByHrId[s.linked_hr_id] = s.phone; });
+    window.__HR_PHONE_MAP = phoneByHrId;
 
     const rows = empList.map(e=>{
       const closureDate = lastClosureByEmp[e.id];
@@ -10434,6 +10435,7 @@
   function renderHrTable(){
     const wrap = document.getElementById('hrTableWrap'); if(!wrap) return;
     const rows = window.__HR_ROWS||[];
+    const phoneByHrId = window.__HR_PHONE_MAP||{};
     const hrQ = (HR_SEARCH||'').trim().toLowerCase();
     let filteredRows = hrQ ? rows.filter(r=>(r.emp.name||'').toLowerCase().includes(hrQ)) : rows;
     if(!HR_SHOW_INACTIVE) filteredRows = filteredRows.filter(r=>r.emp.is_active!==false);
