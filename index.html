@@ -598,6 +598,7 @@
     <section id="v-admin" class="hidden">
       <div class="adm-tabs">
         <button data-a="items" class="on" onclick="admTab('items')">🍔 الأصناف</button>
+        <button data-a="reports" onclick="admTab('reports')" style="background:#d1f0e0;border-color:#0b8a4a">📊 التقارير</button>
         <button data-a="cats" onclick="admTab('cats')">📂 التصنيفات</button>
         <button data-a="codes" onclick="admTab('codes')">🎟️ أكواد الخصم</button>
         <button data-a="schedDisc" onclick="admTab('schedDisc')" style="background:#ffe0e9;border-color:#e91e8c">🏷️ خصومات مجدولة</button>
@@ -1206,6 +1207,7 @@
       tab_hrLocations: 'مواقع الدخول',
       tab_dutyHours: 'ساعات الدوام',
       tab_hrClosures: 'كشوفات الأشهر',
+      tab_reports: 'التقارير',
       tab_ordersScreen: 'الطلبيات',
       tab_complaints: 'شكاوي العملاء',
       tab_violations: 'المخالفات',
@@ -5552,6 +5554,7 @@
     if(admView==='ordersScreen'){ renderOrdersScreen(); return; }
     if(admView==='platforms'){ renderPlatforms(); return; }
     if(admView==='devices'){ renderDevices(); return; }
+    if(admView==='reports'){ renderReports(); return; }
     if(admView==='dailyTasks'){ renderDailyTasks(); return; }
     if(admView==='empmeals'){ renderEmpMeals(); return; }
     if(admView==='topcust'){ renderTopCustomers(); return; }
@@ -7802,6 +7805,408 @@
       </table><h3>الإجمالي: ${fmt(total)} ${CURRENCY}</h3></body></html>`;
     printRaw(text, html);
   }
+  async function renderReports(){
+    const C = document.getElementById('admContent');
+    window.__repFrom = window.__repFrom || localTodayStr();
+    window.__repTo = window.__repTo || localTodayStr();
+    window.__repType = window.__repType || 'summary';
+    window.__repBranch = window.__repBranch || '';
+    C.innerHTML = `
+      <div class="panel" style="margin-bottom:14px">
+        <h3>📊 مركز التقارير</h3>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+          <button class="mini edit" onclick="setReportRange('today')">اليوم</button>
+          <button class="mini edit" onclick="setReportRange('yesterday')">أمس</button>
+          <button class="mini edit" onclick="setReportRange('week')">هالأسبوع</button>
+          <button class="mini edit" onclick="setReportRange('month')">هالشهر</button>
+          <button class="mini edit" onclick="setReportRange('lastmonth')">الشهر الماضي</button>
+        </div>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:end">
+          <div class="fld" style="margin:0;min-width:150px"><label>من تاريخ</label><input type="date" id="rep_from" value="${window.__repFrom}"></div>
+          <div class="fld" style="margin:0;min-width:150px"><label>إلى تاريخ</label><input type="date" id="rep_to" value="${window.__repTo}"></div>
+          <div class="fld" style="margin:0;min-width:220px"><label>نوع التقرير</label>
+            <select id="rep_type" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:9px 12px;font-weight:700">
+              <option value="summary" ${window.__repType==='summary'?'selected':''}>📈 ملخص عام (مبيعات)</option>
+              <option value="items" ${window.__repType==='items'?'selected':''}>🍔 الأصناف الأكثر مبيعًا</option>
+              <option value="branches" ${window.__repType==='branches'?'selected':''}>🏪 المبيعات حسب الفرع</option>
+              <option value="daily" ${window.__repType==='daily'?'selected':''}>📅 المبيعات حسب اليوم</option>
+              <option value="payment" ${window.__repType==='payment'?'selected':''}>💳 المبيعات حسب طريقة الدفع</option>
+              <option value="expenses" ${window.__repType==='expenses'?'selected':''}>💵 المصاريف</option>
+            </select>
+          </div>
+          <div class="fld" style="margin:0;min-width:180px"><label>الفرع</label>
+            <select id="rep_branch" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:9px 12px;font-weight:700">
+              <option value="">كل الفروع</option>
+              ${BRANCHES.map(b=>`<option value="${b.id}" ${window.__repBranch===b.id?'selected':''}>${esc(b.name_ar)}</option>`).join('')}
+            </select>
+          </div>
+          <button class="mini ok" onclick="generateReport()" style="height:41px">📊 توليد التقرير</button>
+        </div>
+      </div>
+      <div id="reportResult"></div>
+    `;
+  }
+  function setReportRange(kind){
+    const now = new Date(Date.now()+3*3600000); // توقيت عمّان
+    const y=now.getUTCFullYear(), m=now.getUTCMonth(), d=now.getUTCDate();
+    const f = dt => dt.toISOString().split('T')[0];
+    if(kind==='today'){ window.__repFrom = window.__repTo = localTodayStr(); }
+    else if(kind==='yesterday'){ const yst = new Date(Date.UTC(y,m,d-1)); window.__repFrom = window.__repTo = f(yst); }
+    else if(kind==='week'){ const dow = now.getUTCDay(); const start = new Date(Date.UTC(y,m,d-dow)); window.__repFrom = f(start); window.__repTo = localTodayStr(); }
+    else if(kind==='month'){ window.__repFrom = localMonthStartStr(); window.__repTo = localTodayStr(); }
+    else if(kind==='lastmonth'){ const lmStart = new Date(Date.UTC(y,m-1,1)); const lmEnd = new Date(Date.UTC(y,m,0)); window.__repFrom = f(lmStart); window.__repTo = f(lmEnd); }
+    renderReports();
+  }
+  function addDaysStr(dateStr, n){
+    const dt = new Date(dateStr+'T00:00:00+03:00');
+    dt.setUTCDate(dt.getUTCDate()+n);
+    return dt.toISOString().split('T')[0];
+  }
+  async function generateReport(){
+    const from = document.getElementById('rep_from')?.value;
+    const to = document.getElementById('rep_to')?.value;
+    const type = document.getElementById('rep_type')?.value || 'summary';
+    const branchId = document.getElementById('rep_branch')?.value || '';
+    if(!from || !to){ toast('⚠️ حددي الفترة'); return; }
+    window.__repFrom=from; window.__repTo=to; window.__repType=type; window.__repBranch=branchId;
+    const box = document.getElementById('reportResult');
+    box.innerHTML = '<div class="empty-note">⏳ جاري توليد التقرير...</div>';
+    document.getElementById('aiInsightsBox')?.remove();
+    try{
+      if(type==='expenses'){
+        let q = db.from('expenses').select('*').neq('category','سحب من الدرج').gte('expense_date', from).lte('expense_date', to);
+        if(branchId) q = q.eq('branch_id', branchId);
+        const { data, error } = await q;
+        if(error){ box.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message||'خطأ')}</div>`; console.error(error); return; }
+        window.__repData = { type, from, to, branchId, rows: data||[] };
+        renderExpensesReportResult(data||[]);
+        return;
+      }
+      let q = db.from('orders').select('id, order_number, total, subtotal, discount, delivery_fee, payment_method, order_type, status, split_details, employee_tab_name, platform_id, branch_id, created_at, order_items(item_name, quantity, unit_price), branches(name_ar)')
+        .gte('created_at', localDayStart(from)).lt('created_at', localDayStart(addDaysStr(to,1)));
+      if(branchId) q = q.eq('branch_id', branchId);
+      const { data, error } = await q;
+      if(error){ box.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message||'خطأ')}</div>`; console.error(error); return; }
+      const all = data||[];
+      const cancelled = all.filter(o=>o.status==='cancelled');
+      const ok = all.filter(o=>o.status!=='cancelled');
+      window.__repData = { type, from, to, branchId, rows: ok, cancelled };
+      if(type==='summary') renderSummaryReportResult(ok, cancelled);
+      else if(type==='items') renderItemsReportResult(ok);
+      else if(type==='branches') renderBranchesReportResult(ok);
+      else if(type==='daily') renderDailyReportResult(ok);
+      else if(type==='payment') renderPaymentReportResult(ok);
+    }catch(e){ box.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
+  }
+  function statCard(label, value, color){
+    return `<div style="background:#fff;border-radius:14px;padding:16px;box-shadow:var(--shadow);flex:1;min-width:150px">
+      <div style="font-size:.78rem;color:var(--muted);font-weight:700;margin-bottom:6px">${label}</div>
+      <div style="font-size:1.5rem;font-weight:900;color:${color||'var(--maroon)'}">${value}</div>
+    </div>`;
+  }
+  function reportHeader(title){
+    return `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+      <h3 style="margin:0">${title}</h3>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <span style="font-size:.82rem;color:var(--muted);font-weight:700">📅 ${window.__repFrom} → ${window.__repTo}</span>
+        <button class="mini ok" onclick="printReport()">🖨️ طباعة التقرير</button>
+        <button class="mini" style="background:#7b2cbf;color:#fff" onclick="generateAIInsights()">🤖 تحليل ذكي (AI)</button>
+        <button class="mini edit" onclick="openAISettings()" title="إعدادات المفتاح والموديل">⚙️</button>
+      </div>
+    </div>`;
+  }
+  function renderSummaryReportResult(ok, cancelled){
+    const box = document.getElementById('reportResult'); if(!box) return;
+    const totalSales = ok.reduce((a,o)=>a+parseFloat(o.total||0),0);
+    const totalDiscount = ok.reduce((a,o)=>a+parseFloat(o.discount||0),0);
+    const totalDelivery = ok.reduce((a,o)=>a+(o.order_type==='delivery'?parseFloat(o.delivery_fee||0):0),0);
+    const avgInvoice = ok.length ? totalSales/ok.length : 0;
+    const cancelRate = (ok.length+cancelled.length) ? (cancelled.length/(ok.length+cancelled.length)*100) : 0;
+    box.innerHTML = reportHeader('📈 ملخص عام للمبيعات') + `
+      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">
+        ${statCard('عدد الطلبيات', ok.length, 'var(--ok)')}
+        ${statCard('إجمالي المبيعات', fmt(totalSales)+' '+CURRENCY)}
+        ${statCard('متوسط الفاتورة', fmt(avgInvoice)+' '+CURRENCY)}
+        ${statCard('إجمالي الخصومات', fmt(totalDiscount)+' '+CURRENCY, 'var(--warn)')}
+        ${statCard('أجور التوصيل', fmt(totalDelivery)+' '+CURRENCY)}
+        ${statCard('طلبيات ملغاة', cancelled.length+' ('+cancelRate.toFixed(1)+'%)', 'var(--red)')}
+      </div>`;
+  }
+  function renderItemsReportResult(ok){
+    const box = document.getElementById('reportResult'); if(!box) return;
+    const tally = {};
+    ok.forEach(o=>(o.order_items||[]).forEach(l=>{
+      if(!tally[l.item_name]) tally[l.item_name] = {qty:0, total:0};
+      tally[l.item_name].qty += l.quantity;
+      tally[l.item_name].total += l.quantity*parseFloat(l.unit_price||0);
+    }));
+    const rows = Object.entries(tally).sort((a,b)=>b[1].qty-a[1].qty);
+    box.innerHTML = reportHeader('🍔 الأصناف الأكثر مبيعًا') + `
+      <div class="tbl-wrap"><table class="tbl"><tr><th>#</th><th>الصنف</th><th>الكمية المباعة</th><th>إجمالي المبيعات</th></tr>
+      ${rows.map((r,i)=>`<tr><td>${i+1}</td><td><b>${esc(r[0])}</b></td><td>${r[1].qty}</td><td>${fmt(r[1].total)} ${CURRENCY}</td></tr>`).join('')||'<tr><td colspan="4" class="empty-note">ما في بيانات</td></tr>'}
+      </table></div>`;
+  }
+  function renderBranchesReportResult(ok){
+    const box = document.getElementById('reportResult'); if(!box) return;
+    const tally = {};
+    ok.forEach(o=>{
+      const key = o.branch_id||'—'; const name = o.branches?.name_ar || 'بدون فرع';
+      if(!tally[key]) tally[key] = {name, count:0, total:0};
+      tally[key].count++; tally[key].total += parseFloat(o.total||0);
+    });
+    const rows = Object.values(tally).sort((a,b)=>b.total-a.total);
+    const grand = rows.reduce((a,r)=>a+r.total,0);
+    box.innerHTML = reportHeader('🏪 المبيعات حسب الفرع') + `
+      <div class="tbl-wrap"><table class="tbl"><tr><th>الفرع</th><th>عدد الطلبيات</th><th>إجمالي المبيعات</th><th>النسبة</th></tr>
+      ${rows.map(r=>`<tr><td><b>${esc(r.name)}</b></td><td>${r.count}</td><td>${fmt(r.total)} ${CURRENCY}</td><td>${grand?(r.total/grand*100).toFixed(1):0}%</td></tr>`).join('')||'<tr><td colspan="4" class="empty-note">ما في بيانات</td></tr>'}
+      </table></div>`;
+  }
+  function renderDailyReportResult(ok){
+    const box = document.getElementById('reportResult'); if(!box) return;
+    const tally = {};
+    ok.forEach(o=>{
+      const dt = new Date(new Date(o.created_at).getTime()+3*3600000).toISOString().split('T')[0];
+      if(!tally[dt]) tally[dt] = {count:0, total:0};
+      tally[dt].count++; tally[dt].total += parseFloat(o.total||0);
+    });
+    const rows = Object.entries(tally).sort((a,b)=>a[0]<b[0]?-1:1);
+    const maxTotal = Math.max(1, ...rows.map(r=>r[1].total));
+    box.innerHTML = reportHeader('📅 المبيعات حسب اليوم') + `
+      <div class="tbl-wrap"><table class="tbl"><tr><th>التاريخ</th><th>عدد الطلبيات</th><th>إجمالي المبيعات</th><th></th></tr>
+      ${rows.map(r=>`<tr><td>${r[0]}</td><td>${r[1].count}</td><td>${fmt(r[1].total)} ${CURRENCY}</td>
+        <td style="width:40%"><div style="background:var(--line);border-radius:6px;overflow:hidden;height:14px"><div style="width:${(r[1].total/maxTotal*100).toFixed(0)}%;background:var(--ok);height:100%"></div></div></td></tr>`).join('')||'<tr><td colspan="4" class="empty-note">ما في بيانات</td></tr>'}
+      </table></div>`;
+  }
+  function renderPaymentReportResult(ok){
+    const box = document.getElementById('reportResult'); if(!box) return;
+    const tally = {};
+    ok.forEach(o=>{
+      const delFee = o.order_type==='delivery' ? parseFloat(o.delivery_fee||0) : 0;
+      if(o.payment_method==='split' && o.split_details){
+        const d = o.split_details;
+        let amt1 = parseFloat(d.amt1||0), amt2 = parseFloat(d.amt2||0);
+        tally[d.m1] = (tally[d.m1]||0) + amt1;
+        tally[d.m2] = (tally[d.m2]||0) + amt2;
+      } else {
+        const k = o.payment_method||'غير محدد';
+        tally[k] = (tally[k]||0) + Math.max(0, parseFloat(o.total||0)-delFee);
+      }
+    });
+    const PAY_AR = {cash:'💵 كاش', card:'💳 كرت', cliq:'📱 كليك'};
+    const rows = Object.entries(tally).sort((a,b)=>b[1]-a[1]);
+    const grand = rows.reduce((a,r)=>a+r[1],0);
+    box.innerHTML = reportHeader('💳 المبيعات حسب طريقة الدفع') + `
+      <div class="tbl-wrap"><table class="tbl"><tr><th>طريقة الدفع</th><th>المبلغ</th><th>النسبة</th></tr>
+      ${rows.map(r=>`<tr><td><b>${PAY_AR[r[0]]||esc(r[0])}</b></td><td>${fmt(r[1])} ${CURRENCY}</td><td>${grand?(r[1]/grand*100).toFixed(1):0}%</td></tr>`).join('')||'<tr><td colspan="3" class="empty-note">ما في بيانات</td></tr>'}
+      </table></div>`;
+  }
+  function renderExpensesReportResult(rows){
+    const box = document.getElementById('reportResult'); if(!box) return;
+    const total = rows.reduce((a,e)=>a+parseFloat(e.amount||0),0);
+    const byCat = {};
+    rows.forEach(e=>{ const k=e.category||'أخرى'; byCat[k]=(byCat[k]||0)+parseFloat(e.amount||0); });
+    box.innerHTML = reportHeader('💵 تقرير المصاريف') + `
+      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">
+        ${statCard('إجمالي المصاريف', fmt(total)+' '+CURRENCY, 'var(--red)')}
+        ${statCard('عدد الحركات', rows.length)}
+      </div>
+      <div class="tbl-wrap"><table class="tbl"><tr><th>التاريخ</th><th>النوع</th><th>البيان</th><th>المبلغ</th></tr>
+      ${rows.map(e=>`<tr><td>${e.expense_date}</td><td>${esc(e.category||'—')}</td><td>${esc(e.description||'—')}</td><td>${fmt(e.amount)} ${CURRENCY}</td></tr>`).join('')||'<tr><td colspan="4" class="empty-note">ما في بيانات</td></tr>'}
+      </table></div>`;
+  }
+  function printReport(){
+    const d = window.__repData; if(!d){ toast('⚠️ ولّدي التقرير أول'); return; }
+    const TYPE_AR = {summary:'ملخص عام للمبيعات', items:'الأصناف الأكثر مبيعًا', branches:'المبيعات حسب الفرع', daily:'المبيعات حسب اليوم', payment:'المبيعات حسب طريقة الدفع', expenses:'تقرير المصاريف'};
+    const branchName = d.branchId ? (BRANCHES.find(b=>b.id===d.branchId)?.name_ar||'') : 'كل الفروع';
+    let bodyHtml = '';
+    if(d.type==='expenses'){
+      const total = d.rows.reduce((a,e)=>a+parseFloat(e.amount||0),0);
+      bodyHtml = `<table><tr><th>التاريخ</th><th>النوع</th><th>البيان</th><th>المبلغ</th></tr>
+        ${d.rows.map(e=>`<tr><td>${e.expense_date}</td><td>${esc(e.category||'—')}</td><td>${esc(e.description||'—')}</td><td>${fmt(e.amount)}</td></tr>`).join('')}
+        </table><h3>الإجمالي: ${fmt(total)} ${CURRENCY}</h3>`;
+    } else if(d.type==='items'){
+      const tally = {};
+      d.rows.forEach(o=>(o.order_items||[]).forEach(l=>{ if(!tally[l.item_name]) tally[l.item_name]={qty:0,total:0}; tally[l.item_name].qty+=l.quantity; tally[l.item_name].total+=l.quantity*parseFloat(l.unit_price||0); }));
+      const rows = Object.entries(tally).sort((a,b)=>b[1].qty-a[1].qty);
+      bodyHtml = `<table><tr><th>#</th><th>الصنف</th><th>الكمية</th><th>الإجمالي</th></tr>
+        ${rows.map((r,i)=>`<tr><td>${i+1}</td><td>${esc(r[0])}</td><td>${r[1].qty}</td><td>${fmt(r[1].total)}</td></tr>`).join('')}
+        </table>`;
+    } else if(d.type==='branches'){
+      const tally = {};
+      d.rows.forEach(o=>{ const key=o.branch_id||'—'; const name=o.branches?.name_ar||'بدون فرع'; if(!tally[key]) tally[key]={name,count:0,total:0}; tally[key].count++; tally[key].total+=parseFloat(o.total||0); });
+      const rows = Object.values(tally).sort((a,b)=>b.total-a.total);
+      bodyHtml = `<table><tr><th>الفرع</th><th>عدد الطلبيات</th><th>الإجمالي</th></tr>
+        ${rows.map(r=>`<tr><td>${esc(r.name)}</td><td>${r.count}</td><td>${fmt(r.total)}</td></tr>`).join('')}
+        </table>`;
+    } else if(d.type==='daily'){
+      const tally = {};
+      d.rows.forEach(o=>{ const dt=new Date(new Date(o.created_at).getTime()+3*3600000).toISOString().split('T')[0]; if(!tally[dt]) tally[dt]={count:0,total:0}; tally[dt].count++; tally[dt].total+=parseFloat(o.total||0); });
+      const rows = Object.entries(tally).sort((a,b)=>a[0]<b[0]?-1:1);
+      bodyHtml = `<table><tr><th>التاريخ</th><th>عدد الطلبيات</th><th>الإجمالي</th></tr>
+        ${rows.map(r=>`<tr><td>${r[0]}</td><td>${r[1].count}</td><td>${fmt(r[1].total)}</td></tr>`).join('')}
+        </table>`;
+    } else if(d.type==='payment'){
+      const tally = {};
+      d.rows.forEach(o=>{
+        const delFee = o.order_type==='delivery' ? parseFloat(o.delivery_fee||0) : 0;
+        if(o.payment_method==='split' && o.split_details){ const s=o.split_details; tally[s.m1]=(tally[s.m1]||0)+parseFloat(s.amt1||0); tally[s.m2]=(tally[s.m2]||0)+parseFloat(s.amt2||0); }
+        else { const k=o.payment_method||'غير محدد'; tally[k]=(tally[k]||0)+Math.max(0,parseFloat(o.total||0)-delFee); }
+      });
+      const PAY_AR = {cash:'كاش', card:'كرت', cliq:'كليك'};
+      const rows = Object.entries(tally).sort((a,b)=>b[1]-a[1]);
+      bodyHtml = `<table><tr><th>طريقة الدفع</th><th>المبلغ</th></tr>
+        ${rows.map(r=>`<tr><td>${PAY_AR[r[0]]||esc(r[0])}</td><td>${fmt(r[1])}</td></tr>`).join('')}
+        </table>`;
+    } else { // summary
+      const totalSales = d.rows.reduce((a,o)=>a+parseFloat(o.total||0),0);
+      const totalDiscount = d.rows.reduce((a,o)=>a+parseFloat(o.discount||0),0);
+      const avgInvoice = d.rows.length ? totalSales/d.rows.length : 0;
+      bodyHtml = `<table>
+        <tr><td>عدد الطلبيات</td><td>${d.rows.length}</td></tr>
+        <tr><td>إجمالي المبيعات</td><td>${fmt(totalSales)} ${CURRENCY}</td></tr>
+        <tr><td>متوسط الفاتورة</td><td>${fmt(avgInvoice)} ${CURRENCY}</td></tr>
+        <tr><td>إجمالي الخصومات</td><td>${fmt(totalDiscount)} ${CURRENCY}</td></tr>
+        <tr><td>طلبيات ملغاة</td><td>${(d.cancelled||[]).length}</td></tr>
+        </table>`;
+    }
+    const html = `<html dir="rtl"><head><meta charset="UTF-8"><title>تقرير</title><style>
+      body{font-family:Cairo,Arial;padding:24px;color:#241414}
+      h1{font-size:1.3rem;margin:0 0 4px}
+      .sub{color:#8a7a72;font-size:.85rem;margin-bottom:18px}
+      table{width:100%;border-collapse:collapse;margin-top:10px}
+      td,th{padding:8px 10px;border:1px solid #eadfd4;text-align:right;font-size:.92rem}
+      th{background:#fff8ee;font-weight:800}
+      h3{margin-top:16px;color:#4a1010}
+      </style></head><body>
+      <h1>🍔 Saber JO Snack — تقرير ${TYPE_AR[d.type]||''}</h1>
+      <div class="sub">الفترة: ${d.from} → ${d.to} &nbsp;|&nbsp; الفرع: ${esc(branchName)} &nbsp;|&nbsp; تاريخ الطباعة: ${new Date().toLocaleDateString('ar-JO')}</div>
+      ${bodyHtml}
+      </body></html>`;
+    fallbackPrint(html);
+  }
+
+  function openAISettings(){
+    const key = localStorage.getItem('sjs_ai_key')||'';
+    const model = localStorage.getItem('sjs_ai_model')||'claude-sonnet-4-6';
+    modal(`<h3>🤖 إعدادات الذكاء الاصطناعي</h3>
+      <div class="fld"><label>🔑 مفتاح Anthropic API</label><input id="ai_key" type="password" value="${esc(key)}" placeholder="sk-ant-..."></div>
+      <div class="fld"><label>الموديل</label><input id="ai_model" value="${esc(model)}" placeholder="مثال: claude-sonnet-4-6"></div>
+      <div style="font-size:.78rem;color:var(--muted);font-weight:600;margin-top:4px">
+        ⚠️ تنبيه أمان: هاد المفتاح بينخزّن بمتصفحك بس (localStorage) وبينبعت مباشرة من المتصفح لـAnthropic —
+        أي حدا يفتح "أدوات المطور" (F12) على هاد الجهاز يقدر يشوفه. لا تستخدمي مفتاح فيه صلاحيات حساسة/فواتير
+        مرتفعة، وحطي حد استهلاك شهري (spend limit) من console.anthropic.com كإجراء احتياطي.
+      </div>
+      <div class="m-act"><button class="save" onclick="saveAISettings()">حفظ ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
+  }
+  function saveAISettings(){
+    const key = document.getElementById('ai_key')?.value.trim();
+    const model = document.getElementById('ai_model')?.value.trim();
+    if(!key){ toast('⚠️ اكتب المفتاح'); return; }
+    localStorage.setItem('sjs_ai_key', key);
+    localStorage.setItem('sjs_ai_model', model||'claude-sonnet-4-6');
+    closeModal(); toast('✓ انحفظت الإعدادات');
+  }
+  async function generateAIInsights(){
+    const key = localStorage.getItem('sjs_ai_key');
+    if(!key){ openAISettings(); return; }
+    const from = window.__repFrom, to = window.__repTo, branchId = window.__repBranch;
+    if(!from||!to){ toast('⚠️ ولّدي تقرير أول (حددي الفترة)'); return; }
+    const box = document.getElementById('reportResult');
+    const aiBox = document.getElementById('aiInsightsBox');
+    if(aiBox) aiBox.innerHTML = '<div class="empty-note">🤖 جاري التحليل... (ممكن ياخد لحظات)</div>';
+    try{
+      let ordQ = db.from('orders').select('total, subtotal, discount, payment_method, order_type, delivery_fee, status, split_details, order_items(item_name, quantity, unit_price)')
+        .gte('created_at', localDayStart(from)).lt('created_at', localDayStart(addDaysStr(to,1)));
+      let expQ = db.from('expenses').select('amount, category').neq('category','سحب من الدرج').gte('expense_date', from).lte('expense_date', to);
+      let wasteQ = db.from('waste_log').select('quantity, ingredients(name, unit_cost)').gte('created_at', localDayStart(from)).lt('created_at', localDayStart(addDaysStr(to,1)));
+      if(branchId){ ordQ=ordQ.eq('branch_id',branchId); expQ=expQ.eq('branch_id',branchId); wasteQ=wasteQ.eq('branch_id',branchId); }
+      const [ordRes, expRes, wasteRes] = await Promise.all([ordQ, expQ, wasteQ]);
+      const orders = (ordRes.data||[]).filter(o=>o.status!=='cancelled');
+      const expenses = expRes.data||[];
+      const wasteRows = wasteRes.data||[];
+
+      const totalSales = orders.reduce((a,o)=>a+parseFloat(o.total||0),0);
+      const totalDiscount = orders.reduce((a,o)=>a+parseFloat(o.discount||0),0);
+      const totalExpenses = expenses.reduce((a,e)=>a+parseFloat(e.amount||0),0);
+      const totalWasteCost = wasteRows.reduce((a,w)=>a+parseFloat(w.quantity||0)*parseFloat(w.ingredients?.unit_cost||0),0);
+      const estimatedProfit = totalSales - totalExpenses - totalWasteCost;
+
+      const itemTally = {};
+      orders.forEach(o=>(o.order_items||[]).forEach(l=>{
+        if(!itemTally[l.item_name]) itemTally[l.item_name] = {qty:0,total:0};
+        itemTally[l.item_name].qty += l.quantity; itemTally[l.item_name].total += l.quantity*parseFloat(l.unit_price||0);
+      }));
+      const itemsSorted = Object.entries(itemTally).sort((a,b)=>b[1].qty-a[1].qty);
+      const topItems = itemsSorted.slice(0,10);
+      const bottomItems = itemsSorted.slice(-5);
+
+      const expByCat = {};
+      expenses.forEach(e=>{ const k=e.category||'أخرى'; expByCat[k]=(expByCat[k]||0)+parseFloat(e.amount||0); });
+
+      const wasteByItem = {};
+      wasteRows.forEach(w=>{ const k=w.ingredients?.name||'—'; wasteByItem[k]=(wasteByItem[k]||0)+parseFloat(w.quantity||0)*parseFloat(w.ingredients?.unit_cost||0); });
+      const wasteSorted = Object.entries(wasteByItem).sort((a,b)=>b[1]-a[1]).slice(0,8);
+
+      const summary = `بيانات مطعم "Saber JO Snack" للفترة من ${from} إلى ${to}${branchId?' (فرع محدد)':' (كل الفروع)'}:
+عدد الطلبيات: ${orders.length}
+إجمالي المبيعات: ${totalSales.toFixed(2)} د.أ
+إجمالي الخصومات: ${totalDiscount.toFixed(2)} د.أ
+إجمالي المصاريف: ${totalExpenses.toFixed(2)} د.أ (تفصيل حسب النوع: ${Object.entries(expByCat).map(([k,v])=>k+': '+v.toFixed(2)).join('، ')||'لا يوجد'})
+تكلفة الهدر/الإتلاف: ${totalWasteCost.toFixed(2)} د.أ
+الربح التقديري المبسط (مبيعات - مصاريف - هدر، بدون احتساب تكلفة المكونات بالتفصيل): ${estimatedProfit.toFixed(2)} د.أ
+
+أكثر 10 أصناف مبيعًا (بالكمية):
+${topItems.map((r,i)=>(i+1)+'. '+r[0]+' — الكمية: '+r[1].qty+' — الإجمالي: '+r[1].total.toFixed(2)+' د.أ').join('\\n')}
+
+أقل 5 أصناف مبيعًا:
+${bottomItems.map(r=>r[0]+' — الكمية: '+r[1].qty).join('\\n')}
+
+أكثر المواد هدرًا (بالتكلفة):
+${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا يوجد هدر مسجّل بهاي الفترة'}`;
+
+      const model = localStorage.getItem('sjs_ai_model')||'claude-sonnet-4-6';
+      const resp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': key,
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-direct-browser-access': 'true'
+        },
+        body: JSON.stringify({
+          model: model,
+          max_tokens: 1200,
+          messages: [{ role:'user', content:
+            'إنتِ محلل مالي محترف لمطاعم. حللي البيانات التالية واكتبي تحليل بالعربي (باللهجة الفصحى البسيطة، بدون رموز markdown معقدة، فقرات قصيرة وعناوين واضحة) يغطي:\\n'+
+            '1) تقييم عام للأداء بهاي الفترة\\n2) تعليق على الربح/الخسارة التقديري\\n3) ملاحظات على الأصناف (الأفضل والأضعف مبيعًا)\\n4) تحليل الهدر ولو فيه مشكلة واضحة فيه\\n5) 3-5 توصيات عملية ومحددة تساعد صاحب المطعم يحسّن أرباحه.\\n\\n'+summary }]
+        })
+      });
+      const data = await resp.json();
+      if(data.error){ throw new Error(data.error.message||'خطأ من Anthropic'); }
+      const text = (data.content||[]).map(b=>b.text||'').join('\\n');
+      renderAIInsightsResult(text);
+    }catch(e){
+      console.error('AI insights failed:', e);
+      const box2 = document.getElementById('aiInsightsBox');
+      if(box2) box2.innerHTML = `<div class="alert-red">⚠️ فشل التحليل: ${esc(e.message||'خطأ')} — تأكدي المفتاح صحيح وفيه رصيد كافي</div>`;
+    }
+  }
+  function renderAIInsightsResult(text){
+    let box = document.getElementById('aiInsightsBox');
+    if(!box){
+      const result = document.getElementById('reportResult');
+      const div = document.createElement('div');
+      div.id = 'aiInsightsBox';
+      result.parentElement.insertBefore(div, result.nextSibling);
+      box = div;
+    }
+    const html = esc(text).replace(/\n\n+/g,'</p><p>').replace(/\n/g,'<br>');
+    box.innerHTML = `<div class="panel" style="margin-top:14px;border:2px solid #7b2cbf;background:#faf5ff">
+      <h3 style="color:#7b2cbf">🤖 تحليل الذكاء الاصطناعي</h3>
+      <div style="line-height:1.9;font-size:.95rem"><p>${html}</p></div>
+    </div>`;
+  }
+
   function expenseForm(id){
     const e = id ? (EXPENSES_DATA.find(x=>x.id===id)||{}) : {};
     const today = e.expense_date || new Date().toISOString().split('T')[0];
