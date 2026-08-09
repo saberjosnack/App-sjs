@@ -1111,14 +1111,20 @@
 
           ME = data.staff;
           sessionStorage.setItem('sjs_me', JSON.stringify(ME));
-          enterApp();
-          logActivity('login', 'تسجيل دخول');
-
-          setTimeout(() => {
-              if (!currentShift) {
-                  startShift();
-              }
-          }, 500);
+          const proceedAfterLogin = () => {
+            enterApp();
+            logActivity('login', 'تسجيل دخول');
+            setTimeout(() => {
+                if (!currentShift) {
+                    startShift();
+                }
+            }, 500);
+          };
+          if(!ME.terms_accepted_at && (SETTINGS.terms_text||'').trim()){
+            showTermsGate('staff', ME, proceedAfterLogin);
+          } else {
+            proceedAfterLogin();
+          }
 
       } catch(e) {
           // فشل fetch كليًا = الملف مفتوح بعارض بيمنع الإنترنت (زي معاينة الآيفون)
@@ -5700,6 +5706,11 @@
             oninput="document.getElementById('volLabel').textContent=Math.round(this.value*100)+'%'; SETTINGS.alert_volume=this.value;">
           <button type="button" class="mini ok" style="margin-top:6px" onclick="beep(1, null)">🔊 تجربة الصوت الآن</button></div>
 
+        <hr style="margin:16px 0"><h4 style="color:var(--maroon)">📜 شروط وأحكام العمل (توقيع الموظفين مرة وحدة)</h4>
+        <div style="font-size:.8rem;color:var(--muted);font-weight:600;margin-bottom:8px">اكتبي هون نص شروط وأحكام العمل بالمطعم. أول ما تحفظيه، أي موظف (كاشير/إدارة أو بوابة الموظف) لسا ما وقّع، رح تظهرله هاي الشروط إجباريًا قبل أول دخول إله، ولازم يوافق عليها عشان يكمل — وهاد بيسجّل تلقائيًا كتوقيع إلكتروني بتاريخ ووقت الموافقة. لو الحقل فاضي، ما رح تظهر الشاشة لحدا.</div>
+        <div class="fld"><textarea id="f_termsText" rows="8" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;font-family:inherit" placeholder="مثال: 1) الالتزام بمواعيد الدوام...  2) الحفاظ على سرية معلومات العملاء...  3) عدم..">${esc(SETTINGS.terms_text||'')}</textarea></div>
+        <button type="button" class="mini del" onclick="resetAllTermsAcceptance()">🔄 اطلب توقيع جديد من كل الموظفين (لو غيّرتي الشروط)</button>
+
         <div class="m-act"><button class="save" onclick="saveSettings()">💾 حفظ الإعدادات</button></div>
       </div>
 
@@ -8205,6 +8216,55 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
       <h3 style="color:#7b2cbf">🤖 تحليل الذكاء الاصطناعي</h3>
       <div style="line-height:1.9;font-size:.95rem"><p>${html}</p></div>
     </div>`;
+  }
+
+  // 📜 شاشة توقيع الشروط والأحكام — غير قابلة للإغلاق بالضغط برّاها (مقصود: توقيع إجباري)
+  function showTermsGate(table, person, onAccepted){
+    window.__pendingTermsCallback = onAccepted;
+    const text = SETTINGS.terms_text || '';
+    const old = document.getElementById('termsGateOverlay'); if(old) old.remove();
+    const d = document.createElement('div');
+    d.id = 'termsGateOverlay';
+    d.style.cssText = 'position:fixed;inset:0;background:rgba(36,20,20,.75);z-index:5000;display:flex;align-items:center;justify-content:center;padding:16px';
+    d.innerHTML = `<div style="background:#fff;border-radius:18px;padding:22px;max-width:520px;width:100%;max-height:88vh;display:flex;flex-direction:column">
+        <h3 style="color:var(--maroon);margin-bottom:4px">📜 شروط وأحكام العمل</h3>
+        <div style="font-size:.8rem;color:var(--muted);font-weight:700;margin-bottom:12px">قبل أول دخول إلك، لازم توافق(ي) على الشروط التالية:</div>
+        <div style="flex:1;overflow-y:auto;background:#fff8ee;border:1.5px solid var(--line);border-radius:10px;padding:14px;line-height:1.9;font-size:.92rem;white-space:pre-wrap;margin-bottom:14px">${esc(text)}</div>
+        <label style="display:flex;gap:8px;align-items:flex-start;font-weight:700;font-size:.88rem;cursor:pointer;margin-bottom:14px">
+          <input type="checkbox" id="termsCheckbox" style="width:20px;height:20px;flex-shrink:0;margin-top:2px">
+          <span>أقرّ بأني قرأت الشروط أعلاه وموافق(ة) عليها بالكامل — وهاد بمثابة توقيعي الإلكتروني بتاريخ ووقت هاللحظة.</span>
+        </label>
+        <button id="termsAcceptBtn" disabled onclick="acceptTerms('${table}','${person.id}')" style="width:100%;padding:14px;border-radius:12px;border:none;background:var(--muted);color:#fff;font-weight:800;font-size:1rem;cursor:not-allowed">أوافق وأؤكد التوقيع ✓</button>
+      </div>`;
+    document.body.appendChild(d);
+    const cb = document.getElementById('termsCheckbox');
+    const btn = document.getElementById('termsAcceptBtn');
+    cb.addEventListener('change', function(){
+      btn.disabled = !this.checked;
+      btn.style.background = this.checked ? 'var(--ok)' : 'var(--muted)';
+      btn.style.cursor = this.checked ? 'pointer' : 'not-allowed';
+    });
+  }
+  async function acceptTerms(table, id){
+    try{
+      const now = new Date().toISOString();
+      const { error } = await db.from(table).update({ terms_accepted_at: now }).eq('id', id);
+      if(error){ toast('✗ '+error.message); console.error(error); return; }
+      if(table==='staff' && ME) ME.terms_accepted_at = now;
+      if(table==='meal_names' && EMP) EMP.terms_accepted_at = now;
+      document.getElementById('termsGateOverlay')?.remove();
+      const cb = window.__pendingTermsCallback; window.__pendingTermsCallback = null;
+      if(cb) cb();
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
+  }
+  async function resetAllTermsAcceptance(){
+    if(!confirm('⚠️ هاد رح يطلب توقيع جديد من كل الموظفين (كاشير/إدارة وبوابة الموظف) — أول دخول إلهم الجاي رح تظهرلهم شاشة التوقيع من جديد. أكيدة؟')) return;
+    try{
+      const r1 = await db.from('staff').update({ terms_accepted_at: null }).not('id','is',null);
+      const r2 = await db.from('meal_names').update({ terms_accepted_at: null }).not('id','is',null);
+      if(r1.error || r2.error){ toast('✗ '+((r1.error||r2.error).message)); return; }
+      toast('✓ تم — الكل رح يحتاج يوقّع من جديد بأول دخول إلهم');
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
 
   function expenseForm(id){
@@ -13930,6 +13990,7 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
       theme_yellow: document.getElementById('f_themeYellow')?.value || '#FDE507',
       theme_maroon: document.getElementById('f_themeMaroon')?.value || '#4a1010',
       theme_cream: document.getElementById('f_themeCream')?.value || '#FFF8EE',
+      terms_text: document.getElementById('f_termsText')?.value.trim() || '',
     };
     if(window.__logoImg !== undefined) settings.invoice_logo = window.__logoImg || '';
     FIN_START_H = parseInt(settings.fin_start_hour)||10;
@@ -15303,12 +15364,19 @@ try {
         return;
       }
       EMP = data;
-      document.getElementById('empPortalLogin').classList.add('hidden');
-      document.getElementById('empPortalApp').classList.remove('hidden');
-      document.getElementById('ep_name').textContent = data.name;
-      setTimeout(sendDeviceHeartbeat, 1500);
-      if(!window.__empHeartbeatInterval) window.__empHeartbeatInterval = setInterval(sendDeviceHeartbeat, 45000);
-      await loadEmpPortal();
+      const proceedIntoPortal = () => {
+        document.getElementById('empPortalLogin').classList.add('hidden');
+        document.getElementById('empPortalApp').classList.remove('hidden');
+        document.getElementById('ep_name').textContent = data.name;
+        setTimeout(sendDeviceHeartbeat, 1500);
+        if(!window.__empHeartbeatInterval) window.__empHeartbeatInterval = setInterval(sendDeviceHeartbeat, 45000);
+        loadEmpPortal();
+      };
+      if(!data.terms_accepted_at && (SETTINGS.terms_text||'').trim()){
+        showTermsGate('meal_names', data, proceedIntoPortal);
+      } else {
+        proceedIntoPortal();
+      }
     }catch(e){ console.error(e); errEl.textContent = '⚠️ صار خطأ، جرب تاني'; }
   }
   function empPortalLogout(){
