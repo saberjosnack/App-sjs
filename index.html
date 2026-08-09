@@ -1214,6 +1214,7 @@
       tab_dutyHours: 'ساعات الدوام',
       tab_hrClosures: 'كشوفات الأشهر',
       tab_reports: 'التقارير',
+      tab_termsLog: 'سجل التواقيع',
       tab_ordersScreen: 'الطلبيات',
       tab_complaints: 'شكاوي العملاء',
       tab_violations: 'المخالفات',
@@ -5561,6 +5562,7 @@
     if(admView==='platforms'){ renderPlatforms(); return; }
     if(admView==='devices'){ renderDevices(); return; }
     if(admView==='reports'){ renderReports(); return; }
+    if(admView==='termsLog'){ renderTermsLog(); return; }
     if(admView==='dailyTasks'){ renderDailyTasks(); return; }
     if(admView==='empmeals'){ renderEmpMeals(); return; }
     if(admView==='topcust'){ renderTopCustomers(); return; }
@@ -5710,6 +5712,7 @@
         <div style="font-size:.8rem;color:var(--muted);font-weight:600;margin-bottom:8px">اكتبي هون نص شروط وأحكام العمل بالمطعم. أول ما تحفظيه، أي موظف (كاشير/إدارة أو بوابة الموظف) لسا ما وقّع، رح تظهرله هاي الشروط إجباريًا قبل أول دخول إله، ولازم يوافق عليها عشان يكمل — وهاد بيسجّل تلقائيًا كتوقيع إلكتروني بتاريخ ووقت الموافقة. لو الحقل فاضي، ما رح تظهر الشاشة لحدا.</div>
         <div class="fld"><textarea id="f_termsText" rows="8" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;font-family:inherit" placeholder="مثال: 1) الالتزام بمواعيد الدوام...  2) الحفاظ على سرية معلومات العملاء...  3) عدم..">${esc(SETTINGS.terms_text||'')}</textarea></div>
         <button type="button" class="mini del" onclick="resetAllTermsAcceptance()">🔄 اطلب توقيع جديد من كل الموظفين (لو غيّرتي الشروط)</button>
+        <button type="button" class="mini edit" onclick="admTab('termsLog')">📋 عرض كل التواقيع المسجّلة</button>
 
         <div class="m-act"><button class="save" onclick="saveSettings()">💾 حفظ الإعدادات</button></div>
       </div>
@@ -8218,44 +8221,114 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
     </div>`;
   }
 
-  // 📜 شاشة توقيع الشروط والأحكام — غير قابلة للإغلاق بالضغط برّاها (مقصود: توقيع إجباري)
+  // 📜 شاشة توقيع الشروط والأحكام — مروّسة باسم المطعم + بيانات موظف كاملة + توقيع إلكتروني بالرسم على الشاشة
   function showTermsGate(table, person, onAccepted){
     window.__pendingTermsCallback = onAccepted;
+    window.__pendingTermsTable = table;
+    window.__pendingTermsPersonId = person.id;
+    window.__sigHasContent = false;
     const text = SETTINGS.terms_text || '';
     const old = document.getElementById('termsGateOverlay'); if(old) old.remove();
     const d = document.createElement('div');
     d.id = 'termsGateOverlay';
-    d.style.cssText = 'position:fixed;inset:0;background:rgba(36,20,20,.75);z-index:5000;display:flex;align-items:center;justify-content:center;padding:16px';
-    d.innerHTML = `<div style="background:#fff;border-radius:18px;padding:22px;max-width:520px;width:100%;max-height:88vh;display:flex;flex-direction:column">
-        <h3 style="color:var(--maroon);margin-bottom:4px">📜 شروط وأحكام العمل</h3>
-        <div style="font-size:.8rem;color:var(--muted);font-weight:700;margin-bottom:12px">قبل أول دخول إلك، لازم توافق(ي) على الشروط التالية:</div>
-        <div style="flex:1;overflow-y:auto;background:#fff8ee;border:1.5px solid var(--line);border-radius:10px;padding:14px;line-height:1.9;font-size:.92rem;white-space:pre-wrap;margin-bottom:14px">${esc(text)}</div>
-        <label style="display:flex;gap:8px;align-items:flex-start;font-weight:700;font-size:.88rem;cursor:pointer;margin-bottom:14px">
-          <input type="checkbox" id="termsCheckbox" style="width:20px;height:20px;flex-shrink:0;margin-top:2px">
-          <span>أقرّ بأني قرأت الشروط أعلاه وموافق(ة) عليها بالكامل — وهاد بمثابة توقيعي الإلكتروني بتاريخ ووقت هاللحظة.</span>
-        </label>
-        <button id="termsAcceptBtn" disabled onclick="acceptTerms('${table}','${person.id}')" style="width:100%;padding:14px;border-radius:12px;border:none;background:var(--muted);color:#fff;font-weight:800;font-size:1rem;cursor:not-allowed">أوافق وأؤكد التوقيع ✓</button>
+    d.style.cssText = 'position:fixed;inset:0;background:rgba(36,20,20,.8);z-index:5000;display:flex;align-items:center;justify-content:center;padding:14px;overflow-y:auto';
+    d.innerHTML = `<div style="background:#fff;border-radius:18px;padding:0;max-width:560px;width:100%;max-height:94vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.4)">
+        <div style="background:linear-gradient(160deg,var(--maroon),#2b0808);color:#fff;padding:22px 24px;text-align:center;flex-shrink:0">
+          ${SETTINGS.invoice_logo?`<img src="${SETTINGS.invoice_logo}" style="max-width:56px;max-height:56px;object-fit:contain;margin-bottom:6px">`:''}
+          <div style="font-size:1.25rem;font-weight:900">🍔 Saber JO Snack — صابر جو سناك</div>
+          <div style="font-size:.82rem;opacity:.85;font-weight:700;margin-top:2px">إقرار وموافقة على شروط وأحكام العمل</div>
+        </div>
+        <div style="padding:20px;overflow-y:auto;flex:1">
+          <div style="font-size:.8rem;color:var(--muted);font-weight:700;margin-bottom:10px">قبل أول دخول إلك على النظام، لازم تعبّي بياناتك وتوقّع إقرارك بموافقتك على الشروط التالية:</div>
+          <div style="background:#fff8ee;border:1.5px solid var(--line);border-radius:10px;padding:14px;line-height:1.9;font-size:.9rem;white-space:pre-wrap;margin-bottom:16px;max-height:180px;overflow-y:auto">${esc(text)}</div>
+
+          <h4 style="color:var(--maroon);margin-bottom:8px">📝 بيانات الموقّع</h4>
+          <div class="fld"><label>الاسم الرباعي الكامل</label><input id="ts_name" placeholder="مثال: محمد أحمد علي الخطيب"></div>
+          <div class="two" style="gap:10px">
+            <div class="fld"><label>الرقم الوطني</label><input id="ts_nid" inputmode="numeric" placeholder="10 أرقام"></div>
+            <div class="fld"><label>رقم الهاتف</label><input id="ts_phone" inputmode="tel" placeholder="07XXXXXXXX"></div>
+          </div>
+          <div class="fld"><label>تاريخ التحرير</label><input value="${new Date().toLocaleDateString('ar-JO',{year:'numeric',month:'long',day:'numeric'})}" disabled style="background:#f4f0ec;color:var(--muted);font-weight:700"></div>
+
+          <h4 style="color:var(--maroon);margin:14px 0 8px">✍️ التوقيع</h4>
+          <div style="font-size:.78rem;color:var(--muted);font-weight:600;margin-bottom:6px">وقّع بإصبعك (موبايل/تابلت) أو بالماوس بالمساحة تحت:</div>
+          <canvas id="sigCanvas" width="480" height="160" style="border:2px dashed var(--line);border-radius:10px;background:#fff;touch-action:none;width:100%;height:150px;cursor:crosshair"></canvas>
+          <button type="button" class="mini del" style="margin-top:8px" onclick="clearSignature()">🧹 امسح التوقيع وأعد المحاولة</button>
+
+          <label style="display:flex;gap:8px;align-items:flex-start;font-weight:700;font-size:.85rem;cursor:pointer;margin-top:16px">
+            <input type="checkbox" id="termsCheckbox" onchange="checkTermsFormValid()" style="width:19px;height:19px;flex-shrink:0;margin-top:2px">
+            <span>أقرّ بصحة البيانات أعلاه، وبأني قرأت الشروط وموافق(ة) عليها بالكامل، وهاد توقيعي الشخصي.</span>
+          </label>
+        </div>
+        <div style="padding:16px 20px;border-top:1.5px solid var(--line);flex-shrink:0">
+          <button id="termsAcceptBtn" disabled onclick="submitTermsSignature()" style="width:100%;padding:14px;border-radius:12px;border:none;background:var(--muted);color:#fff;font-weight:800;font-size:1rem;cursor:not-allowed">أوافق وأؤكد التوقيع ✓</button>
+        </div>
       </div>`;
     document.body.appendChild(d);
-    const cb = document.getElementById('termsCheckbox');
-    const btn = document.getElementById('termsAcceptBtn');
-    cb.addEventListener('change', function(){
-      btn.disabled = !this.checked;
-      btn.style.background = this.checked ? 'var(--ok)' : 'var(--muted)';
-      btn.style.cursor = this.checked ? 'pointer' : 'not-allowed';
-    });
+    ['ts_name','ts_nid','ts_phone'].forEach(id=>document.getElementById(id).addEventListener('input', checkTermsFormValid));
+    initSignaturePad();
   }
-  async function acceptTerms(table, id){
+  function initSignaturePad(){
+    const canvas = document.getElementById('sigCanvas'); if(!canvas) return;
+    const ctx = canvas.getContext('2d');
+    ctx.lineWidth = 2.5; ctx.lineCap = 'round'; ctx.strokeStyle = '#241414';
+    let drawing = false;
+    function pos(e){
+      const rect = canvas.getBoundingClientRect();
+      const sx = canvas.width/rect.width, sy = canvas.height/rect.height;
+      const cx = e.touches ? e.touches[0].clientX : e.clientX;
+      const cy = e.touches ? e.touches[0].clientY : e.clientY;
+      return { x:(cx-rect.left)*sx, y:(cy-rect.top)*sy };
+    }
+    function start(e){ drawing=true; window.__sigHasContent=true; const p=pos(e); ctx.beginPath(); ctx.moveTo(p.x,p.y); e.preventDefault(); checkTermsFormValid(); }
+    function move(e){ if(!drawing) return; const p=pos(e); ctx.lineTo(p.x,p.y); ctx.stroke(); e.preventDefault(); }
+    function end(){ drawing=false; }
+    canvas.onmousedown=start; canvas.onmousemove=move; window.onmouseup=end;
+    canvas.ontouchstart=start; canvas.ontouchmove=move; canvas.ontouchend=end;
+  }
+  function clearSignature(){
+    const canvas = document.getElementById('sigCanvas'); if(!canvas) return;
+    canvas.getContext('2d').clearRect(0,0,canvas.width,canvas.height);
+    window.__sigHasContent = false;
+    checkTermsFormValid();
+  }
+  function checkTermsFormValid(){
+    const btn = document.getElementById('termsAcceptBtn'); if(!btn) return;
+    const name = (document.getElementById('ts_name')?.value||'').trim();
+    const nid = (document.getElementById('ts_nid')?.value||'').trim();
+    const phone = (document.getElementById('ts_phone')?.value||'').trim();
+    const checked = document.getElementById('termsCheckbox')?.checked;
+    const nameParts = name.split(/\s+/).filter(Boolean).length;
+    const valid = nameParts>=4 && nid.length>=6 && phone.length>=7 && checked && window.__sigHasContent;
+    btn.disabled = !valid;
+    btn.style.background = valid ? 'var(--ok)' : 'var(--muted)';
+    btn.style.cursor = valid ? 'pointer' : 'not-allowed';
+  }
+  async function submitTermsSignature(){
+    const table = window.__pendingTermsTable, id = window.__pendingTermsPersonId;
+    const name = document.getElementById('ts_name')?.value.trim();
+    const nid = document.getElementById('ts_nid')?.value.trim();
+    const phone = document.getElementById('ts_phone')?.value.trim();
+    const canvas = document.getElementById('sigCanvas');
+    if(!name || !nid || !phone || !window.__sigHasContent){ toast('⚠️ عبّي كل الحقول ووقّع'); return; }
+    const btn = document.getElementById('termsAcceptBtn');
+    if(btn){ btn.disabled = true; btn.textContent = '⏳ جاري الحفظ...'; }
     try{
+      const signatureImage = canvas.toDataURL('image/png');
       const now = new Date().toISOString();
+      const { error: sigErr } = await db.from('terms_signatures').insert({
+        employee_table: table, employee_id: id, full_name: name, national_id: nid, phone: phone,
+        signed_at: now, signature_image: signatureImage, terms_text_snapshot: SETTINGS.terms_text||''
+      });
+      if(sigErr){ toast('✗ '+sigErr.message); console.error(sigErr); if(btn){ btn.disabled=false; btn.textContent='أوافق وأؤكد التوقيع ✓'; } return; }
       const { error } = await db.from(table).update({ terms_accepted_at: now }).eq('id', id);
-      if(error){ toast('✗ '+error.message); console.error(error); return; }
+      if(error){ toast('✗ '+error.message); console.error(error); if(btn){ btn.disabled=false; btn.textContent='أوافق وأؤكد التوقيع ✓'; } return; }
       if(table==='staff' && ME) ME.terms_accepted_at = now;
       if(table==='meal_names' && EMP) EMP.terms_accepted_at = now;
       document.getElementById('termsGateOverlay')?.remove();
       const cb = window.__pendingTermsCallback; window.__pendingTermsCallback = null;
       if(cb) cb();
-    }catch(e){ toast('✗ '+e.message); console.error(e); }
+    }catch(e){ toast('✗ '+e.message); console.error(e); if(btn){ btn.disabled=false; btn.textContent='أوافق وأؤكد التوقيع ✓'; } }
   }
   async function resetAllTermsAcceptance(){
     if(!confirm('⚠️ هاد رح يطلب توقيع جديد من كل الموظفين (كاشير/إدارة وبوابة الموظف) — أول دخول إلهم الجاي رح تظهرلهم شاشة التوقيع من جديد. أكيدة؟')) return;
@@ -8265,6 +8338,80 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
       if(r1.error || r2.error){ toast('✗ '+((r1.error||r2.error).message)); return; }
       toast('✓ تم — الكل رح يحتاج يوقّع من جديد بأول دخول إلهم');
     }catch(e){ toast('✗ '+e.message); console.error(e); }
+  }
+
+  async function renderTermsLog(){
+    const C = document.getElementById('admContent');
+    C.innerHTML = '<div class="empty-note">... جاري التحميل</div>';
+    try{
+      const { data, error } = await db.from('terms_signatures').select('*').order('signed_at',{ascending:false});
+      if(error){ C.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message||'خطأ')} — تأكدي نفّذتي SQL جدول terms_signatures</div>`; console.error(error); return; }
+      const rows = data||[];
+      C.innerHTML = `
+        <div class="panel" style="margin-bottom:14px">
+          <h3>📋 سجل التواقيع الإلكترونية على الشروط والأحكام</h3>
+          <div style="font-size:.82rem;color:var(--muted);font-weight:700">إجمالي: ${rows.length} توقيع مسجّل</div>
+        </div>
+        <div class="tbl-wrap"><table class="tbl">
+          <tr><th>الاسم</th><th>الرقم الوطني</th><th>الهاتف</th><th>الحساب</th><th>تاريخ التوقيع</th><th></th></tr>
+          ${rows.map(r=>`<tr>
+            <td><b>${esc(r.full_name)}</b></td>
+            <td>${esc(r.national_id)}</td>
+            <td>${esc(r.phone)}</td>
+            <td>${r.employee_table==='staff'?'👤 كاشير/إدارة':'🧑‍💼 بوابة HR'}</td>
+            <td>${new Date(r.signed_at).toLocaleString('ar-JO')}</td>
+            <td><button class="mini edit" onclick="viewTermsSignature('${r.id}')">عرض 🔍</button></td>
+          </tr>`).join('')||'<tr><td colspan="6" class="empty-note">ما في تواقيع مسجّلة بعد</td></tr>'}
+        </table></div>`;
+      window.__TERMS_LOG = rows;
+    }catch(e){ C.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
+  }
+  function viewTermsSignature(id){
+    const r = (window.__TERMS_LOG||[]).find(x=>x.id===id); if(!r) return;
+    modal(`<h3>📜 تفاصيل التوقيع</h3>
+      <div style="line-height:2;font-size:.92rem">
+        <div><b>الاسم الرباعي:</b> ${esc(r.full_name)}</div>
+        <div><b>الرقم الوطني:</b> ${esc(r.national_id)}</div>
+        <div><b>رقم الهاتف:</b> ${esc(r.phone)}</div>
+        <div><b>نوع الحساب:</b> ${r.employee_table==='staff'?'كاشير/إدارة':'بوابة HR'}</div>
+        <div><b>تاريخ ووقت التوقيع:</b> ${new Date(r.signed_at).toLocaleString('ar-JO')}</div>
+      </div>
+      <div style="margin-top:10px"><b>التوقيع:</b>
+        <div style="border:1.5px solid var(--line);border-radius:10px;padding:10px;margin-top:6px;background:#fff">
+          <img src="${r.signature_image}" style="max-width:100%;max-height:160px">
+        </div>
+      </div>
+      <div style="margin-top:10px"><b>نص الشروط وقت التوقيع:</b>
+        <div style="max-height:160px;overflow-y:auto;background:#fff8ee;border:1.5px solid var(--line);border-radius:10px;padding:10px;margin-top:6px;font-size:.85rem;white-space:pre-wrap">${esc(r.terms_text_snapshot||'—')}</div>
+      </div>
+      <div class="m-act"><button class="save" onclick="printTermsSignature('${r.id}')">🖨️ طباعة</button><button class="cancel" onclick="closeModal()">إغلاق</button></div>`);
+  }
+  function printTermsSignature(id){
+    const r = (window.__TERMS_LOG||[]).find(x=>x.id===id); if(!r) return;
+    const html = `<html dir="rtl"><head><meta charset="UTF-8"><title>إقرار موقّع</title><style>
+      body{font-family:Cairo,Arial;padding:30px;color:#241414}
+      h1{font-size:1.3rem;text-align:center;margin-bottom:2px}
+      .sub{text-align:center;color:#8a7a72;font-size:.85rem;margin-bottom:24px}
+      table{width:100%;border-collapse:collapse;margin-bottom:20px}
+      td{padding:8px 10px;border:1px solid #eadfd4;font-size:.95rem}
+      td:first-child{font-weight:800;background:#fff8ee;width:35%}
+      .terms{background:#fff8ee;border:1px solid #eadfd4;border-radius:8px;padding:14px;line-height:1.9;font-size:.9rem;white-space:pre-wrap;margin-bottom:20px}
+      .sig{text-align:center;margin-top:20px}
+      .sig img{max-width:300px;border-bottom:2px solid #241414;padding-bottom:8px}
+      </style></head><body>
+      <h1>🍔 Saber JO Snack — إقرار وموافقة على شروط وأحكام العمل</h1>
+      <div class="sub">تاريخ الطباعة: ${new Date().toLocaleDateString('ar-JO')}</div>
+      <table>
+        <tr><td>الاسم الرباعي</td><td>${esc(r.full_name)}</td></tr>
+        <tr><td>الرقم الوطني</td><td>${esc(r.national_id)}</td></tr>
+        <tr><td>رقم الهاتف</td><td>${esc(r.phone)}</td></tr>
+        <tr><td>نوع الحساب</td><td>${r.employee_table==='staff'?'كاشير/إدارة':'بوابة HR'}</td></tr>
+        <tr><td>تاريخ ووقت التوقيع</td><td>${new Date(r.signed_at).toLocaleString('ar-JO')}</td></tr>
+      </table>
+      <div class="terms">${esc(r.terms_text_snapshot||'—')}</div>
+      <div class="sig"><img src="${r.signature_image}"><div style="font-weight:800;margin-top:6px">توقيع الموظف</div></div>
+      </body></html>`;
+    fallbackPrint(html);
   }
 
   function expenseForm(id){
