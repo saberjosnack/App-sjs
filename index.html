@@ -229,22 +229,6 @@
     .adm-tabs button{background:#fff;border:1.5px solid var(--line);border-radius:999px;padding:8px 20px;font-weight:700;color:var(--muted)}
     .adm-tabs button.on{background:var(--maroon);color:var(--yellow);border-color:var(--maroon)}
 
-    /* 📋 قائمة الإدارة الجانبية المصنّفة */
-    .admin-layout{display:flex;gap:16px;align-items:flex-start}
-    .adm-tabs-sidebar{width:270px;flex-shrink:0;background:#fff;border-radius:16px;box-shadow:var(--shadow);padding:10px;max-height:calc(100vh - 24px);overflow-y:auto;position:sticky;top:12px}
-    .adm-tabs-sidebar details{margin-bottom:3px;border-radius:10px;overflow:hidden}
-    .adm-tabs-sidebar summary{cursor:pointer;font-weight:900;padding:11px 10px;border-radius:10px;list-style:none;display:flex;align-items:center;gap:6px;color:var(--maroon);background:#fff8ee;font-size:.92rem;user-select:none}
-    .adm-tabs-sidebar summary::-webkit-details-marker{display:none}
-    .adm-tabs-sidebar summary::marker{content:''}
-    .adm-tabs-sidebar summary:hover{background:var(--yellow)}
-    .adm-tabs-sidebar details[open] summary{border-radius:10px 10px 0 0}
-    .adm-tabs-sidebar .adm-tabs.cat-group{display:flex;flex-direction:column;gap:5px;flex-wrap:nowrap;padding:8px 6px;margin:0;background:#fffdf9}
-    .adm-tabs-sidebar .adm-tabs.cat-group button{width:100%;text-align:right;white-space:normal;border-radius:9px;padding:9px 12px;font-size:.83rem;line-height:1.4}
-    .admin-content{flex:1;min-width:0}
-    @media (max-width:980px){
-      .admin-layout{flex-direction:column}
-      .adm-tabs-sidebar{width:100%;position:static;max-height:none}
-    }
     .add-btn{background:var(--ok);color:#fff;border-radius:12px;padding:10px 22px;font-weight:900;margin-bottom:12px;box-shadow:var(--shadow);border:none}
     .add-btn.danger{background:var(--red)}
 
@@ -613,96 +597,55 @@
     </section>
 
     <!-- ===== الإدارة ===== -->
-    <section id="v-admin" class="hidden admin-layout">
-      <nav class="adm-tabs-sidebar" id="admTabsSidebar">
-        <details open>
-          <summary>📊 المبيعات والتقارير</summary>
-          <div class="adm-tabs cat-group">
-          <button data-a="reports" onclick="admTab('reports')" style="background:#d1f0e0;border-color:#0b8a4a">📊 التقارير</button>
-          <button data-a="ordersScreen" onclick="admTab('ordersScreen')" style="background:#25D366;color:#fff;border-color:#128C7E">📋 الطلبيات</button>
-          <button data-a="complaints" onclick="admTab('complaints')" style="background:#ffd0d0;border-color:#c0392b">😠 شكاوي العملاء</button>
-          <button data-a="satisfaction" onclick="admTab('satisfaction')" style="background:#fff0f5;border-color:#e91e8c">⭐ نقاط رضا العملاء</button>
-          <button data-a="topcust" onclick="admTab('topcust')">🏆 أفضل العملاء</button>
-          <button data-a="ccPoints" onclick="admTab('ccPoints')" style="background:#e0f0ff;border-color:#0d6efd">📞 نقاط مبيعات الكول سنتر</button>
-          </div>
-        </details>
-        <details>
-          <summary>🍔 المنتج والقائمة</summary>
-          <div class="adm-tabs cat-group">
-          <button data-a="items" class="on" onclick="admTab('items')">🍔 الأصناف</button>
-          <button data-a="cats" onclick="admTab('cats')">📂 التصنيفات</button>
-          <button data-a="codes" onclick="admTab('codes')">🎟️ أكواد الخصم</button>
-          <button data-a="schedDisc" onclick="admTab('schedDisc')" style="background:#ffe0e9;border-color:#e91e8c">🏷️ خصومات مجدولة</button>
-          <button data-a="deductions" onclick="admTab('deductions')" style="background:#ffe0e0;border-color:#c0392b">➖ جدول الخصومات</button>
-          <button data-a="rewards" onclick="admTab('rewards')" style="background:#d4f7d4;border-color:#1a9c4b">🎁 جدول المكافآت</button>
-          <button data-a="recipes" onclick="admTab('recipes')">📋 الوصفات</button>
-          <button data-a="ingredients" onclick="admTab('ingredients')">🥩 المكونات</button>
-          <button data-a="manufacturing" onclick="admTab('manufacturing')" style="background:#ffe8b3;border-color:#c98a00">🏭 التصنيع</button>
-          <button data-a="productTimeline" onclick="admTab('productTimeline')" style="background:#c8f0e0;border-color:#0d9c6c">📜 خط سير المنتج</button>
-          </div>
-        </details>
-        <details>
-          <summary>📦 المخزون والمشتريات</summary>
-          <div class="adm-tabs cat-group">
-          <button data-a="inventory" onclick="admTab('inventory')" style="background:var(--yellow);border-color:#d9c400">📋 جرد المخزون</button>
-          <button data-a="warehouse" onclick="admTab('warehouse')" style="background:#d9c8ff;border-color:#7b2cbf">🏬 المستودع</button>
-          <button data-a="dailyAudits" onclick="admTab('dailyAudits')" style="background:#c2f0e0;border-color:#0d9c6c">📋 جرد الفرع اليومي</button>
-          <button data-a="spotCheck" onclick="admTab('spotCheck')" style="background:#ffe0c8;border-color:#e07b1e">🎯 جرد عشوائي (فجائي)</button>
-          <button data-a="transfers" onclick="admTab('transfers')">🔄 نقل بضاعة</button>
-          <button data-a="purchases" onclick="admTab('purchases')">🛒 المشتريات</button>
-          <button data-a="platforms" onclick="admTab('platforms')">🛵 منصات التوصيل</button>
-          <button data-a="suppliers" onclick="admTab('suppliers')">🚚 الموردين</button>
-          <button data-a="supplierPayments" onclick="admTab('supplierPayments')" style="background:#d8f0ff;border-color:#0d6efd">💳 دفعات الموردين</button>
-          <button data-a="waste" onclick="admTab('waste')">🗑️ الإتلاف</button>
-          </div>
-        </details>
-        <details>
-          <summary>💰 المالية</summary>
-          <div class="adm-tabs cat-group">
-          <button data-a="treasury" onclick="admTab('treasury')" style="background:#c8f7d4;border-color:#1a9c4b">💰 المصاري</button>
-          <button data-a="expenses" onclick="admTab('expenses')">💸 المصاريف</button>
-          </div>
-        </details>
-        <details>
-          <summary>👥 الموظفين وHR</summary>
-          <div class="adm-tabs cat-group">
-          <button data-a="staff" onclick="admTab('staff')">👥 الموظفين</button>
-          <button data-a="dailyTasks" onclick="admTab('dailyTasks')" style="background:#fff3c4;border-color:#e8890c">📝 مهام الموظفين اليومية</button>
-          <button data-a="roles" onclick="admTab('roles')">🛡️ الأدوار</button>
-          <button data-a="hr" onclick="admTab('hr')" style="background:#ffe0c2;border-color:#e8890c">🧑‍💼 HR</button>
-          <button data-a="hrLocations" onclick="admTab('hrLocations')" style="background:#ffd9ec;border-color:#e0409a">📍 مواقع الدخول</button>
-          <button data-a="dutyHours" onclick="admTab('dutyHours')" style="background:#d9f0ff;border-color:#0d9cdb">⏰ ساعات الدوام</button>
-          <button data-a="shiftSchedule" onclick="admTab('shiftSchedule')" style="background:#e0d9ff;border-color:#7b2cbf">🕐 جدول الدوام المحدد</button>
-          <button data-a="hrClosures" onclick="admTab('hrClosures')" style="background:#e8d9ff;border-color:#7b2cbf">📜 كشوفات الأشهر</button>
-          <button data-a="breaksScreen" onclick="admTab('breaksScreen')" style="background:#fff0d8;border-color:#c88a00">☕ البريكات</button>
-          <button data-a="empmeals" onclick="admTab('empmeals')">🍽️ وجبات الموظفين</button>
-          <button data-a="violations" onclick="admTab('violations')" style="background:#ffcccc;border-color:#8b0000">🚩 المخالفات</button>
-          </div>
-        </details>
-        <details>
-          <summary>🏪 الفروع والأجهزة</summary>
-          <div class="adm-tabs cat-group">
-          <button data-a="branches" onclick="admTab('branches')">🏪 الفروع</button>
-          <button data-a="devices" onclick="admTab('devices')">🖥️ الأجهزة</button>
-          <button data-a="shifts" onclick="admTab('shifts')">🔄 شيفتات</button>
-          </div>
-        </details>
-        <details>
-          <summary>💬 التواصل</summary>
-          <div class="adm-tabs cat-group">
-          <button data-a="chats" onclick="admTab('chats')" style="background:#d0ecff;border-color:#0d6efd">💬 المحادثات</button>
-          </div>
-        </details>
-        <details>
-          <summary>⚙️ النظام</summary>
-          <div class="adm-tabs cat-group">
-          <button data-a="sett" onclick="admTab('sett')">🔧 إعدادات</button>
-          <button data-a="activityLog" onclick="admTab('activityLog')" style="background:#2b2b2b;color:#fff;border-color:#000">📜 سجل الأحداث</button>
-          </div>
-        </details>
-      </nav>
+    <section id="v-admin" class="hidden">
+      <div class="adm-tabs">
+        <button data-a="items" class="on" onclick="admTab('items')">🍔 الأصناف</button>
+        <button data-a="reports" onclick="admTab('reports')" style="background:#d1f0e0;border-color:#0b8a4a">📊 التقارير</button>
+        <button data-a="cats" onclick="admTab('cats')">📂 التصنيفات</button>
+        <button data-a="codes" onclick="admTab('codes')">🎟️ أكواد الخصم</button>
+        <button data-a="schedDisc" onclick="admTab('schedDisc')" style="background:#ffe0e9;border-color:#e91e8c">🏷️ خصومات مجدولة</button>
+        <button data-a="staff" onclick="admTab('staff')">👥 الموظفين</button>
+        <button data-a="dailyTasks" onclick="admTab('dailyTasks')" style="background:#fff3c4;border-color:#e8890c">📝 مهام الموظفين اليومية</button>
+        <button data-a="roles" onclick="admTab('roles')">🛡️ الأدوار</button>
+        <button data-a="branches" onclick="admTab('branches')">🏪 الفروع</button>
+        <button data-a="inventory" onclick="admTab('inventory')" style="background:var(--yellow);border-color:#d9c400">📋 جرد المخزون</button>
+        <button data-a="warehouse" onclick="admTab('warehouse')" style="background:#d9c8ff;border-color:#7b2cbf">🏬 المستودع</button>
+        <button data-a="dailyAudits" onclick="admTab('dailyAudits')" style="background:#c2f0e0;border-color:#0d9c6c">📋 جرد الفرع اليومي</button>
+        <button data-a="treasury" onclick="admTab('treasury')" style="background:#c8f7d4;border-color:#1a9c4b">💰 المصاري</button>
+        <button data-a="hr" onclick="admTab('hr')" style="background:#ffe0c2;border-color:#e8890c">🧑‍💼 HR</button>
+        <button data-a="chats" onclick="admTab('chats')" style="background:#d0ecff;border-color:#0d6efd">💬 المحادثات</button>
+        <button data-a="hrLocations" onclick="admTab('hrLocations')" style="background:#ffd9ec;border-color:#e0409a">📍 مواقع الدخول</button>
+        <button data-a="dutyHours" onclick="admTab('dutyHours')" style="background:#d9f0ff;border-color:#0d9cdb">⏰ ساعات الدوام</button>
+        <button data-a="shiftSchedule" onclick="admTab('shiftSchedule')" style="background:#e0d9ff;border-color:#7b2cbf">🕐 جدول الدوام المحدد</button>
+        <button data-a="hrClosures" onclick="admTab('hrClosures')" style="background:#e8d9ff;border-color:#7b2cbf">📜 كشوفات الأشهر</button>
+        <button data-a="ingredients" onclick="admTab('ingredients')">🥩 المكونات</button>
+        <button data-a="recipes" onclick="admTab('recipes')">📋 الوصفات</button>
+        <button data-a="manufacturing" onclick="admTab('manufacturing')" style="background:#ffe8b3;border-color:#c98a00">🏭 التصنيع</button>
+        <button data-a="transfers" onclick="admTab('transfers')">🔄 نقل بضاعة</button>
+        <button data-a="expenses" onclick="admTab('expenses')">💸 المصاريف</button>
+        <button data-a="purchases" onclick="admTab('purchases')">🛒 المشتريات</button>
+        <button data-a="platforms" onclick="admTab('platforms')">🛵 منصات التوصيل</button>
+        <button data-a="empmeals" onclick="admTab('empmeals')">🍽️ وجبات الموظفين</button>
+        <button data-a="topcust" onclick="admTab('topcust')">🏆 أفضل العملاء</button>
+        <button data-a="waste" onclick="admTab('waste')">🗑️ الإتلاف</button>
+        <button data-a="suppliers" onclick="admTab('suppliers')">🚚 الموردين</button>
+        <button data-a="ordersScreen" onclick="admTab('ordersScreen')" style="background:#25D366;color:#fff;border-color:#128C7E">📋 الطلبيات</button>
+        <button data-a="devices" onclick="admTab('devices')">🖥️ الأجهزة</button>
+        <button data-a="complaints" onclick="admTab('complaints')" style="background:#ffd0d0;border-color:#c0392b">😠 شكاوي العملاء</button>
+        <button data-a="violations" onclick="admTab('violations')" style="background:#ffcccc;border-color:#8b0000">🚩 المخالفات</button>
+        <button data-a="deductions" onclick="admTab('deductions')" style="background:#ffe0e0;border-color:#c0392b">➖ جدول الخصومات</button>
+        <button data-a="rewards" onclick="admTab('rewards')" style="background:#d4f7d4;border-color:#1a9c4b">🎁 جدول المكافآت</button>
+        <button data-a="satisfaction" onclick="admTab('satisfaction')" style="background:#fff0f5;border-color:#e91e8c">⭐ نقاط رضا العملاء</button>
+        <button data-a="ccPoints" onclick="admTab('ccPoints')" style="background:#e0f0ff;border-color:#0d6efd">📞 نقاط مبيعات الكول سنتر</button>
+        <button data-a="activityLog" onclick="admTab('activityLog')" style="background:#2b2b2b;color:#fff;border-color:#000">📜 سجل الأحداث</button>
+        <button data-a="sett" onclick="admTab('sett')">🔧 إعدادات</button>
+        <button data-a="shifts" onclick="admTab('shifts')">🔄 شيفتات</button>
+        <button data-a="productTimeline" onclick="admTab('productTimeline')" style="background:#c8f0e0;border-color:#0d9c6c">📜 خط سير المنتج</button>
+        <button data-a="spotCheck" onclick="admTab('spotCheck')" style="background:#ffe0c8;border-color:#e07b1e">🎯 جرد عشوائي (فجائي)</button>
+        <button data-a="breaksScreen" onclick="admTab('breaksScreen')" style="background:#fff0d8;border-color:#c88a00">☕ البريكات</button>
+        <button data-a="supplierPayments" onclick="admTab('supplierPayments')" style="background:#d8f0ff;border-color:#0d6efd">💳 دفعات الموردين</button>
       </div>
-      <div id="admContent" class="admin-content"></div>
+      <div id="admContent"></div>
     </section>
 
   </main>
@@ -4901,17 +4844,40 @@
   async function computeOrderCounts(customerIds){
     // العدد الحقيقي لطلبات كل عميل من جدول الطلبات نفسه (بدون الملغاة) —
     // بدل الاعتماد على عداد orders_count المخزّن اللي ممكن ينزاح مع الوقت (تعديل طلب، أو استدعاء upsertCustomer أكثر من مرة لنفس الطلب)
+    // 🔧 مقسّمة على صفحات (pagination) عشان ما تنقطع عند حد 1000 صف يلي سوبابيز بيحطه افتراضيًا لكل طلب واحد
     if(!customerIds || !customerIds.length) return {};
     try{
-      const { data } = await db.from('orders').select('customer_id').in('customer_id', customerIds).neq('status','cancelled');
       const map = {};
-      (data||[]).forEach(o=>{ if(o.customer_id) map[o.customer_id] = (map[o.customer_id]||0)+1; });
+      const pageSize = 1000;
+      let from = 0;
+      while(true){
+        const { data, error } = await db.from('orders').select('customer_id').in('customer_id', customerIds).neq('status','cancelled').range(from, from+pageSize-1);
+        if(error){ console.error('computeOrderCounts page error:', error); break; }
+        (data||[]).forEach(o=>{ if(o.customer_id) map[o.customer_id] = (map[o.customer_id]||0)+1; });
+        if(!data || data.length < pageSize) break;
+        from += pageSize;
+      }
       return map;
     }catch(e){ console.error('computeOrderCounts failed:', e); return {}; }
   }
   async function loadCustomers(){
     try {
-      const { data } = await db.from('customers').select('*').order('created_at', {ascending:false}).limit(5000);
+      const listEl = document.getElementById('custList');
+      if(listEl) listEl.innerHTML = '<div class="empty-note">⏳ جاري تحميل كل العملاء (ممكن ياخد شوي لو عندك عدد كبير)...</div>';
+      // 🔧 مقسّمة على صفحات (pagination) عشان عدد العملاء يكون بلا حد أقصى فعليًا —
+      // بنجيب 1000 بكل مرة ونكرر لحد ما تخلص الصفحات، بدل ما نعتمد على limit() واحد محدود
+      let all = [];
+      let from = 0;
+      const pageSize = 1000;
+      while(true){
+        const { data, error } = await db.from('customers').select('*').order('created_at', {ascending:false}).range(from, from+pageSize-1);
+        if(error){ console.error('loadCustomers page error:', error); break; }
+        if(!data || !data.length) break;
+        all = all.concat(data);
+        if(data.length < pageSize) break;
+        from += pageSize;
+      }
+      const data = all;
       CUSTOMERS = data||[];
       const counts = await computeOrderCounts(CUSTOMERS.map(c=>c.id));
       CUSTOMERS.forEach(c=>{ c.real_orders_count = counts[c.id]||0; });
@@ -4978,7 +4944,18 @@
   async function showCustomerInvoices(id){
     const c = CUSTOMERS.find(x=>x.id===id); if(!c) return;
     try {
-      const { data: orders } = await db.from('orders').select('*, order_items(*), branches(name_ar)').eq('customer_id', id).order('created_at', {ascending:false}).limit(1000);
+      // 🔧 مقسّمة على صفحات — بلا حد أقصى لعدد الفواتير حتى لعميل عنده آلاف الطلبات
+      let orders = [];
+      let from = 0;
+      const pageSize = 1000;
+      while(true){
+        const { data, error } = await db.from('orders').select('*, order_items(*), branches(name_ar)').eq('customer_id', id).order('created_at', {ascending:false}).range(from, from+pageSize-1);
+        if(error){ console.error('showCustomerInvoices page error:', error); break; }
+        if(!data || !data.length) break;
+        orders = orders.concat(data);
+        if(data.length < pageSize) break;
+        from += pageSize;
+      }
       modal(`
         <h3>📋 فواتير ${esc(c.name)}</h3>
         <div style="font-size:.85rem;color:var(--muted);margin-bottom:10px">📞 ${esc(c.phone)}</div>
