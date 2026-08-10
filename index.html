@@ -4844,14 +4844,15 @@
   async function computeOrderCounts(customerIds){
     // العدد الحقيقي لطلبات كل عميل من جدول الطلبات نفسه (بدون الملغاة) —
     // بدل الاعتماد على عداد orders_count المخزّن اللي ممكن ينزاح مع الوقت (تعديل طلب، أو استدعاء upsertCustomer أكثر من مرة لنفس الطلب)
-    // 🔧 مقسّمة على صفحات (pagination) عشان ما تنقطع عند حد 1000 صف يلي سوبابيز بيحطه افتراضيًا لكل طلب واحد
-    if(!customerIds || !customerIds.length) return {};
+    // 🔧 مهم: ما منستخدم .in('customer_id', customerIds) — لو عدد العملاء كبير (آلاف)، رابط الطلب
+    // نفسه بيصير طويل كتير وبينكسر بصمت (كل الطلبات بترجع صفر). بدلها منجيب كل الطلبات مرقّمة
+    // صفحة صفحة (بدون فلترة عملاء)، وهيك دايمًا صحيح مهما كان عدد العملاء.
     try{
       const map = {};
       const pageSize = 1000;
       let from = 0;
       while(true){
-        const { data, error } = await db.from('orders').select('customer_id').in('customer_id', customerIds).neq('status','cancelled').range(from, from+pageSize-1);
+        const { data, error } = await db.from('orders').select('customer_id').not('customer_id','is',null).neq('status','cancelled').range(from, from+pageSize-1);
         if(error){ console.error('computeOrderCounts page error:', error); break; }
         (data||[]).forEach(o=>{ if(o.customer_id) map[o.customer_id] = (map[o.customer_id]||0)+1; });
         if(!data || data.length < pageSize) break;
