@@ -5712,6 +5712,7 @@
         <div style="font-size:.8rem;color:var(--muted);font-weight:600;margin-bottom:8px">اكتبي هون نص شروط وأحكام العمل بالمطعم. أول ما تحفظيه، أي موظف (كاشير/إدارة أو بوابة الموظف) لسا ما وقّع، رح تظهرله هاي الشروط إجباريًا قبل أول دخول إله، ولازم يوافق عليها عشان يكمل — وهاد بيسجّل تلقائيًا كتوقيع إلكتروني بتاريخ ووقت الموافقة. لو الحقل فاضي، ما رح تظهر الشاشة لحدا.</div>
         <div class="fld"><textarea id="f_termsText" rows="8" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;font-family:inherit" placeholder="مثال: 1) الالتزام بمواعيد الدوام...  2) الحفاظ على سرية معلومات العملاء...  3) عدم..">${esc(SETTINGS.terms_text||'')}</textarea></div>
         <button type="button" class="mini del" onclick="resetAllTermsAcceptance()">🔄 اطلب توقيع جديد من كل الموظفين (لو غيّرتي الشروط)</button>
+        <button type="button" class="mini ok" onclick="openSelectiveTermsRequest()">📤 اطلب توقيع من موظفين معيّنين بس</button>
         <button type="button" class="mini edit" onclick="admTab('termsLog')">📋 عرض كل التواقيع المسجّلة</button>
 
         <div class="m-act"><button class="save" onclick="saveSettings()">💾 حفظ الإعدادات</button></div>
@@ -8261,12 +8262,14 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
           </label>
         </div>
         <div style="padding:16px 20px;border-top:1.5px solid var(--line);flex-shrink:0">
+          <div id="termsValidationMsg" style="font-size:.8rem;color:var(--red);font-weight:700;margin-bottom:8px;min-height:18px"></div>
           <button id="termsAcceptBtn" disabled onclick="submitTermsSignature()" style="width:100%;padding:14px;border-radius:12px;border:none;background:var(--muted);color:#fff;font-weight:800;font-size:1rem;cursor:not-allowed">أوافق وأؤكد التوقيع ✓</button>
         </div>
       </div>`;
     document.body.appendChild(d);
     ['ts_name','ts_nid','ts_phone'].forEach(id=>document.getElementById(id).addEventListener('input', checkTermsFormValid));
     initSignaturePad();
+    checkTermsFormValid();
   }
   function initSignaturePad(){
     const canvas = document.getElementById('sigCanvas'); if(!canvas) return;
@@ -8276,15 +8279,17 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
     function pos(e){
       const rect = canvas.getBoundingClientRect();
       const sx = canvas.width/rect.width, sy = canvas.height/rect.height;
-      const cx = e.touches ? e.touches[0].clientX : e.clientX;
-      const cy = e.touches ? e.touches[0].clientY : e.clientY;
-      return { x:(cx-rect.left)*sx, y:(cy-rect.top)*sy };
+      return { x:(e.clientX-rect.left)*sx, y:(e.clientY-rect.top)*sy };
     }
-    function start(e){ drawing=true; window.__sigHasContent=true; const p=pos(e); ctx.beginPath(); ctx.moveTo(p.x,p.y); e.preventDefault(); checkTermsFormValid(); }
+    function start(e){ drawing=true; window.__sigHasContent=true; canvas.setPointerCapture?.(e.pointerId); const p=pos(e); ctx.beginPath(); ctx.moveTo(p.x,p.y); e.preventDefault(); checkTermsFormValid(); }
     function move(e){ if(!drawing) return; const p=pos(e); ctx.lineTo(p.x,p.y); ctx.stroke(); e.preventDefault(); }
     function end(){ drawing=false; }
-    canvas.onmousedown=start; canvas.onmousemove=move; window.onmouseup=end;
-    canvas.ontouchstart=start; canvas.ontouchmove=move; canvas.ontouchend=end;
+    canvas.style.touchAction = 'none';
+    canvas.onpointerdown = start;
+    canvas.onpointermove = move;
+    canvas.onpointerup = end;
+    canvas.onpointercancel = end;
+    canvas.onpointerleave = end;
   }
   function clearSignature(){
     const canvas = document.getElementById('sigCanvas'); if(!canvas) return;
@@ -8294,12 +8299,20 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
   }
   function checkTermsFormValid(){
     const btn = document.getElementById('termsAcceptBtn'); if(!btn) return;
+    const msgEl = document.getElementById('termsValidationMsg');
     const name = (document.getElementById('ts_name')?.value||'').trim();
     const nid = (document.getElementById('ts_nid')?.value||'').trim();
     const phone = (document.getElementById('ts_phone')?.value||'').trim();
     const checked = document.getElementById('termsCheckbox')?.checked;
     const nameParts = name.split(/\s+/).filter(Boolean).length;
-    const valid = nameParts>=4 && nid.length>=6 && phone.length>=7 && checked && window.__sigHasContent;
+    const missing = [];
+    if(nameParts<4) missing.push('الاسم لازم يكون 4 مقاطع بالضبط (اسمك + اسم أبوك + اسم جدك + اسم العائلة)');
+    if(nid.length<6) missing.push('الرقم الوطني قصير كتير');
+    if(phone.length<7) missing.push('رقم الهاتف قصير كتير');
+    if(!window.__sigHasContent) missing.push('لسا ما وقّعتي بالمربع');
+    if(!checked) missing.push('لازم تأشّري مربع الموافقة');
+    const valid = missing.length===0;
+    if(msgEl) msgEl.textContent = valid ? '' : ('⚠️ ناقص: '+missing.join(' — '));
     btn.disabled = !valid;
     btn.style.background = valid ? 'var(--ok)' : 'var(--muted)';
     btn.style.cursor = valid ? 'pointer' : 'not-allowed';
@@ -8337,6 +8350,45 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
       const r2 = await db.from('meal_names').update({ terms_accepted_at: null }).not('id','is',null);
       if(r1.error || r2.error){ toast('✗ '+((r1.error||r2.error).message)); return; }
       toast('✓ تم — الكل رح يحتاج يوقّع من جديد بأول دخول إلهم');
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
+  }
+  async function openSelectiveTermsRequest(){
+    modal(`<h3>📤 اطلب توقيع من موظفين معيّنين</h3><div id="selTermsBody" class="empty-note">... جاري التحميل</div>`);
+    try{
+      const [staffRes, hrRes] = await Promise.all([
+        db.from('staff').select('id, full_name, terms_accepted_at').order('full_name'),
+        db.from('meal_names').select('id, name, terms_accepted_at').order('name'),
+      ]);
+      const body = document.getElementById('selTermsBody'); if(!body) return;
+      const staffRows = (staffRes.data||[]).map(s=>({id:s.id, name:s.full_name, table:'staff', signed:!!s.terms_accepted_at}));
+      const hrRows = (hrRes.data||[]).map(s=>({id:s.id, name:s.name, table:'meal_names', signed:!!s.terms_accepted_at}));
+      const all = [...staffRows, ...hrRows];
+      body.innerHTML = `
+        <div style="font-size:.8rem;color:var(--muted);font-weight:700;margin-bottom:10px">حددي الموظفين يلي بدك تطلبي منهم توقيع جديد (أول دخول جاي إلهم رح تظهرلهم شاشة التوقيع). الموظفين "✅ وقّع" معناها أصلاً وقّع من قبل وموقّعه لسا سارية.</div>
+        <div style="max-height:320px;overflow-y:auto;border:1.5px solid var(--line);border-radius:10px;padding:8px">
+          ${all.map(p=>`<label style="display:flex;align-items:center;gap:8px;padding:8px 4px;border-bottom:1px solid var(--line);cursor:pointer">
+            <input type="checkbox" class="selTermsChk" value="${p.table}|${p.id}" style="width:18px;height:18px">
+            <span style="flex:1">${esc(p.name)} <span style="font-size:.75rem;color:var(--muted);font-weight:700">(${p.table==='staff'?'كاشير/إدارة':'HR'})</span></span>
+            <span style="font-size:.78rem;font-weight:800;color:${p.signed?'var(--ok)':'var(--red)'}">${p.signed?'✅ وقّع':'⏳ لسا'}</span>
+          </label>`).join('')||'<div class="empty-note">ما في موظفين</div>'}
+        </div>
+        <div class="m-act"><button class="save" onclick="submitSelectiveTermsRequest()">📤 اطلب توقيعهم الآن</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`;
+    }catch(e){ const body=document.getElementById('selTermsBody'); if(body) body.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
+  }
+  async function submitSelectiveTermsRequest(){
+    const checked = Array.from(document.querySelectorAll('.selTermsChk:checked')).map(c=>c.value);
+    if(!checked.length){ toast('⚠️ حددي موظف واحد ع الأقل'); return; }
+    try{
+      const byTable = { staff: [], meal_names: [] };
+      checked.forEach(v=>{ const [table, id] = v.split('|'); byTable[table].push(id); });
+      const ops = [];
+      if(byTable.staff.length) ops.push(db.from('staff').update({ terms_accepted_at: null }).in('id', byTable.staff));
+      if(byTable.meal_names.length) ops.push(db.from('meal_names').update({ terms_accepted_at: null }).in('id', byTable.meal_names));
+      const results = await Promise.all(ops);
+      const err = results.find(r=>r.error);
+      if(err){ toast('✗ '+err.error.message); console.error(err.error); return; }
+      closeModal();
+      toast(`✓ تم — ${checked.length} موظف رح يحتاج يوقّع من جديد بأول دخول إله`);
     }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
 
