@@ -7403,7 +7403,26 @@
       if(error){ R.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message||'الجدول inventory_movements غير موجود — نفّذ SQL أولاً')}</div>`; return; }
       const moves = data||[];
       const ing = INGR.find(i=>i.id===PT_FILTER.ingredient);
-      // 📊 رصيد افتتاحي = الرصيد الحالي (لو مافي فلتر فرع) ناقص صافي كل الحركات جوا الفترة — عشان نقدر نبني رصيد متراكم صحيح من أول سطر
+      // 📊 رصيد افتتاحي = مجموع كل الحركات الحقيقية من أول ما انسجلت المادة لحد بداية الفترة المختارة —
+      // 🔧 مصلّحة: الطريقة القديمة كانت تاخد "الرصيد الحالي الآن" وتطرح منه صافي حركات الفترة بس، وهاي
+      // كانت تطلع صحيحة بس لو "إلى" = اليوم بالضبط. أي فترة قديمة كانت تطلع كل الأرصدة منزاحة غلط
+      // بمقدار كل الحركات اللي صارت بعد "إلى" ولحد الآن. هلأ منحسبها من التاريخ الحقيقي مباشرة.
+      let openingStock = 0;
+      {
+        let obFrom = 0;
+        const pageSize = 1000;
+        while(true){
+          let qq = db.from('inventory_movements').select('qty').eq('ingredient_id', PT_FILTER.ingredient).lt('created_at', localDayStart(PT_FILTER.from)).range(obFrom, obFrom+pageSize-1);
+          if(PT_FILTER.branch) qq = qq.eq('branch_id', PT_FILTER.branch);
+          const { data: obData, error: obErr } = await qq;
+          if(obErr){ console.error('opening balance calc error:', obErr); break; }
+          (obData||[]).forEach(m=>{ openingStock += parseFloat(m.qty||0); });
+          if(!obData || obData.length < pageSize) break;
+          obFrom += pageSize;
+        }
+      }
+      let running = openingStock;
+      // 💡 الرصيد الحالي الآن (يستخدم بس للعرض بملخص أعلى الجدول، مش بحساب الأرصدة المتراكمة بالجدول)
       let currentTotal = 0;
       if(PT_FILTER.branch){
         const { data: bi } = await db.from('branch_inventory').select('stock').eq('branch_id', PT_FILTER.branch).eq('ingredient_id', PT_FILTER.ingredient).maybeSingle();
@@ -7412,9 +7431,6 @@
         const { data: biAll } = await db.from('branch_inventory').select('stock').eq('ingredient_id', PT_FILTER.ingredient);
         currentTotal = (biAll||[]).reduce((a,b)=>a+parseFloat(b.stock||0),0);
       }
-      const netInPeriod = moves.reduce((a,m)=>a+parseFloat(m.qty||0),0);
-      let running = currentTotal - netInPeriod; // الرصيد قبل أول حركة بالفترة (نقطة البداية)
-      const openingStock = running;
       const byType = {};
       moves.forEach(m=>{ byType[m.type] = (byType[m.type]||0) + parseFloat(m.qty||0); });
       const totalPurchased = byType['purchase']||0;
