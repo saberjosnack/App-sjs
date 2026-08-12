@@ -652,6 +652,9 @@
 </div>
 
 <div id="toast"></div>
+
+<!-- 🧮 حاسبة عائمة — لجمع فاتورتين أو أي حساب سريع بدون ما تطلعي من الكاشير -->
+<button id="calcFab" onclick="openCalculator()" style="position:fixed;bottom:18px;left:18px;z-index:400;width:56px;height:56px;border-radius:50%;background:var(--maroon);color:var(--yellow);border:none;font-size:1.5rem;box-shadow:0 4px 14px rgba(0,0,0,.3);cursor:pointer" title="حاسبة">🧮</button>
 <div id="receipt"></div>
 
 <script>
@@ -7900,6 +7903,7 @@
               <option value="daily" ${window.__repType==='daily'?'selected':''}>📅 المبيعات حسب اليوم</option>
               <option value="payment" ${window.__repType==='payment'?'selected':''}>💳 المبيعات حسب طريقة الدفع</option>
               <option value="expenses" ${window.__repType==='expenses'?'selected':''}>💵 المصاريف</option>
+              <option value="withdrawals" ${window.__repType==='withdrawals'?'selected':''}>🔓 سحوبات الدرج</option>
             </select>
           </div>
           <div class="fld" style="margin:0;min-width:180px"><label>الفرع</label>
@@ -7948,6 +7952,23 @@
         if(error){ box.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message||'خطأ')}</div>`; console.error(error); return; }
         window.__repData = { type, from, to, branchId, rows: data||[] };
         renderExpensesReportResult(data||[]);
+        return;
+      }
+      if(type==='withdrawals'){
+        let q = db.from('expenses').select('*').eq('category','سحب من الدرج').gte('expense_date', from).lte('expense_date', to).order('expense_date',{ascending:false});
+        if(branchId) q = q.eq('branch_id', branchId);
+        const { data, error } = await q;
+        if(error){ box.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message||'خطأ')}</div>`; console.error(error); return; }
+        const rows = data||[];
+        const staffIds = [...new Set(rows.map(r=>r.created_by).filter(Boolean))];
+        let staffMap = {};
+        if(staffIds.length){
+          const { data: staffRows } = await db.from('staff').select('id, full_name').in('id', staffIds);
+          (staffRows||[]).forEach(s=>{ staffMap[s.id] = s.full_name; });
+        }
+        rows.forEach(r=>{ r.staff_name = staffMap[r.created_by] || '—'; });
+        window.__repData = { type, from, to, branchId, rows };
+        renderWithdrawalsReportResult(rows);
         return;
       }
       let q = db.from('orders').select('id, order_number, total, subtotal, discount, delivery_fee, payment_method, order_type, status, split_details, employee_tab_name, platform_id, branch_id, created_at, order_items(item_name, quantity, unit_price), branches(name_ar)')
@@ -8069,6 +8090,22 @@
       ${rows.map(r=>`<tr><td><b>${PAY_AR[r[0]]||esc(r[0])}</b></td><td>${fmt(r[1])} ${CURRENCY}</td><td>${grand?(r[1]/grand*100).toFixed(1):0}%</td></tr>`).join('')||'<tr><td colspan="3" class="empty-note">ما في بيانات</td></tr>'}
       </table></div>`;
   }
+  function renderWithdrawalsReportResult(rows){
+    const box = document.getElementById('reportResult'); if(!box) return;
+    const total = rows.reduce((a,e)=>a+parseFloat(e.amount||0),0);
+    const byStaff = {};
+    rows.forEach(e=>{ const k=e.staff_name||'—'; byStaff[k]=(byStaff[k]||0)+parseFloat(e.amount||0); });
+    const topStaff = Object.entries(byStaff).sort((a,b)=>b[1]-a[1]);
+    box.innerHTML = reportHeader('🔓 سحوبات الدرج') + `
+      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">
+        ${statCard('إجمالي السحوبات', fmt(total)+' '+CURRENCY, 'var(--red)')}
+        ${statCard('عدد السحوبات', rows.length)}
+      </div>
+      ${topStaff.length>1?`<div style="font-size:.82rem;color:var(--muted);font-weight:700;margin-bottom:10px">حسب الشخص: ${topStaff.map(([n,v])=>n+': '+fmt(v)+' '+CURRENCY).join(' — ')}</div>`:''}
+      <div class="tbl-wrap"><table class="tbl"><tr><th>التاريخ</th><th>المبلغ</th><th>السبب</th><th>مين سحب</th><th>الفرع</th><th>الحالة</th></tr>
+      ${rows.map(e=>`<tr><td>${e.expense_date}</td><td>${fmt(e.amount)} ${CURRENCY}</td><td>${esc(e.title||e.description||'—')}</td><td>${esc(e.staff_name||'—')}</td><td>${esc(BRANCHES.find(b=>b.id===e.branch_id)?.name_ar||'—')}</td><td>${e.approval_status==='approved'?'✅ موافَق':e.approval_status==='pending'?'⏳ بانتظار الموافقة':esc(e.approval_status||'—')}</td></tr>`).join('')||'<tr><td colspan="6" class="empty-note">ما في سحوبات بهاي الفترة</td></tr>'}
+      </table></div>`;
+  }
   function renderExpensesReportResult(rows){
     const box = document.getElementById('reportResult'); if(!box) return;
     const total = rows.reduce((a,e)=>a+parseFloat(e.amount||0),0);
@@ -8085,13 +8122,18 @@
   }
   function buildReportHtml(){
     const d = window.__repData; if(!d){ toast('⚠️ ولّدي التقرير أول'); return ''; }
-    const TYPE_AR = {summary:'ملخص عام للمبيعات', items:'الأصناف الأكثر مبيعًا', branches:'المبيعات حسب الفرع', daily:'المبيعات حسب اليوم', payment:'المبيعات حسب طريقة الدفع', expenses:'تقرير المصاريف'};
+    const TYPE_AR = {summary:'ملخص عام للمبيعات', items:'الأصناف الأكثر مبيعًا', branches:'المبيعات حسب الفرع', daily:'المبيعات حسب اليوم', payment:'المبيعات حسب طريقة الدفع', expenses:'تقرير المصاريف', withdrawals:'سحوبات الدرج'};
     const branchName = d.branchId ? (BRANCHES.find(b=>b.id===d.branchId)?.name_ar||'') : 'كل الفروع';
     let bodyHtml = '';
     if(d.type==='expenses'){
       const total = d.rows.reduce((a,e)=>a+parseFloat(e.amount||0),0);
       bodyHtml = `<table><tr><th>التاريخ</th><th>النوع</th><th>البيان</th><th>المبلغ</th></tr>
         ${d.rows.map(e=>`<tr><td>${e.expense_date}</td><td>${esc(e.category||'—')}</td><td>${esc(e.description||'—')}</td><td>${fmt(e.amount)}</td></tr>`).join('')}
+        </table><h3>الإجمالي: ${fmt(total)} ${CURRENCY}</h3>`;
+    } else if(d.type==='withdrawals'){
+      const total = d.rows.reduce((a,e)=>a+parseFloat(e.amount||0),0);
+      bodyHtml = `<table><tr><th>التاريخ</th><th>المبلغ</th><th>السبب</th><th>مين سحب</th><th>الحالة</th></tr>
+        ${d.rows.map(e=>`<tr><td>${e.expense_date}</td><td>${fmt(e.amount)}</td><td>${esc(e.title||e.description||'—')}</td><td>${esc(e.staff_name||'—')}</td><td>${e.approval_status==='approved'?'موافَق':e.approval_status==='pending'?'بانتظار الموافقة':esc(e.approval_status||'—')}</td></tr>`).join('')}
         </table><h3>الإجمالي: ${fmt(total)} ${CURRENCY}</h3>`;
     } else if(d.type==='items'){
       const tally = {};
@@ -8160,7 +8202,7 @@
   function downloadReportPDF(){
     const d = window.__repData; if(!d){ toast('⚠️ ولّدي التقرير أول'); return; }
     const html = buildReportHtml(); if(!html) return;
-    const TYPE_AR = {summary:'ملخص_عام', items:'الأصناف_الأكثر_مبيعا', branches:'المبيعات_حسب_الفرع', daily:'المبيعات_حسب_اليوم', payment:'المبيعات_حسب_طريقة_الدفع', expenses:'تقرير_المصاريف'};
+    const TYPE_AR = {summary:'ملخص_عام', items:'الأصناف_الأكثر_مبيعا', branches:'المبيعات_حسب_الفرع', daily:'المبيعات_حسب_اليوم', payment:'المبيعات_حسب_طريقة_الدفع', expenses:'تقرير_المصاريف', withdrawals:'سحوبات_الدرج'};
     exportHtmlToPDF(html, (TYPE_AR[d.type]||'تقرير')+'_'+d.from+'_'+d.to);
   }
 
@@ -14160,6 +14202,82 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
   }
 
   /* ================= نماذج الإدارة ================= */
+  // 🧮 حاسبة بسيطة — لجمع طلبين مع بعض أو أي حساب سريع من غير ما تسكري شاشة الكاشير
+  window.__calcState = { display: '0', prev: null, op: null, resetNext: false };
+  function openCalculator(){
+    window.__calcState = { display: '0', prev: null, op: null, resetNext: false };
+    modal(`<h3 style="text-align:center">🧮 حاسبة</h3>
+      <div id="calcScreen" style="background:#241414;color:#fff;border-radius:12px;padding:16px;text-align:left;direction:ltr;font-size:2rem;font-weight:800;margin-bottom:14px;min-height:52px;overflow-x:auto;white-space:nowrap">0</div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">
+        <button onclick="calcClear()" style="grid-column:span 2;background:var(--red);color:#fff;border:none;border-radius:10px;padding:16px;font-weight:900;font-size:1.1rem">C</button>
+        <button onclick="calcBackspace()" style="background:var(--warn);color:#fff;border:none;border-radius:10px;padding:16px;font-weight:900;font-size:1.1rem">⌫</button>
+        <button onclick="calcOp('/')" style="background:var(--maroon);color:var(--yellow);border:none;border-radius:10px;padding:16px;font-weight:900;font-size:1.2rem">÷</button>
+
+        <button onclick="calcDigit('7')" class="calc-num">7</button>
+        <button onclick="calcDigit('8')" class="calc-num">8</button>
+        <button onclick="calcDigit('9')" class="calc-num">9</button>
+        <button onclick="calcOp('*')" style="background:var(--maroon);color:var(--yellow);border:none;border-radius:10px;padding:16px;font-weight:900;font-size:1.2rem">×</button>
+
+        <button onclick="calcDigit('4')" class="calc-num">4</button>
+        <button onclick="calcDigit('5')" class="calc-num">5</button>
+        <button onclick="calcDigit('6')" class="calc-num">6</button>
+        <button onclick="calcOp('-')" style="background:var(--maroon);color:var(--yellow);border:none;border-radius:10px;padding:16px;font-weight:900;font-size:1.2rem">−</button>
+
+        <button onclick="calcDigit('1')" class="calc-num">1</button>
+        <button onclick="calcDigit('2')" class="calc-num">2</button>
+        <button onclick="calcDigit('3')" class="calc-num">3</button>
+        <button onclick="calcOp('+')" style="background:var(--maroon);color:var(--yellow);border:none;border-radius:10px;padding:16px;font-weight:900;font-size:1.2rem">+</button>
+
+        <button onclick="calcDigit('0')" class="calc-num" style="grid-column:span 2">0</button>
+        <button onclick="calcDigit('.')" class="calc-num">.</button>
+        <button onclick="calcEquals()" style="background:var(--ok);color:#fff;border:none;border-radius:10px;padding:16px;font-weight:900;font-size:1.3rem">=</button>
+      </div>
+      <style>#theModal .calc-num{background:#fff;border:1.5px solid var(--line);border-radius:10px;padding:16px;font-weight:800;font-size:1.2rem;color:var(--ink)}#theModal .calc-num:active{background:var(--cream)}</style>
+      <div class="m-act"><button class="cancel" onclick="closeModal()">إغلاق</button></div>`);
+  }
+  function calcRender(){
+    const el = document.getElementById('calcScreen');
+    if(el) el.textContent = window.__calcState.display;
+  }
+  function calcDigit(d){
+    const s = window.__calcState;
+    if(s.resetNext){ s.display = ''; s.resetNext = false; }
+    if(d==='.' && s.display.includes('.')) return;
+    if(s.display==='0' && d!=='.') s.display = d;
+    else s.display += d;
+    calcRender();
+  }
+  function calcClear(){
+    window.__calcState = { display:'0', prev:null, op:null, resetNext:false };
+    calcRender();
+  }
+  function calcBackspace(){
+    const s = window.__calcState;
+    s.display = s.display.length>1 ? s.display.slice(0,-1) : '0';
+    calcRender();
+  }
+  function calcOp(op){
+    const s = window.__calcState;
+    if(s.op && !s.resetNext) calcEquals();
+    s.prev = parseFloat(document.getElementById('calcScreen')?.textContent || s.display);
+    s.op = op;
+    s.resetNext = true;
+  }
+  function calcEquals(){
+    const s = window.__calcState;
+    if(s.op==null || s.prev==null) return;
+    const cur = parseFloat(s.display);
+    let result = s.prev;
+    if(s.op==='+') result = s.prev + cur;
+    else if(s.op==='-') result = s.prev - cur;
+    else if(s.op==='*') result = s.prev * cur;
+    else if(s.op==='/') result = cur!==0 ? s.prev / cur : 0;
+    result = Math.round(result*1000)/1000;
+    s.display = String(result);
+    s.op = null; s.prev = null; s.resetNext = true;
+    calcRender();
+  }
+
   function modal(html){ closeModal(); const d=document.createElement('div'); d.className='modal'; d.id='theModal'; d.innerHTML=`<div class="mbox">${html}</div>`; d.onclick=e=>{ if(e.target===d) d.remove(); }; document.body.appendChild(d); }
   function closeModal(){ const m = document.getElementById('theModal'); if (m) m.remove(); }
   window.__logoImg = undefined;
