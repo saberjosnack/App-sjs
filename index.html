@@ -7486,7 +7486,20 @@
       const totalPurchased = byType['purchase']||0;
       const totalSold = Math.abs(byType['sale']||0);
       const totalWasted = Math.abs(byType['waste']||0);
+      const totalTransferIn = (byType['transfer_in']||0) + (byType['transfer_out_reverted']||0);
+      const totalTransferOut = Math.abs(byType['transfer_out']||0) + Math.abs(byType['transfer_in_reverted']||0);
+      const totalAudit = byType['audit']||0; // 📋 تصحيحات جرد — ممكن تكون موجبة أو سالبة
+      const totalManual = byType['manual']||0; // ✏️ تعديلات يدوية — ممكن تكون موجبة أو سالبة
+      const totalMfgConsume = Math.abs(byType['manufacture_consume']||0);
+      const totalMfgProduce = byType['manufacture_produce']||0;
+      const netInPeriod = moves.reduce((a,m)=>a+parseFloat(m.qty||0),0);
+      const balanceAtPeriodEnd = openingStock + netInPeriod;
       const totalCostMoved = moves.reduce((a,m)=>a+parseFloat(m.total_cost||0),0);
+      // 🔎 فحص تسوية صادق: لو الفترة توصل لليوم، لازم "الرصيد بنهاية الفترة" (محسوب من كل الحركات
+      // المسجّلة) يطابق "الرصيد الحالي الفعلي" بجدول المخزون. أي فرق هون معناه في تغيير صار عالمخزون
+      // بدون ما يتسجّل كحركة أصلًا (تصحيح يدوي مباشر بقاعدة البيانات مثلًا) — منوريه صراحة بدل ما نخفيه.
+      const isToToday = PT_FILTER.to === localTodayStr();
+      const reconcileDiff = isToToday ? (currentTotal - balanceAtPeriodEnd) : null;
       // 📥 نخزّن نسخة فيها الرصيد المتراكم لكل صف، جاهزة للتصدير لـExcel
       let runningForExport = openingStock;
       window.__PT_EXPORT_ROWS = moves.map(m=>{
@@ -7513,9 +7526,21 @@
             <div class="stat">🛒 إجمالي مشترى<b style="color:var(--ok)">+${totalPurchased.toFixed(2)}</b></div>
             <div class="stat">🧾 إجمالي مباع<b style="color:var(--red)">-${totalSold.toFixed(2)}</b></div>
             <div class="stat">🗑️ إجمالي متلف<b style="color:var(--red)">-${totalWasted.toFixed(2)}</b></div>
-            <div class="stat">الرصيد الحالي<b style="color:var(--maroon)">${currentTotal.toFixed(2)}</b></div>
+            ${totalTransferIn?`<div class="stat">📥 نقل وارد<b style="color:var(--ok)">+${totalTransferIn.toFixed(2)}</b></div>`:''}
+            ${totalTransferOut?`<div class="stat">📤 نقل صادر<b style="color:var(--red)">-${totalTransferOut.toFixed(2)}</b></div>`:''}
+            ${totalMfgConsume?`<div class="stat">🏭 استهلاك تصنيع<b style="color:var(--red)">-${totalMfgConsume.toFixed(2)}</b></div>`:''}
+            ${totalMfgProduce?`<div class="stat">🏭 إنتاج تصنيع<b style="color:var(--ok)">+${totalMfgProduce.toFixed(2)}</b></div>`:''}
+            ${totalAudit?`<div class="stat">📋 تصحيحات جرد<b style="color:${totalAudit>=0?'var(--ok)':'var(--red)'}">${totalAudit>=0?'+':''}${totalAudit.toFixed(2)}</b></div>`:''}
+            ${totalManual?`<div class="stat">✏️ تعديلات يدوية<b style="color:${totalManual>=0?'var(--ok)':'var(--red)'}">${totalManual>=0?'+':''}${totalManual.toFixed(2)}</b></div>`:''}
+            <div class="stat">الرصيد بنهاية الفترة<b style="color:var(--maroon)">${balanceAtPeriodEnd.toFixed(2)}</b></div>
+            <div class="stat">الرصيد الحالي الفعلي<b style="color:var(--maroon)">${currentTotal.toFixed(2)}</b></div>
             <div class="stat">💰 قيمة الحركات (تكلفة)<b style="color:var(--red)">${fmt(totalCostMoved)} ${CURRENCY}</b></div>
           </div>
+          ${reconcileDiff!==null && Math.abs(reconcileDiff)>0.009 ? `
+            <div style="margin-top:12px;background:#fff3cd;border:2px solid var(--warn);border-radius:10px;padding:12px;font-weight:800;color:#7a5a00">
+              ⚠️ في فرق ${Math.abs(reconcileDiff).toFixed(2)} ${esc(ing?.unit||'')} ما مفسّر بأي حركة مسجّلة — الرصيد الفعلي ${reconcileDiff>0?'أكتر':'أقل'} من المتوقع.
+              هاد معناه صار تغيير على المخزون بدون ما يتسجّل كحركة (غالبًا تعديل يدوي مباشر أو استيراد بيانات قديم). راجعي المادة يدويًا.
+            </div>` : (reconcileDiff!==null ? `<div style="margin-top:12px;color:var(--ok);font-weight:800;font-size:.85rem">✅ الرصيد مطابق تمامًا — كل حركة موثّقة وما في أي فرق غير مفسّر.</div>` : '')}
         </div>
         <div class="tbl-wrap"><table class="tbl">
           <tr><th>التاريخ والوقت</th><th>النوع</th><th>الفرع</th><th>الكمية</th><th>الرصيد بعدها</th><th>سعر الوحدة</th><th>التكلفة</th><th>ملاحظة</th><th>بواسطة</th></tr>
