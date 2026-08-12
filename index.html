@@ -3850,21 +3850,62 @@
     }
   }
 
-  async function restoreInventoryForCancel(branchId, orderItems){
+  async function restoreInventoryForCancel(branchId, orderItems, consumedSnapshot){
     // عكس deductInventoryForSale بالضبط — يرجّع كل مادة لمخزون الفرع، كل مادة لحالها مقسّمة صح
-    if(!branchId || !orderItems?.length) return;
-    const itemIds = [...new Set(orderItems.map(l=>l.menu_item_id).filter(Boolean))];
+    if(!branchId) return;
+    // 📸 لو عندنا لقطة محفوظة فعليًا (شو اتخصم بالضبط وقت البيع)، نستخدمها هي مباشرة —
+    // أدق وأوثق من إعادة اشتقاق الكمية من الوصفة الحالية، لأنه لو حدا عدّل الوصفة (كمية مكوّن
+    // معيّن بصنف) بين وقت البيع ووقت الإلغاء/التعديل، الاشتقاق من الوصفة الحالية كان يرجّع كمية
+    // غلط (كمية الوصفة الجديدة، مش الكمية يلي فعليًا خُصمت وقتها) — وهاد بيخلي الرصيد ينزاح تدريجيًا
+    // كل ما توصفة تتعدّل والطلبات القديمة تتلغى/تتعدّل بعدها.
+    if(consumedSnapshot && Object.keys(consumedSnapshot).length){
+      for(const [ingId, qty] of Object.entries(consumedSnapshot)){
+        const q = parseFloat(qty||0); if(!q) continue;
+        const {data:bi} = await db.from('branch_inventory').select('id,stock').eq('branch_id',branchId).eq('ingredient_id',ingId).maybeSingle();
+        if(bi) await db.from('branch_inventory').update({stock: (bi.stock||0)+q}).eq('id', bi.id);
+        else await db.from('branch_inventory').insert({branch_id:branchId, ingredient_id:ingId, stock:q, min_stock:0});
+        logMovement(branchId, ingId, q, 'sale', 'استرجاع بسبب إلغاء طلب');
+      }
+      return;
+    }
+    if(!orderItems?.length) return;
+    // 🔧 مصلّحة: الأصناف المركّبة (وجبات عائلية/كومبو) ما إلها وصفة مباشرة على id تبعها — كانت
+    // هاي الدالة تدوّر على وصفة لـid الصنف المركّب نفسه، ما تلاقيها، وتتجاهل الاسترجاع كليًا بصمت.
+    // يعني أي طلب فيه وجبة عائلية وانلغى أو اتعدّل، المكونات الحقيقية يلي كانت انخصمت وقت البيع
+    // (عبر composite_fixed + التركيبة المختارة) ما كانت ترجع للمخزون أبدًا — فالمخزون كان يتناقص
+    // بشكل دائم وغلط مع كل إلغاء/تعديل لطلب فيه صنف مركّب. هلق منوسّعها لمكوناتها الحقيقية أول
+    // شي بنفس منطق deductInventoryForSale بالضبط قبل ما نحسب الاسترجاع.
+    const expanded = []; // {itemId, qty}
+    const compositeLines = [];
+    orderItems.forEach(line=>{
+      const menuItem = (typeof ITEMS!=='undefined' ? ITEMS : []).find(i=>i.id===line.menu_item_id);
+      if(menuItem?.item_type==='composite') compositeLines.push(line);
+      else expanded.push({ itemId: line.menu_item_id, qty: line.quantity||1 });
+    });
+    if(compositeLines.length){
+      const compIds = [...new Set(compositeLines.map(l=>l.menu_item_id))];
+      const { data: fixedRows } = await db.from('composite_fixed').select('menu_item_id, component_item_id, qty').in('menu_item_id', compIds);
+      compositeLines.forEach(line=>{
+        (fixedRows||[]).filter(f=>f.menu_item_id===line.menu_item_id).forEach(f=>{
+          expanded.push({ itemId: f.component_item_id, qty: (f.qty||0)*(line.quantity||1) });
+        });
+        (line.composition||[]).forEach(c=>{
+          expanded.push({ itemId: c.component_item_id, qty: (c.qty||0)*(line.quantity||1) });
+        });
+      });
+    }
+    const itemIds = [...new Set(expanded.map(l=>l.itemId))].filter(Boolean);
     if(!itemIds.length) return;
     const {data: recipes} = await db.from('recipes')
       .select('menu_item_id, recipe_items(ingredient_id, quantity)')
       .in('menu_item_id', itemIds);
     if(!recipes || !recipes.length) return; // ما في وصفات معبّاة — ما في شي نرجّعه
     const restoration = {}; // ingredient_id -> total qty to restore
-    orderItems.forEach(line=>{
-      const recipe = recipes.find(r=>r.menu_item_id===line.menu_item_id);
+    expanded.forEach(line=>{
+      const recipe = recipes.find(r=>r.menu_item_id===line.itemId);
       if(!recipe) return;
       (recipe.recipe_items||[]).forEach(ri=>{
-        const amt = (ri.quantity||0) * (line.quantity||1);
+        const amt = (ri.quantity||0) * (line.qty||1);
         restoration[ri.ingredient_id] = (restoration[ri.ingredient_id]||0) + amt;
       });
     });
@@ -3902,7 +3943,7 @@
     const {data: recipes} = await db.from('recipes')
       .select('menu_item_id, recipe_items(ingredient_id, quantity)')
       .in('menu_item_id', itemIds);
-    if(!recipes || !recipes.length) return; // ما في وصفات معبّاة بعد
+    if(!recipes || !recipes.length) return null; // ما في وصفات معبّاة بعد
     const consumption = {}; // ingredient_id -> total qty consumed
     expanded.forEach(line=>{
       const recipe = recipes.find(r=>r.menu_item_id===line.itemId);
@@ -3921,6 +3962,10 @@
       else await db.from('branch_inventory').insert({branch_id:branchId, ingredient_id:ingId, stock:-qty, min_stock:0});
       logMovement(branchId, ingId, -qty, 'sale', 'خصم بيع');
     }
+    // 📸 نرجّع لقطة الاستهلاك الفعلي (شو بالضبط اتخصم ولأي كمية) — عشان تُحفظ على الطلب نفسه
+    // وتُستخدم لاحقًا وقت الإلغاء/التعديل بدل ما نعيد اشتقاقها من الوصفة الحالية (يلي ممكن تكون
+    // اتغيّرت من وقتها — لو هيك صار، الاسترجاع القديم كان يرجّع كمية غلط، مش الكمية يلي فعليًا اتخصمت)
+    return consumption;
   }
 
   async function saveOrder(print){
@@ -4035,7 +4080,7 @@
         // أي طلب اتعدّل بعدها (زيادة كمية، إضافة صنف) كانت الكمية الإضافية تتاخد وتتقدّم للزبون
         // بدون ما تنخصم من المخزون أو تنضاف للخزينة أبدًا. هلق: نرجّع (نعكس) تأثير الطلب القديم
         // بالكامل أول، وبعدين نطبّق تأثير الطلب الجديد (بعد التعديل) — نفس منطق الإلغاء والبيع الجديد.
-        try{ await restoreInventoryForCancel(editingOrder.branch_id, editingOrder.order_items); }catch(e){ console.error('restore old inventory on edit failed:', e); }
+        try{ await restoreInventoryForCancel(editingOrder.branch_id, editingOrder.order_items, editingOrder.consumed_ingredients); }catch(e){ console.error('restore old inventory on edit failed:', e); }
         try{ await postSaleToTreasury({...editingOrder}, -1); }catch(e){ console.error('reverse old treasury on edit failed:', e); }
         await db.from('order_items').delete().eq('order_id', ord.id);
       } else {
@@ -4071,7 +4116,12 @@
 
       // 🔧 نفس الإصلاح: الخصم من المخزون وترحيل المبيعات للخزينة لازم يصيروا لكل الحالتين —
       // طلب جديد، أو طلب اتعدّل (بعد ما رجّعنا فوق تأثير النسخة القديمة منه بالكامل)
-      try{ await deductInventoryForSale(branch_id, cartCopy); }catch(e){ console.error('deduct inventory failed:', e); }
+      try{
+        const consumedSnapshot = await deductInventoryForSale(branch_id, cartCopy);
+        if(consumedSnapshot && Object.keys(consumedSnapshot).length){
+          await db.from('orders').update({ consumed_ingredients: consumedSnapshot }).eq('id', ord.id);
+        }
+      }catch(e){ console.error('deduct inventory failed:', e); }
       try{ await postSaleToTreasury({...rec, id:ord.id, order_number:ord.order_number}, 1); }catch(e){ console.error('post sale to treasury failed:', e); }
 
       // الطلب انحفظ بنجاح بقاعدة البيانات — أي خطأ من هون ورايح هو خطأ طباعة بس، مش خطأ حفظ
@@ -4664,9 +4714,9 @@
     try {
       const { error } = await db.from('orders').update({ status:'cancelled', cancel_reason: reason.trim(), cancelled_at: new Date().toISOString(), cancel_notified: false }).eq('id', id);
       if(error){ toast('✗ فشل الإلغاء: '+error.message); console.error(error); return; }
-      // إرجاع المكونات للمستودع — كل مادة لحالها مقسّمة صح حسب الوصفة
-      if(o && o.branch_id && o.order_items?.length){
-        try{ await restoreInventoryForCancel(o.branch_id, o.order_items); }
+      // إرجاع المكونات للمستودع — كل مادة لحالها مقسّمة صح حسب الوصفة (أو اللقطة المحفوظة لو موجودة)
+      if(o && o.branch_id){
+        try{ await restoreInventoryForCancel(o.branch_id, o.order_items, o.consumed_ingredients); }
         catch(e){ console.error('restore inventory on cancel failed:', e); }
       }
       // عكس حركة المبيعات بالمصاري (كانت اترحّلت وقت حفظ الطلب)
@@ -12771,7 +12821,7 @@ window.__lastEmpMealsData = null;
     R.innerHTML = '<div class="empty-note">... جاري الحساب</div>';
     try{
       let q = db.from('orders')
-        .select('id, order_number, created_at, total, subtotal, discount, status, employee_tab_name, employee_meal_id, order_items(item_name, quantity, unit_price)')
+        .select('id, order_number, created_at, total, subtotal, discount, status, employee_tab_name, employee_meal_id, branch_id, consumed_ingredients, order_items(item_name, quantity, unit_price, menu_item_id, composition)')
         .not('employee_tab_name','is',null)
         .gte('created_at', localDayStart(from)).lte('created_at', localDayEnd(to))
         .order('created_at', {ascending:false});
@@ -12828,9 +12878,8 @@ window.__lastEmpMealsData = null;
       const { error } = await db.from('orders').update({ status:'cancelled', cancel_reason: reason, cancelled_at: new Date().toISOString() }).eq('id', orderId);
       if(error){ toast('✗ '+error.message); return; }
       if(o){
-        const branchRow = await db.from('orders').select('branch_id').eq('id', orderId).maybeSingle();
-        if(branchRow.data?.branch_id && o.order_items?.length){
-          try{ await restoreInventoryForCancel(branchRow.data.branch_id, o.order_items); }catch(e){ console.error(e); }
+        if(o.branch_id){
+          try{ await restoreInventoryForCancel(o.branch_id, o.order_items, o.consumed_ingredients); }catch(e){ console.error(e); }
         }
       }
       await logActivity('cancel_order', 'إلغاء وجبة موظف #'+(o?.order_number||orderId));
