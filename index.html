@@ -7427,8 +7427,81 @@
           <button class="mini ok" style="align-self:end" onclick="applyProductTimelineFilter()">🔍 عرض الخط الزمني</button>
         </div>
       </div>
+      <div class="panel" style="margin-bottom:14px;border:2px solid var(--warn)">
+        <h4 style="color:var(--warn);margin-bottom:8px">🔍 تدقيق: هل كل الأصناف المباعة إلها وصفة مكتملة؟</h4>
+        <div style="font-size:.8rem;color:var(--muted);font-weight:600;margin-bottom:8px">بيفحص كل الأصناف يلي انباعت بفترة معيّنة، وبيوريكي أي صنف انباع بدون ما يكون إله وصفة (أو بدون مكونات ثابتة لو كان صنف مركّب) — هاد بيفسّر ليش المبيعات بتوحي باستهلاك أكتر من المسجّل فعليًا بالمخزون.</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end">
+          <div><label style="font-weight:700;font-size:.82rem">من تاريخ</label><br><input type="date" id="ra_from" value="${PT_FILTER.from}"></div>
+          <div><label style="font-weight:700;font-size:.82rem">إلى تاريخ</label><br><input type="date" id="ra_to" value="${PT_FILTER.to}"></div>
+          <button class="mini ok" style="background:var(--warn)" onclick="runRecipeAudit()">🔍 دقّقي الآن</button>
+          <button class="mini ok" style="background:var(--maroon)" onclick="runRecipeAudit(true)">📊 فحص شامل تراكمي (من أول يوم لهلق)</button>
+        </div>
+        <div id="ra_result" style="margin-top:12px"></div>
+      </div>
       <div id="pt_result"></div>`;
     if(PT_FILTER.ingredient) loadProductTimeline();
+  }
+  async function runRecipeAudit(allTime){
+    const from = allTime ? '2020-01-01' : document.getElementById('ra_from')?.value;
+    const to = allTime ? localTodayStr() : document.getElementById('ra_to')?.value;
+    const box = document.getElementById('ra_result');
+    if(!from || !to || !box) return;
+    box.innerHTML = '<div class="empty-note">⏳ جاري الفحص'+(allTime?' الشامل (ممكن ياخد شوي)':'')+'...</div>';
+    try{
+      // نجيب كل الطلبات (غير الملغاة) بالفترة مع أصنافها، صفحة صفحة
+      let orders = [];
+      let from_i = 0; const pageSize = 1000;
+      while(true){
+        const { data, error } = await db.from('orders').select('status, order_items(menu_item_id, item_name, quantity, composition)')
+          .gte('created_at', localDayStart(from)).lt('created_at', localDayStart(addDaysStr(to,1)))
+          .neq('status','cancelled').range(from_i, from_i+pageSize-1);
+        if(error){ box.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message)}</div>`; return; }
+        if(!data || !data.length) break;
+        orders = orders.concat(data);
+        if(data.length < pageSize) break;
+        from_i += pageSize;
+      }
+      // نجمع كل صنف مباع مرة وحدة، مع عدد مرات بيعه
+      const soldTally = {}; // menu_item_id -> {name, count, hasComposition}
+      orders.forEach(o=>(o.order_items||[]).forEach(li=>{
+        if(!li.menu_item_id) return;
+        if(!soldTally[li.menu_item_id]) soldTally[li.menu_item_id] = { name: li.item_name, count: 0, anyComposition: false };
+        soldTally[li.menu_item_id].count += li.quantity||1;
+        if(li.composition && li.composition.length) soldTally[li.menu_item_id].anyComposition = true;
+      }));
+      const soldIds = Object.keys(soldTally);
+      if(!soldIds.length){ box.innerHTML = '<div class="empty-note">ما في مبيعات بهاي الفترة</div>'; return; }
+      const [{data: recipeRows}, {data: compFixedRows}] = await Promise.all([
+        db.from('recipes').select('menu_item_id, recipe_items(id)').in('menu_item_id', soldIds),
+        db.from('composite_fixed').select('menu_item_id').in('menu_item_id', soldIds),
+      ]);
+      const hasRecipe = new Set((recipeRows||[]).filter(r=>(r.recipe_items||[]).length>0).map(r=>r.menu_item_id));
+      const hasFixed = new Set((compFixedRows||[]).map(r=>r.menu_item_id));
+      const problems = [];
+      soldIds.forEach(id=>{
+        const menuItem = ITEMS.find(i=>i.id===id);
+        const isComposite = menuItem?.item_type==='composite';
+        const info = soldTally[id];
+        if(isComposite){
+          // صنف مركّب: لازم يكون إله مكونات ثابتة، أو على الأقل تركيبة مختارة وقت البيع بكل مرة
+          if(!hasFixed.has(id) && !info.anyComposition){
+            problems.push({ name: info.name, count: info.count, reason: 'صنف مركّب بدون مكونات ثابتة ولا تركيبة محفوظة — ما بينخصم منه أي شي' });
+          }
+        } else if(!hasRecipe.has(id)){
+          problems.push({ name: info.name, count: info.count, reason: 'ما إله وصفة مسجّلة إطلاقًا — بينباع بدون ما ينخصم أي مكوّن' });
+        }
+      });
+      problems.sort((a,b)=>b.count-a.count);
+      if(!problems.length){
+        box.innerHTML = '<div style="color:var(--ok);font-weight:800">✅ كل الأصناف المباعة بهاي الفترة إلها وصفة مكتملة — ما في نقص هون.</div>';
+        return;
+      }
+      box.innerHTML = `<div style="background:#fff3cd;border:1.5px solid var(--warn);border-radius:10px;padding:10px;margin-bottom:10px;font-weight:800;color:#7a5a00">⚠️ لقينا ${problems.length} صنف انباع بدون وصفة كاملة — هاد سبب محتمل قوي للفرق يلي حاسّة فيه</div>
+        <div class="tbl-wrap"><table class="tbl"><tr><th>الصنف</th><th>عدد مرات البيع</th><th>المشكلة</th></tr>
+        ${problems.map(p=>`<tr><td><b>${esc(p.name)}</b></td><td>${p.count}</td><td style="color:var(--red);font-weight:700">${esc(p.reason)}</td></tr>`).join('')}
+        </table></div>
+        <div style="font-size:.82rem;color:var(--muted);font-weight:700;margin-top:8px">الحل: روحي "📋 الوصفات" وضيفي وصفة كاملة (أو مكونات ثابتة لو مركّب) لكل صنف بالجدول فوق.</div>`;
+    }catch(e){ box.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
   }
   function applyProductTimelineFilter(){
     PT_FILTER.ingredient = document.getElementById('pt_ing')?.value||'';
@@ -7587,7 +7660,7 @@
               <b>${esc(r.name)} ← يعطي ${r.output_quantity} ${esc(r.ingredients?.unit||'')} من "${esc(r.ingredients?.name||'—')}"</b>
               <div style="white-space:nowrap">
                 <button class="mini ok" style="background:var(--maroon)" onclick="startManufacturing('${r.id}')">🏭 صنّع الآن</button>
-                <button class="mini ok" style="background:#0d6efd" onclick="printMfgSheet('${r.id}', ${r.output_quantity})">🖨️ طباعة</button>
+                <button class="mini ok" style="background:#0d6efd" onclick="printMfgSheetA4('${r.id}', ${r.output_quantity})">🖨️ طباعة</button>
                 <button class="mini edit" onclick="mfgRecipeForm('${r.id}')">تعديل</button>
                 <button class="mini del" onclick="deleteMfgRecipe('${r.id}')">حذف</button>
               </div>
@@ -7639,7 +7712,7 @@
       toast('✓ انحذفت عملية التصنيع وترجّع المخزون لوضعه قبلها'); renderManufacturing();
     }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
-  function printMfgSheet(recipeId, defaultQty){
+  function printMfgSheetA4(recipeId, defaultQty){
     const r = MFG_RECIPES.find(x=>x.id===recipeId); if(!r) return;
     const qtyStr = prompt('الكمية المطلوب تصنيعها الآن (بوحدة '+(r.ingredients?.unit||'')+')؟\nالوصفة الأساسية بتنتج '+r.output_quantity+'.', defaultQty||r.output_quantity);
     if(qtyStr===null) return;
