@@ -8158,15 +8158,33 @@
           .gte('created_at', localDayStart(from)).lt('created_at', localDayStart(addDaysStr(to,1)));
         let expQ = db.from('expenses').select('amount').neq('category','سحب من الدرج').gte('expense_date', from).lte('expense_date', to);
         let wasteQ = db.from('waste_log').select('quantity, ingredients(unit_cost)').gte('created_at', localDayStart(from)).lt('created_at', localDayStart(addDaysStr(to,1)));
+        let laborQ = db.from('hr_time_logs').select('clock_in, clock_out, employee_id').gte('clock_in', localDayStart(from)).lt('clock_in', localDayStart(addDaysStr(to,1))).not('clock_out','is',null);
         if(branchId){ ordQ=ordQ.eq('branch_id',branchId); expQ=expQ.eq('branch_id',branchId); wasteQ=wasteQ.eq('branch_id',branchId); }
-        const [ordRes, expRes, wasteRes] = await Promise.all([ordQ, expQ, wasteQ]);
+        const [ordRes, expRes, wasteRes, laborRes] = await Promise.all([ordQ, expQ, wasteQ, laborQ]);
         if(ordRes.error){ box.innerHTML = `<div class="alert-red">⚠️ ${esc(ordRes.error.message)}</div>`; return; }
         const allOrders = ordRes.data||[];
         const cancelled = allOrders.filter(o=>o.status==='cancelled');
         const ok = allOrders.filter(o=>o.status!=='cancelled');
         const expenses = expRes.data||[];
         const wasteRows = wasteRes.data||[];
-        window.__repData = { type, from, to, branchId, ok, cancelled, expenses, wasteRows };
+        // 💼 تكلفة العمالة (Labor Cost) — من جلسات حضور HR الفعلية × سعر الساعة لكل موظف
+        const laborLogs = laborRes.data||[];
+        const empIds = [...new Set(laborLogs.map(l=>l.employee_id).filter(Boolean))];
+        let empMap = {};
+        if(empIds.length){
+          const { data: empRows } = await db.from('meal_names').select('id, hourly_wage, branch_id').in('id', empIds);
+          (empRows||[]).forEach(e=>{ empMap[e.id] = e; });
+        }
+        let totalLaborCost = 0, totalLaborHours = 0;
+        laborLogs.forEach(l=>{
+          const emp = empMap[l.employee_id]; if(!emp) return;
+          if(branchId && emp.branch_id!==branchId) return;
+          const hrs = (new Date(l.clock_out)-new Date(l.clock_in))/3600000;
+          if(hrs<=0 || hrs>16) return; // 🔧 تجاهل جلسات مشبوهة (نسيان تسجيل خروج) — نفس منطق النظام الأساسي بمعادلة الراتب
+          totalLaborHours += hrs;
+          totalLaborCost += hrs*parseFloat(emp.hourly_wage||0);
+        });
+        window.__repData = { type, from, to, branchId, ok, cancelled, expenses, wasteRows, totalLaborCost, totalLaborHours };
         renderDailyManagerReportResult(window.__repData);
         return;
       }
@@ -8313,6 +8331,21 @@
     const totalCost = withCost.reduce((a,r)=>a+r.totalCost,0);
     const totalProfit = withCost.reduce((a,r)=>a+r.profit,0);
     const missingCount = rows.length - withCost.length;
+    // 🍔 هندسة القائمة (Menu Engineering) — تصنيف كل صنف حسب شعبيته (الكمية) وربحيته مقارنة
+    // بمتوسط باقي الأصناف: نجم (مبيعات عالية + ربح عالي)، حصان حرث (مبيعات عالية + ربح منخفض)،
+    // لغز (مبيعات منخفضة + ربح عالي)، كلب (مبيعات منخفضة + ربح منخفض). المعيار: الوسيط (median)
+    // لكل من الكمية والربح للوحدة — معيار صناعي معتمد بدل المتوسط الحسابي (أدق مع القيم الشاذة).
+    const median = arr => { const s=[...arr].sort((a,b)=>a-b); const m=Math.floor(s.length/2); return s.length%2 ? s[m] : (s[m-1]+s[m])/2; };
+    const medQty = withCost.length ? median(withCost.map(r=>r.qty)) : 0;
+    const medProfitUnit = withCost.length ? median(withCost.map(r=>r.qty?r.profit/r.qty:0)) : 0;
+    withCost.forEach(r=>{
+      const profitUnit = r.qty ? r.profit/r.qty : 0;
+      const highQty = r.qty >= medQty, highProfit = profitUnit >= medProfitUnit;
+      if(highQty && highProfit) r.category = {label:'🟢 نجم', hint:'مبيعات عالية + ربح عالي — روّجيله واحميه', color:'var(--ok)'};
+      else if(highQty && !highProfit) r.category = {label:'🟡 حصان حرث', hint:'مبيعات عالية بس ربحه ضعيف — فكّري ترفعي سعره أو تقلّلي تكلفته', color:'var(--warn)'};
+      else if(!highQty && highProfit) r.category = {label:'🔵 لغز', hint:'ربحه ممتاز بس ما بينباع كتير — سوّقيله أكتر', color:'#0d6efd'};
+      else r.category = {label:'🔴 كلب', hint:'مبيعات ضعيفة وربح ضعيف — فكّري توقفيه أو تعدّليه', color:'var(--red)'};
+    });
     box.innerHTML = reportHeader('🍔 تكلفة الأصناف (Food Cost)') + `
       <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">
         ${statCard('إجمالي المبيعات', fmt(totalRevenue)+' '+CURRENCY)}
@@ -8321,8 +8354,9 @@
         ${statCard('نسبة الفود كوست العامة', totalRevenue?((totalCost/totalRevenue*100).toFixed(1)+'%'):'—')}
       </div>
       ${missingCount?`<div style="background:#fff3cd;border:1.5px solid var(--warn);border-radius:10px;padding:10px;margin-bottom:12px;font-weight:700;color:#7a5a00">⚠️ ${missingCount} صنف انباع بدون وصفة مسجّلة — تكلفتهم مش محسوبة هون (استخدمي "🔍 تدقيق الوصفات" بشاشة خط سير المنتج لتلاقيهم بالاسم).</div>`:''}
-      <div class="tbl-wrap"><table class="tbl"><tr><th>الصنف</th><th>الكمية المباعة</th><th>المبيعات</th><th>تكلفة الوحدة</th><th>التكلفة الكلية</th><th>الربح</th><th>هامش الربح %</th></tr>
-      ${rows.map(r=>`<tr><td><b>${esc(r.name)}</b></td><td>${r.qty}</td><td>${fmt(r.revenue)}</td><td>${r.hasCost?fmt(r.unitCost):'—'}</td><td>${r.hasCost?fmt(r.totalCost):'—'}</td><td style="color:${r.hasCost?(r.profit>=0?'var(--ok)':'var(--red)'):'var(--muted)'};font-weight:800">${r.hasCost?fmt(r.profit):'—'}</td><td>${r.hasCost?r.margin.toFixed(1)+'%':'—'}</td></tr>`).join('')||'<tr><td colspan="7" class="empty-note">ما في بيانات</td></tr>'}
+      <div style="font-size:.78rem;color:var(--muted);font-weight:700;margin-bottom:10px">🍔 هندسة القائمة (Menu Engineering): 🟢 نجم = روّجيله | 🟡 حصان حرث = عدّلي سعره/تكلفته | 🔵 لغز = سوّقيله أكتر | 🔴 كلب = فكّري توقفيه</div>
+      <div class="tbl-wrap"><table class="tbl"><tr><th>الصنف</th><th>التصنيف</th><th>الكمية المباعة</th><th>المبيعات</th><th>تكلفة الوحدة</th><th>التكلفة الكلية</th><th>الربح</th><th>هامش الربح %</th></tr>
+      ${rows.map(r=>`<tr><td><b>${esc(r.name)}</b></td><td>${r.hasCost?`<span style="color:${r.category.color};font-weight:800" title="${r.category.hint}">${r.category.label}</span>`:'—'}</td><td>${r.qty}</td><td>${fmt(r.revenue)}</td><td>${r.hasCost?fmt(r.unitCost):'—'}</td><td>${r.hasCost?fmt(r.totalCost):'—'}</td><td style="color:${r.hasCost?(r.profit>=0?'var(--ok)':'var(--red)'):'var(--muted)'};font-weight:800">${r.hasCost?fmt(r.profit):'—'}</td><td>${r.hasCost?r.margin.toFixed(1)+'%':'—'}</td></tr>`).join('')||'<tr><td colspan="8" class="empty-note">ما في بيانات</td></tr>'}
       </table></div>`;
   }
   function renderDailyManagerReportResult(d){
@@ -8335,20 +8369,25 @@
     d.ok.forEach(o=>(o.order_items||[]).forEach(li=>{ if(!itemTally[li.item_name]) itemTally[li.item_name]={qty:0}; itemTally[li.item_name].qty+=li.quantity||0; }));
     const sortedItems = Object.entries(itemTally).sort((a,b)=>b[1].qty-a[1].qty);
     const best = sortedItems[0], worst = sortedItems[sortedItems.length-1];
-    const estimatedProfit = totalSales - totalExpenses - totalWasteCost;
+    const laborCost = d.totalLaborCost||0;
+    const estimatedProfit = totalSales - totalExpenses - totalWasteCost - laborCost;
+    const laborPct = totalSales ? (laborCost/totalSales*100) : 0;
+    const wastePct = totalSales ? (totalWasteCost/totalSales*100) : 0;
+    const cancelRate = (d.ok.length+d.cancelled.length) ? (d.cancelled.length/(d.ok.length+d.cancelled.length)*100) : 0;
     box.innerHTML = reportHeader('📋 التقرير اليومي للمدير') + `
       <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">
         ${statCard('المبيعات', fmt(totalSales)+' '+CURRENCY)}
         ${statCard('عدد الطلبات', d.ok.length)}
-        ${statCard('متوسط الطلب', fmt(avgOrder)+' '+CURRENCY)}
+        ${statCard('متوسط الطلب (AOV)', fmt(avgOrder)+' '+CURRENCY)}
+        ${statCard('💼 تكلفة العمالة', fmt(laborCost)+' '+CURRENCY+' ('+laborPct.toFixed(1)+'%)', 'var(--red)')}
         ${statCard('المصاريف', fmt(totalExpenses)+' '+CURRENCY, 'var(--red)')}
-        ${statCard('الهدر (تكلفة)', fmt(totalWasteCost)+' '+CURRENCY, 'var(--red)')}
+        ${statCard('الهدر', fmt(totalWasteCost)+' '+CURRENCY+' ('+wastePct.toFixed(1)+'%)', 'var(--red)')}
         ${statCard('صافي الربح التقريبي', fmt(estimatedProfit)+' '+CURRENCY, estimatedProfit>=0?'var(--ok)':'var(--red)')}
-        ${statCard('الطلبيات الملغاة', d.cancelled.length, 'var(--red)')}
+        ${statCard('نسبة الإلغاء', cancelRate.toFixed(1)+'%', cancelRate>2?'var(--red)':'var(--ok)')}
         ${statCard('أفضل صنف', best?best[0]+' ('+best[1].qty+')':'—')}
         ${statCard('أقل صنف', worst?worst[0]+' ('+worst[1].qty+')':'—')}
       </div>
-      <div style="font-size:.78rem;color:var(--muted);font-weight:600">💡 "صافي الربح التقريبي" هون مبسّط (مبيعات − مصاريف − هدر، بدون احتساب تكلفة المكونات بالتفصيل) — لتفصيل دقيق حسب الوصفات استخدمي تقرير "🍔 تكلفة الأصناف" بجانب هاد التقرير.</div>`;
+      <div style="font-size:.78rem;color:var(--muted);font-weight:600">💡 "صافي الربح التقريبي" هون = مبيعات − مصاريف − هدر − تكلفة العمالة (بدون احتساب تكلفة مكونات الوصفات بالتفصيل — لهاد استخدمي تقرير "🍔 تكلفة الأصناف" جنب هاد التقرير لحساب Food Cost % وPrime Cost = Food Cost % + Labor Cost % بدقة).</div>`;
   }
   function renderWithdrawalsReportResult(rows){
     const box = document.getElementById('reportResult'); if(!box) return;
@@ -8408,13 +8447,15 @@
       const totalExpenses = d.expenses.reduce((a,e)=>a+parseFloat(e.amount||0),0);
       const totalWasteCost = d.wasteRows.reduce((a,w)=>a+parseFloat(w.quantity||0)*parseFloat(w.ingredients?.unit_cost||0),0);
       const avgOrder = d.ok.length ? totalSales/d.ok.length : 0;
+      const laborCost = d.totalLaborCost||0;
       bodyHtml = `<table>
         <tr><td>المبيعات</td><td>${fmt(totalSales)} ${CURRENCY}</td></tr>
         <tr><td>عدد الطلبات</td><td>${d.ok.length}</td></tr>
-        <tr><td>متوسط الطلب</td><td>${fmt(avgOrder)} ${CURRENCY}</td></tr>
+        <tr><td>متوسط الطلب (AOV)</td><td>${fmt(avgOrder)} ${CURRENCY}</td></tr>
+        <tr><td>تكلفة العمالة</td><td>${fmt(laborCost)} ${CURRENCY}</td></tr>
         <tr><td>المصاريف</td><td>${fmt(totalExpenses)} ${CURRENCY}</td></tr>
         <tr><td>الهدر (تكلفة)</td><td>${fmt(totalWasteCost)} ${CURRENCY}</td></tr>
-        <tr><td>صافي الربح التقريبي</td><td>${fmt(totalSales-totalExpenses-totalWasteCost)} ${CURRENCY}</td></tr>
+        <tr><td>صافي الربح التقريبي</td><td>${fmt(totalSales-totalExpenses-totalWasteCost-laborCost)} ${CURRENCY}</td></tr>
         <tr><td>الطلبيات الملغاة</td><td>${d.cancelled.length}</td></tr>
         </table>`;
     } else if(d.type==='items'){
