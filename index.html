@@ -8068,6 +8068,8 @@
               <option value="payment" ${window.__repType==='payment'?'selected':''}>💳 المبيعات حسب طريقة الدفع</option>
               <option value="expenses" ${window.__repType==='expenses'?'selected':''}>💵 المصاريف</option>
               <option value="withdrawals" ${window.__repType==='withdrawals'?'selected':''}>🔓 سحوبات الدرج</option>
+              <option value="foodcost" ${window.__repType==='foodcost'?'selected':''}>🍔 تكلفة الأصناف (Food Cost)</option>
+              <option value="daily_manager" ${window.__repType==='daily_manager'?'selected':''}>📋 التقرير اليومي للمدير</option>
             </select>
           </div>
           <div class="fld" style="margin:0;min-width:180px"><label>الفرع</label>
@@ -8116,6 +8118,56 @@
         if(error){ box.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message||'خطأ')}</div>`; console.error(error); return; }
         window.__repData = { type, from, to, branchId, rows: data||[] };
         renderExpensesReportResult(data||[]);
+        return;
+      }
+      if(type==='foodcost'){
+        let q = db.from('orders').select('status, created_at, branch_id, order_items(menu_item_id, item_name, quantity, unit_price)')
+          .gte('created_at', localDayStart(from)).lt('created_at', localDayStart(addDaysStr(to,1))).neq('status','cancelled');
+        if(branchId) q = q.eq('branch_id', branchId);
+        const { data: ordersData, error: ordersErr } = await q;
+        if(ordersErr){ box.innerHTML = `<div class="alert-red">⚠️ ${esc(ordersErr.message||'خطأ')}</div>`; console.error(ordersErr); return; }
+        const tally = {}; // menu_item_id -> {name, qty, revenue}
+        (ordersData||[]).forEach(o=>(o.order_items||[]).forEach(li=>{
+          if(!li.menu_item_id) return;
+          if(!tally[li.menu_item_id]) tally[li.menu_item_id] = { name: li.item_name, qty:0, revenue:0 };
+          tally[li.menu_item_id].qty += li.quantity||0;
+          tally[li.menu_item_id].revenue += (li.quantity||0)*parseFloat(li.unit_price||0);
+        }));
+        const soldIds = Object.keys(tally);
+        const { data: recipeRows } = soldIds.length ? await db.from('recipes').select('menu_item_id, recipe_items(quantity, ingredients(unit_cost))').in('menu_item_id', soldIds) : {data:[]};
+        const costByItem = {};
+        (recipeRows||[]).forEach(r=>{
+          const cost = (r.recipe_items||[]).reduce((a,ri)=>a+(parseFloat(ri.quantity||0)*parseFloat(ri.ingredients?.unit_cost||0)),0);
+          costByItem[r.menu_item_id] = cost;
+        });
+        const rows = soldIds.map(id=>{
+          const t = tally[id];
+          const unitCost = costByItem[id];
+          const hasCost = unitCost!==undefined;
+          const totalCost = hasCost ? unitCost*t.qty : null;
+          const profit = hasCost ? t.revenue-totalCost : null;
+          const margin = hasCost && t.revenue ? (profit/t.revenue*100) : null;
+          return { name:t.name, qty:t.qty, revenue:t.revenue, unitCost, totalCost, profit, margin, hasCost };
+        }).sort((a,b)=>(b.profit??-Infinity)-(a.profit??-Infinity));
+        window.__repData = { type, from, to, branchId, rows };
+        renderFoodCostReportResult(rows);
+        return;
+      }
+      if(type==='daily_manager'){
+        let ordQ = db.from('orders').select('total, subtotal, discount, status, order_items(item_name, quantity, unit_price)')
+          .gte('created_at', localDayStart(from)).lt('created_at', localDayStart(addDaysStr(to,1)));
+        let expQ = db.from('expenses').select('amount').neq('category','سحب من الدرج').gte('expense_date', from).lte('expense_date', to);
+        let wasteQ = db.from('waste_log').select('quantity, ingredients(unit_cost)').gte('created_at', localDayStart(from)).lt('created_at', localDayStart(addDaysStr(to,1)));
+        if(branchId){ ordQ=ordQ.eq('branch_id',branchId); expQ=expQ.eq('branch_id',branchId); wasteQ=wasteQ.eq('branch_id',branchId); }
+        const [ordRes, expRes, wasteRes] = await Promise.all([ordQ, expQ, wasteQ]);
+        if(ordRes.error){ box.innerHTML = `<div class="alert-red">⚠️ ${esc(ordRes.error.message)}</div>`; return; }
+        const allOrders = ordRes.data||[];
+        const cancelled = allOrders.filter(o=>o.status==='cancelled');
+        const ok = allOrders.filter(o=>o.status!=='cancelled');
+        const expenses = expRes.data||[];
+        const wasteRows = wasteRes.data||[];
+        window.__repData = { type, from, to, branchId, ok, cancelled, expenses, wasteRows };
+        renderDailyManagerReportResult(window.__repData);
         return;
       }
       if(type==='withdrawals'){
@@ -8254,6 +8306,50 @@
       ${rows.map(r=>`<tr><td><b>${PAY_AR[r[0]]||esc(r[0])}</b></td><td>${fmt(r[1])} ${CURRENCY}</td><td>${grand?(r[1]/grand*100).toFixed(1):0}%</td></tr>`).join('')||'<tr><td colspan="3" class="empty-note">ما في بيانات</td></tr>'}
       </table></div>`;
   }
+  function renderFoodCostReportResult(rows){
+    const box = document.getElementById('reportResult'); if(!box) return;
+    const withCost = rows.filter(r=>r.hasCost);
+    const totalRevenue = rows.reduce((a,r)=>a+r.revenue,0);
+    const totalCost = withCost.reduce((a,r)=>a+r.totalCost,0);
+    const totalProfit = withCost.reduce((a,r)=>a+r.profit,0);
+    const missingCount = rows.length - withCost.length;
+    box.innerHTML = reportHeader('🍔 تكلفة الأصناف (Food Cost)') + `
+      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">
+        ${statCard('إجمالي المبيعات', fmt(totalRevenue)+' '+CURRENCY)}
+        ${statCard('إجمالي تكلفة المواد', fmt(totalCost)+' '+CURRENCY, 'var(--red)')}
+        ${statCard('الربح الإجمالي التقديري', fmt(totalProfit)+' '+CURRENCY, 'var(--ok)')}
+        ${statCard('نسبة الفود كوست العامة', totalRevenue?((totalCost/totalRevenue*100).toFixed(1)+'%'):'—')}
+      </div>
+      ${missingCount?`<div style="background:#fff3cd;border:1.5px solid var(--warn);border-radius:10px;padding:10px;margin-bottom:12px;font-weight:700;color:#7a5a00">⚠️ ${missingCount} صنف انباع بدون وصفة مسجّلة — تكلفتهم مش محسوبة هون (استخدمي "🔍 تدقيق الوصفات" بشاشة خط سير المنتج لتلاقيهم بالاسم).</div>`:''}
+      <div class="tbl-wrap"><table class="tbl"><tr><th>الصنف</th><th>الكمية المباعة</th><th>المبيعات</th><th>تكلفة الوحدة</th><th>التكلفة الكلية</th><th>الربح</th><th>هامش الربح %</th></tr>
+      ${rows.map(r=>`<tr><td><b>${esc(r.name)}</b></td><td>${r.qty}</td><td>${fmt(r.revenue)}</td><td>${r.hasCost?fmt(r.unitCost):'—'}</td><td>${r.hasCost?fmt(r.totalCost):'—'}</td><td style="color:${r.hasCost?(r.profit>=0?'var(--ok)':'var(--red)'):'var(--muted)'};font-weight:800">${r.hasCost?fmt(r.profit):'—'}</td><td>${r.hasCost?r.margin.toFixed(1)+'%':'—'}</td></tr>`).join('')||'<tr><td colspan="7" class="empty-note">ما في بيانات</td></tr>'}
+      </table></div>`;
+  }
+  function renderDailyManagerReportResult(d){
+    const box = document.getElementById('reportResult'); if(!box) return;
+    const totalSales = d.ok.reduce((a,o)=>a+parseFloat(o.total||0),0);
+    const avgOrder = d.ok.length ? totalSales/d.ok.length : 0;
+    const totalExpenses = d.expenses.reduce((a,e)=>a+parseFloat(e.amount||0),0);
+    const totalWasteCost = d.wasteRows.reduce((a,w)=>a+parseFloat(w.quantity||0)*parseFloat(w.ingredients?.unit_cost||0),0);
+    const itemTally = {};
+    d.ok.forEach(o=>(o.order_items||[]).forEach(li=>{ if(!itemTally[li.item_name]) itemTally[li.item_name]={qty:0}; itemTally[li.item_name].qty+=li.quantity||0; }));
+    const sortedItems = Object.entries(itemTally).sort((a,b)=>b[1].qty-a[1].qty);
+    const best = sortedItems[0], worst = sortedItems[sortedItems.length-1];
+    const estimatedProfit = totalSales - totalExpenses - totalWasteCost;
+    box.innerHTML = reportHeader('📋 التقرير اليومي للمدير') + `
+      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">
+        ${statCard('المبيعات', fmt(totalSales)+' '+CURRENCY)}
+        ${statCard('عدد الطلبات', d.ok.length)}
+        ${statCard('متوسط الطلب', fmt(avgOrder)+' '+CURRENCY)}
+        ${statCard('المصاريف', fmt(totalExpenses)+' '+CURRENCY, 'var(--red)')}
+        ${statCard('الهدر (تكلفة)', fmt(totalWasteCost)+' '+CURRENCY, 'var(--red)')}
+        ${statCard('صافي الربح التقريبي', fmt(estimatedProfit)+' '+CURRENCY, estimatedProfit>=0?'var(--ok)':'var(--red)')}
+        ${statCard('الطلبيات الملغاة', d.cancelled.length, 'var(--red)')}
+        ${statCard('أفضل صنف', best?best[0]+' ('+best[1].qty+')':'—')}
+        ${statCard('أقل صنف', worst?worst[0]+' ('+worst[1].qty+')':'—')}
+      </div>
+      <div style="font-size:.78rem;color:var(--muted);font-weight:600">💡 "صافي الربح التقريبي" هون مبسّط (مبيعات − مصاريف − هدر، بدون احتساب تكلفة المكونات بالتفصيل) — لتفصيل دقيق حسب الوصفات استخدمي تقرير "🍔 تكلفة الأصناف" بجانب هاد التقرير.</div>`;
+  }
   function renderWithdrawalsReportResult(rows){
     const box = document.getElementById('reportResult'); if(!box) return;
     const total = rows.reduce((a,e)=>a+parseFloat(e.amount||0),0);
@@ -8286,7 +8382,7 @@
   }
   function buildReportHtml(){
     const d = window.__repData; if(!d){ toast('⚠️ ولّدي التقرير أول'); return ''; }
-    const TYPE_AR = {summary:'ملخص عام للمبيعات', items:'الأصناف الأكثر مبيعًا', branches:'المبيعات حسب الفرع', daily:'المبيعات حسب اليوم', payment:'المبيعات حسب طريقة الدفع', expenses:'تقرير المصاريف', withdrawals:'سحوبات الدرج'};
+    const TYPE_AR = {summary:'ملخص عام للمبيعات', items:'الأصناف الأكثر مبيعًا', branches:'المبيعات حسب الفرع', daily:'المبيعات حسب اليوم', payment:'المبيعات حسب طريقة الدفع', expenses:'تقرير المصاريف', withdrawals:'سحوبات الدرج', foodcost:'تكلفة الأصناف (Food Cost)', daily_manager:'التقرير اليومي للمدير'};
     const branchName = d.branchId ? (BRANCHES.find(b=>b.id===d.branchId)?.name_ar||'') : 'كل الفروع';
     let bodyHtml = '';
     if(d.type==='expenses'){
@@ -8299,6 +8395,28 @@
       bodyHtml = `<table><tr><th>التاريخ</th><th>المبلغ</th><th>السبب</th><th>مين سحب</th><th>الحالة</th></tr>
         ${d.rows.map(e=>`<tr><td>${e.expense_date}</td><td>${fmt(e.amount)}</td><td>${esc(e.title||e.description||'—')}</td><td>${esc(e.staff_name||'—')}</td><td>${e.approval_status==='approved'?'موافَق':e.approval_status==='pending'?'بانتظار الموافقة':esc(e.approval_status||'—')}</td></tr>`).join('')}
         </table><h3>الإجمالي: ${fmt(total)} ${CURRENCY}</h3>`;
+    } else if(d.type==='foodcost'){
+      const withCost = d.rows.filter(r=>r.hasCost);
+      const totalRevenue = d.rows.reduce((a,r)=>a+r.revenue,0);
+      const totalCost = withCost.reduce((a,r)=>a+r.totalCost,0);
+      const totalProfit = withCost.reduce((a,r)=>a+r.profit,0);
+      bodyHtml = `<table><tr><th>الصنف</th><th>الكمية</th><th>المبيعات</th><th>التكلفة</th><th>الربح</th><th>الهامش %</th></tr>
+        ${d.rows.map(r=>`<tr><td>${esc(r.name)}</td><td>${r.qty}</td><td>${fmt(r.revenue)}</td><td>${r.hasCost?fmt(r.totalCost):'—'}</td><td>${r.hasCost?fmt(r.profit):'—'}</td><td>${r.hasCost?r.margin.toFixed(1)+'%':'—'}</td></tr>`).join('')}
+        </table><h3>إجمالي المبيعات: ${fmt(totalRevenue)} ${CURRENCY} — إجمالي التكلفة: ${fmt(totalCost)} ${CURRENCY} — الربح: ${fmt(totalProfit)} ${CURRENCY}</h3>`;
+    } else if(d.type==='daily_manager'){
+      const totalSales = d.ok.reduce((a,o)=>a+parseFloat(o.total||0),0);
+      const totalExpenses = d.expenses.reduce((a,e)=>a+parseFloat(e.amount||0),0);
+      const totalWasteCost = d.wasteRows.reduce((a,w)=>a+parseFloat(w.quantity||0)*parseFloat(w.ingredients?.unit_cost||0),0);
+      const avgOrder = d.ok.length ? totalSales/d.ok.length : 0;
+      bodyHtml = `<table>
+        <tr><td>المبيعات</td><td>${fmt(totalSales)} ${CURRENCY}</td></tr>
+        <tr><td>عدد الطلبات</td><td>${d.ok.length}</td></tr>
+        <tr><td>متوسط الطلب</td><td>${fmt(avgOrder)} ${CURRENCY}</td></tr>
+        <tr><td>المصاريف</td><td>${fmt(totalExpenses)} ${CURRENCY}</td></tr>
+        <tr><td>الهدر (تكلفة)</td><td>${fmt(totalWasteCost)} ${CURRENCY}</td></tr>
+        <tr><td>صافي الربح التقريبي</td><td>${fmt(totalSales-totalExpenses-totalWasteCost)} ${CURRENCY}</td></tr>
+        <tr><td>الطلبيات الملغاة</td><td>${d.cancelled.length}</td></tr>
+        </table>`;
     } else if(d.type==='items'){
       const tally = {};
       d.rows.forEach(o=>(o.order_items||[]).forEach(l=>{ if(!tally[l.item_name]) tally[l.item_name]={qty:0,total:0}; tally[l.item_name].qty+=l.quantity; tally[l.item_name].total+=l.quantity*parseFloat(l.unit_price||0); }));
@@ -8366,7 +8484,7 @@
   function downloadReportPDF(){
     const d = window.__repData; if(!d){ toast('⚠️ ولّدي التقرير أول'); return; }
     const html = buildReportHtml(); if(!html) return;
-    const TYPE_AR = {summary:'ملخص_عام', items:'الأصناف_الأكثر_مبيعا', branches:'المبيعات_حسب_الفرع', daily:'المبيعات_حسب_اليوم', payment:'المبيعات_حسب_طريقة_الدفع', expenses:'تقرير_المصاريف', withdrawals:'سحوبات_الدرج'};
+    const TYPE_AR = {summary:'ملخص_عام', items:'الأصناف_الأكثر_مبيعا', branches:'المبيعات_حسب_الفرع', daily:'المبيعات_حسب_اليوم', payment:'المبيعات_حسب_طريقة_الدفع', expenses:'تقرير_المصاريف', withdrawals:'سحوبات_الدرج', foodcost:'تكلفة_الأصناف', daily_manager:'التقرير_اليومي'};
     exportHtmlToPDF(html, (TYPE_AR[d.type]||'تقرير')+'_'+d.from+'_'+d.to);
   }
 
@@ -9283,6 +9401,7 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
       closeModal(); renderPurchases();
       return; // ⛔ ما نكمل تحديث المخزون لأن ما في مواد فعليًا انحفظت
     }
+    let stockUpdateErrors = [];
     for(const it of items){
       const {data:ing}=await db.from('ingredients').select('stock').eq('id',it.ingredient_id).single();
       // 🔧 تنظيف: ingredients.stock عمود قديم مهجور — ما في ولا مكان بالكود ينقصه (بس فاتورة الشراء كانت
@@ -9292,13 +9411,36 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
         // تحديث مخزون الفرع المختار (أو كل الفروع)
       const branchesToUpdate = isAllBranches ? BRANCHES : BRANCHES.filter(b=>b.id===window.__purchaseBranchId);
       for(const branch of branchesToUpdate){
-        const {data:bi}=await db.from('branch_inventory').select('id,stock').eq('branch_id',branch.id).eq('ingredient_id',it.ingredient_id).maybeSingle();
-        if(bi) await db.from('branch_inventory').update({stock:(bi.stock||0)+it.quantity}).eq('id',bi.id);
-        else await db.from('branch_inventory').insert({branch_id:branch.id,ingredient_id:it.ingredient_id,stock:it.quantity,min_stock:0});
+        const {data:bi, error: biSelErr}=await db.from('branch_inventory').select('id,stock').eq('branch_id',branch.id).eq('ingredient_id',it.ingredient_id).maybeSingle();
+        if(biSelErr){ console.error('branch_inventory select failed:', biSelErr); stockUpdateErrors.push((INGR.find(i=>i.id===it.ingredient_id)?.name||it.ingredient_id)+' — '+branch.name_ar+': '+biSelErr.message); continue; }
+        // 🔧 مهم جدًا: كانت هاي التحديثات تصير من غير ما نتأكد من نجاحها — لو فشلت (صلاحيات RLS مثلاً)،
+        // كانت تفشل بصمت تام: الفاتورة تنحفظ، حركة الشراء تتسجل بخط سير المنتج، بس رصيد المستودع
+        // الفعلي (branch_inventory) ما يتغيّر أبدًا، بدون أي تحذير — بالضبط زي ما لاحظتيه. هلق منتأكد
+        // من كل عملية ونجمع أي فشل لنعرضه صراحة بدل ما يختفي.
+        let stockErr = null;
+        if(bi){
+          const r = await db.from('branch_inventory').update({stock:(bi.stock||0)+it.quantity}).eq('id',bi.id);
+          stockErr = r.error;
+        } else {
+          const r = await db.from('branch_inventory').insert({branch_id:branch.id,ingredient_id:it.ingredient_id,stock:it.quantity,min_stock:0});
+          stockErr = r.error;
+        }
+        if(stockErr){
+          console.error('branch_inventory update/insert failed:', stockErr);
+          stockUpdateErrors.push((INGR.find(i=>i.id===it.ingredient_id)?.name||it.ingredient_id)+' — '+branch.name_ar+': '+stockErr.message);
+          continue; // ⛔ ما نسجل حركة "شراء" لو الرصيد فعليًا ما تحدّث — لتجنّب نفس اللخبطة (حركة موجودة بس رصيد مش متحدث)
+        }
         logMovement(branch.id, it.ingredient_id, it.quantity, 'purchase', 'فاتورة شراء — '+sup, it.unit_cost);
       }
     }
-    closeModal();toast('✓ انحفظت الفاتورة والمخزون اتحدث'+(isAllBranches?' بكل الفروع':''));renderPurchases();
+    closeModal();
+    if(stockUpdateErrors.length){
+      toast('⚠️ انحفظت الفاتورة، بس فشل تحديث المخزون لبعض المواد — شوفي التفاصيل');
+      alert('⚠️ فشل تحديث رصيد المخزون للمواد التالية:\n\n'+stockUpdateErrors.join('\n')+'\n\nالفاتورة نفسها انحفظت، بس لازم تراجعي هاي المواد يدويًا أو تبلّغي الدعم الفني.');
+    } else {
+      toast('✓ انحفظت الفاتورة والمخزون اتحدث'+(isAllBranches?' بكل الفروع':''));
+    }
+    renderPurchases();
   }
 
   /* ---- تقارير موسعة ---- */
