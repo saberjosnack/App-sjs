@@ -11456,7 +11456,9 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
       myAtt.forEach(a=>{ if(a.work_date) uniqueDays.add(a.work_date); });
       validLogs.forEach(l=>{ if(l.clock_in) uniqueDays.add(new Date(l.clock_in).toLocaleDateString('en-CA')); });
       const days = uniqueDays.size;
-      const advTotal = advances.filter(a=>a.employee_id===e.id && afterClosure(a.created_at)).reduce((a,x)=>a+parseFloat(x.amount||0),0);
+      // 🔧 مصلّحة: موحّدة الآن مع باقي أماكن الحساب (بوابة الموظف + computeEmployeeNetDue) —
+      // سلف مفتوحة بس (status='open')، مش كل سلف الفترة بغض النظر عن حالتها.
+      const advTotal = advances.filter(a=>a.employee_id===e.id && afterClosure(a.created_at) && a.status==='open').reduce((a,x)=>a+parseFloat(x.amount||0),0);
       const myMeals = mealOrders.filter(o=>(o.employee_meal_id ? o.employee_meal_id===e.id : o.employee_tab_name===e.name) && afterClosure(o.created_at));
       const mealsCount = myMeals.length;
       const mealsTotal = myMeals.reduce((a,o)=>a+parseFloat(o.total||0),0);
@@ -16276,6 +16278,9 @@ try {
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
           ${settingOn('hr_portal_show_hours')?`<div class="stat">ساعات هالشهر<b>${hoursThisMonth.toFixed(1)}</b></div>`:''}
           ${monthBreakExcessHours>0?`<div class="stat" style="grid-column:1/-1">☕ خصم بريك زايد عن ساعة/يوم<b style="color:var(--red)">-${monthBreakExcessHours.toFixed(2)} ساعة</b></div>`:''}
+          <div class="stat" style="background:#eef7ff">ساعات العمل هالشهر<b style="color:var(--maroon)">${hoursThisMonth.toFixed(2)}</b></div>
+          <div class="stat" style="background:#eef7ff">سعر الساعة الحالي<b style="color:var(--maroon)">${currentWage.toFixed(2)}</b></div>
+          <div class="stat" style="background:#eef7ff">الإجمالي قبل الخصومات<b style="color:var(--maroon)">${fmt(gross)}</b></div>
           ${settingOn('hr_portal_show_net')?`<div class="stat">صافي المستحق<b style="color:${net<0?'var(--red)':'var(--ok)'}">${fmt(net)} ${CURRENCY}</b></div>`:''}
           ${settingOn('hr_portal_show_advances')?`<div class="stat">سلف مفتوحة (تُخصم من الصافي)<b style="color:var(--warn)">${fmt(advOutstanding)} ${CURRENCY}</b></div>`:''}
           ${settingOn('hr_portal_show_advances')?`<div class="stat">إجمالي السلف القائمة (كل الوقت)<b style="color:var(--warn)">${fmt(advOutstanding)} ${CURRENCY}</b></div>`:''}
