@@ -16160,54 +16160,38 @@ try {
         ccSalesThisMonth = (ccOrders||[]).reduce((a,o)=>a+parseFloat(o.total||0),0);
         ccPointsThisMonth = calcCcPoints(ccOrders||[]);
       }
-      const [logsRes, attRes, advRes, mealsRes, shiftAdjRes, dedRes, rwdRes, monthBreaksRes, ratingsRes, redRes] = await Promise.all([
-        // 🔧 مصلّحة: هاد الاستعلام كان بدون حد أقصى للتاريخ (بس من أول الشهر لقدّام بلا نهاية) —
-        // بعكس شاشة الأدمن يلي محدودة بدقة لليوم الحالي. أي إدخال ساعات بتاريخ مستقبلي بالغلط
-        // (سجل حضور مكرر، خطأ تاريخ جهاز...) كان ينحسب هون وما ينحسب بالأدمن — فرق 38 ساعة بالضبط
-        // كان سببه هيك بالضبط. هلق الحد الأقصى = هلق تمامًا، نفس شاشة الأدمن.
-        db.from('hr_time_logs').select('*').eq('employee_id', EMP.id).gte('clock_in', monthStart.toISOString()).lte('clock_in', new Date().toISOString()).order('clock_in',{ascending:false}),
-        db.from('hr_attendance').select('hours').eq('employee_id', EMP.id).gte('work_date', monthStart.toISOString().split('T')[0]).lte('work_date', localTodayStr()),
+      const [logsRes, advRes, ratingsRes, redRes] = await Promise.all([
+        db.from('hr_time_logs').select('*').eq('employee_id', EMP.id).gte('clock_in', monthStart.toISOString()).order('clock_in',{ascending:false}),
         db.from('hr_advances').select('*').eq('employee_id', EMP.id).order('created_at',{ascending:false}),
-        db.from('orders').select('total, created_at').or(`employee_meal_id.eq.${EMP.id},employee_tab_name.eq."${EMP.name}"`).neq('status','cancelled').gte('created_at', monthStart.toISOString()).lte('created_at', new Date().toISOString()),
-        linkedIds.length
-          ? db.from('shift_adjustments').select('amount').in('staff_id', linkedIds).eq('status','approved').gte('created_at', monthStart.toISOString()).lte('created_at', new Date().toISOString())
-          : db.from('shift_adjustments').select('amount').eq('staff_name', EMP.name).eq('status','approved').gte('created_at', monthStart.toISOString()).lte('created_at', new Date().toISOString()),
-        db.from('employee_deductions').select('amount, reason, created_at').eq('employee_id', EMP.id).gte('created_at', monthStart.toISOString()).lte('created_at', new Date().toISOString()),
-        db.from('employee_rewards').select('amount, reason, created_at').eq('employee_id', EMP.id).gte('created_at', monthStart.toISOString()).lte('created_at', new Date().toISOString()),
-        db.from('hr_breaks').select('started_at, ended_at').eq('employee_id', EMP.id).not('ended_at','is',null).gte('started_at', monthStart.toISOString()),
         linkedIds.length ? db.from('employee_ratings').select('rating, points').in('employee_id', linkedIds) : Promise.resolve({data:[]}),
         linkedIds.length ? db.from('point_redemptions').select('points_used').in('employee_id', linkedIds) : Promise.resolve({data:[]}),
       ]);
       const logs = logsRes.data||[];
-      // 🚩 نفس فحص الأمان: أي جلسة أطول من 16 ساعة متواصلة مستبعدة (غالبًا نسيان خروج) لحد ما الأدمن يراجعها
-      const closedLogs = logs.filter(l=>l.clock_out && (((new Date(l.clock_out)-new Date(l.clock_in))/3600000)<=16 || l.reviewed_ok));
-      // 🔧 مهم: الساعات = المسجّلة ذاتيًا من البوابة + الساعات اليدوية يلي الأدمن دخّلها (كانت مفقودة تمامًا هون)
-      const portalHours = closedLogs.reduce((a,l)=>a+((new Date(l.clock_out)-new Date(l.clock_in))/3600000),0);
-      const manualHours = (attRes.data||[]).reduce((a,x)=>a+parseFloat(x.hours||0),0);
-      const monthBreakExcessHours = calcBreakExcessHours(monthBreaksRes.data||[]);
-      const hoursThisMonth = Math.max(0, portalHours + manualHours - monthBreakExcessHours);
       const positiveRatings = (ratingsRes.data||[]).filter(r=>r.rating==='positive').length;
       const negativeRatings = (ratingsRes.data||[]).filter(r=>r.rating==='negative').length;
       const totalPointsEarned = (ratingsRes.data||[]).reduce((a,r)=>a+(r.points!=null?r.points:(r.rating==='positive'?POINTS_PER_RATING:POINTS_PER_NEGATIVE)),0);
       const pointsRedeemed = (redRes.data||[]).reduce((a,x)=>a+x.points_used,0);
       const pointsAvailable = totalPointsEarned - pointsRedeemed;
       const adv = advRes.data||[];
-      // 🔙 رجّعناها: أي سلفة اتاخدت هالشهر بتخصم من الصافي، بغض النظر عن حالة "تسديدها" — نفس منطق
-      // شاشة الأدمن. "تسديد" هون معناها بس تنظيف/أرشفة، مش إلغاء خصمها من راتب الشهر الحالي.
-      const advOutstanding = adv.filter(a=>new Date(a.created_at)>=monthStart).reduce((a,x)=>a+parseFloat(x.amount||0),0);
-      const meals = mealsRes.data||[];
-      const mealsTotal = meals.reduce((a,o)=>a+parseFloat(o.total||0),0);
-      const shiftDed = (shiftAdjRes.data||[]).reduce((a,x)=>a+Math.abs(x.amount||0),0);
-      const deductionsTotal = (dedRes.data||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
-      const rewardsTotal = (rwdRes.data||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
-      // 🔧 مصلّحة: كنا نستخدم EMP.hourly_wage من وقت أول تسجيل دخول (ممكن يكون قديم لو الأدمن
-      // غيّر سعر الساعة والموظف ضل فاتح البوابة من قبل). هلق بنجيب السعر الحالي الحقيقي فريش
-      // من قاعدة البيانات مباشرة قبل الحساب، بنفس لحظة عرض الصافي — نفس مصدر الحقيقة يلي الأدمن بيستخدمه.
-      const { data: freshEmp } = await db.from('meal_names').select('hourly_wage, opening_balance').eq('id', EMP.id).maybeSingle();
+      // 🎯 موحّدة تمامًا مع شاشة الأدمن: نفس الدالة بالضبط، صفر احتمال انزياح بينهم من هلق وطلع.
+      // بنجيب سعر الساعة والرصيد السابق فريش من قاعدة البيانات (مش من ذاكرة الجلسة القديمة) قبل الحساب.
+      const { data: freshEmp } = await db.from('meal_names').select('hourly_wage, opening_balance, max_advance_percent').eq('id', EMP.id).maybeSingle();
       const currentWage = parseFloat(freshEmp?.hourly_wage ?? EMP.hourly_wage ?? 0);
-      const gross = hoursThisMonth * currentWage;
       const prevBalance = parseFloat(freshEmp?.opening_balance ?? EMP.opening_balance ?? 0);
-      const net = gross - advOutstanding - mealsTotal - shiftDed - deductionsTotal + rewardsTotal + prevBalance;
+      const netResult = await computeEmployeeNetDue(EMP.id, EMP.name, currentWage, prevBalance, freshEmp?.max_advance_percent ?? EMP.max_advance_percent);
+      const hoursThisMonth = netResult.hours;
+      const gross = netResult.gross;
+      const advOutstanding = netResult.advOutstanding;
+      const mealsTotal = netResult.mealsTotal;
+      const shiftDed = netResult.shiftDed;
+      const deductionsTotal = netResult.deductionsTotal;
+      const rewardsTotal = netResult.rewardsTotal;
+      const net = netResult.net;
+      // 📝 هاي بس للعرض التفصيلي (الأسباب)، المجاميع أصلًا جاية من computeEmployeeNetDue فوق
+      const [dedRes, rwdRes] = await Promise.all([
+        db.from('employee_deductions').select('amount, reason, created_at').eq('employee_id', EMP.id).gte('created_at', monthStart.toISOString()),
+        db.from('employee_rewards').select('amount, reason, created_at').eq('employee_id', EMP.id).gte('created_at', monthStart.toISOString()),
+      ]);
 
       const { data: reqs } = await db.from('hr_advance_requests').select('*').eq('employee_id', EMP.id).order('created_at',{ascending:false}).limit(10);
       const allAdvances = adv.slice().sort((a,b)=>new Date(b.created_at)-new Date(a.created_at));
@@ -16280,14 +16264,14 @@ try {
 
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
           ${settingOn('hr_portal_show_hours')?`<div class="stat">ساعات هالشهر<b>${hoursThisMonth.toFixed(1)}</b></div>`:''}
-          ${monthBreakExcessHours>0?`<div class="stat" style="grid-column:1/-1">☕ خصم بريك زايد عن ساعة/يوم<b style="color:var(--red)">-${monthBreakExcessHours.toFixed(2)} ساعة</b></div>`:''}
+          ${netResult.breakExcess>0?`<div class="stat" style="grid-column:1/-1">☕ خصم بريك زايد عن ساعة/يوم<b style="color:var(--red)">-${netResult.breakExcess.toFixed(2)} ساعة</b></div>`:''}
           <div class="stat" style="background:#eef7ff">ساعات العمل هالشهر<b style="color:var(--maroon)">${hoursThisMonth.toFixed(2)}</b></div>
           <div class="stat" style="background:#eef7ff">سعر الساعة الحالي<b style="color:var(--maroon)">${currentWage.toFixed(2)}</b></div>
           <div class="stat" style="background:#eef7ff">الإجمالي قبل الخصومات<b style="color:var(--maroon)">${fmt(gross)}</b></div>
           ${settingOn('hr_portal_show_net')?`<div class="stat">صافي المستحق<b style="color:${net<0?'var(--red)':'var(--ok)'}">${fmt(net)} ${CURRENCY}</b></div>`:''}
           ${settingOn('hr_portal_show_advances')?`<div class="stat">سلف هالشهر (تُخصم من الصافي)<b style="color:var(--warn)">${fmt(advOutstanding)} ${CURRENCY}</b></div>`:''}
           ${settingOn('hr_portal_show_advances')?`<div class="stat">إجمالي السلف القائمة (كل الوقت)<b style="color:var(--warn)">${fmt(advOutstanding)} ${CURRENCY}</b></div>`:''}
-          ${settingOn('hr_portal_show_meals')?`<div class="stat">وجبات هالشهر<b>${meals.length} <small>(${fmt(mealsTotal)})</small></b></div>`:''}
+          ${settingOn('hr_portal_show_meals')?`<div class="stat">وجبات هالشهر<b>${netResult.mealsCount} <small>(${fmt(mealsTotal)})</small></b></div>`:''}
           ${shiftDed>0?`<div class="stat" style="grid-column:1/-1">🔻 خصم عجز/زيادة شيفت (معتمد)<b style="color:var(--red)">${fmt(shiftDed)} ${CURRENCY}</b></div>`:''}
           ${deductionsTotal>0?`<div class="stat" style="grid-column:1/-1">
             <div>➖ خصومات هالشهر<b style="color:var(--red)">${fmt(deductionsTotal)} ${CURRENCY}</b></div>
@@ -16557,18 +16541,19 @@ try {
       if(closureEnd > monthStart) monthStart.setTime(closureEnd.getTime());
     }
     const fromIso = monthStart.toISOString();
+    const nowIso = new Date().toISOString();
     const { data: linkedStaffRows2 } = await db.from('staff').select('id').eq('linked_hr_id', empId);
     const linkedIds2 = (linkedStaffRows2||[]).map(s=>s.id);
     const [attRes, logsRes, advRes, mealsRes, shiftAdjRes, dedRes, rwdRes, brRes] = await Promise.all([
-      db.from('hr_attendance').select('hours').eq('employee_id', empId).gte('work_date', fromIso.split('T')[0]),
-      db.from('hr_time_logs').select('clock_in,clock_out,reviewed_ok').eq('employee_id', empId).not('clock_out','is',null).gte('clock_in', fromIso),
-      db.from('hr_advances').select('amount').eq('employee_id', empId).gte('created_at', fromIso),
-      db.from('orders').select('total').or(`employee_meal_id.eq.${empId},employee_tab_name.eq."${empName}"`).neq('status','cancelled').gte('created_at', fromIso),
+      db.from('hr_attendance').select('hours').eq('employee_id', empId).gte('work_date', fromIso.split('T')[0]).lte('work_date', localTodayStr()),
+      db.from('hr_time_logs').select('clock_in,clock_out,reviewed_ok').eq('employee_id', empId).not('clock_out','is',null).gte('clock_in', fromIso).lte('clock_in', nowIso),
+      db.from('hr_advances').select('amount').eq('employee_id', empId).gte('created_at', fromIso).lte('created_at', nowIso),
+      db.from('orders').select('total').or(`employee_meal_id.eq.${empId},employee_tab_name.eq."${empName}"`).neq('status','cancelled').gte('created_at', fromIso).lte('created_at', nowIso),
       linkedIds2.length
-        ? db.from('shift_adjustments').select('amount').in('staff_id', linkedIds2).eq('status','approved').gte('created_at', fromIso)
-        : db.from('shift_adjustments').select('amount').eq('staff_name', empName).eq('status','approved').gte('created_at', fromIso),
-      db.from('employee_deductions').select('amount').eq('employee_id', empId).gte('created_at', fromIso),
-      db.from('employee_rewards').select('amount').eq('employee_id', empId).gte('created_at', fromIso),
+        ? db.from('shift_adjustments').select('amount').in('staff_id', linkedIds2).eq('status','approved').gte('created_at', fromIso).lte('created_at', nowIso)
+        : db.from('shift_adjustments').select('amount').eq('staff_name', empName).eq('status','approved').gte('created_at', fromIso).lte('created_at', nowIso),
+      db.from('employee_deductions').select('amount').eq('employee_id', empId).gte('created_at', fromIso).lte('created_at', nowIso),
+      db.from('employee_rewards').select('amount').eq('employee_id', empId).gte('created_at', fromIso).lte('created_at', nowIso),
       db.from('hr_breaks').select('started_at, ended_at').eq('employee_id', empId).not('ended_at','is',null).gte('started_at', fromIso),
     ]);
     const manualHours = (attRes.data||[]).reduce((a,x)=>a+parseFloat(x.hours||0),0);
@@ -16577,13 +16562,15 @@ try {
     const hours = Math.max(0, manualHours+portalHours-breakExcess);
     const gross = hours*(hourlyWage||0);
     const advOutstanding = (advRes.data||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
-    const mealsTotal = (mealsRes.data||[]).reduce((a,o)=>a+parseFloat(o.total||0),0);
+    const mealsRows = mealsRes.data||[];
+    const mealsTotal = mealsRows.reduce((a,o)=>a+parseFloat(o.total||0),0);
     const shiftDed = (shiftAdjRes.data||[]).reduce((a,x)=>a+Math.abs(x.amount||0),0);
     const deductionsTotal = (dedRes.data||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
     const rewardsTotal = (rwdRes.data||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
-    const net = gross - advOutstanding - mealsTotal - shiftDed - deductionsTotal + rewardsTotal + parseFloat(openingBalance||0);
+    const opening = parseFloat(openingBalance||0);
+    const net = gross - advOutstanding - mealsTotal - shiftDed - deductionsTotal + rewardsTotal + opening;
     const maxAllowed = Math.max(0, net * ((maxAdvPercent||30)/100));
-    return { net, maxAllowed };
+    return { net, maxAllowed, hours, hourlyWage: parseFloat(hourlyWage||0), gross, advOutstanding, mealsTotal, mealsCount: mealsRows.length, shiftDed, deductionsTotal, rewardsTotal, opening, breakExcess };
   }
   async function empShowRecipes(){
     modal('<h3>📋 وصفات التحضير</h3><div id="empRecipesBody" class="empty-note">... جاري التحميل</div>');
