@@ -16161,15 +16161,19 @@ try {
         ccPointsThisMonth = calcCcPoints(ccOrders||[]);
       }
       const [logsRes, attRes, advRes, mealsRes, shiftAdjRes, dedRes, rwdRes, monthBreaksRes, ratingsRes, redRes] = await Promise.all([
-        db.from('hr_time_logs').select('*').eq('employee_id', EMP.id).gte('clock_in', monthStart.toISOString()).order('clock_in',{ascending:false}),
-        db.from('hr_attendance').select('hours').eq('employee_id', EMP.id).gte('work_date', monthStart.toISOString().split('T')[0]),
+        // 🔧 مصلّحة: هاد الاستعلام كان بدون حد أقصى للتاريخ (بس من أول الشهر لقدّام بلا نهاية) —
+        // بعكس شاشة الأدمن يلي محدودة بدقة لليوم الحالي. أي إدخال ساعات بتاريخ مستقبلي بالغلط
+        // (سجل حضور مكرر، خطأ تاريخ جهاز...) كان ينحسب هون وما ينحسب بالأدمن — فرق 38 ساعة بالضبط
+        // كان سببه هيك بالضبط. هلق الحد الأقصى = هلق تمامًا، نفس شاشة الأدمن.
+        db.from('hr_time_logs').select('*').eq('employee_id', EMP.id).gte('clock_in', monthStart.toISOString()).lte('clock_in', new Date().toISOString()).order('clock_in',{ascending:false}),
+        db.from('hr_attendance').select('hours').eq('employee_id', EMP.id).gte('work_date', monthStart.toISOString().split('T')[0]).lte('work_date', localTodayStr()),
         db.from('hr_advances').select('*').eq('employee_id', EMP.id).order('created_at',{ascending:false}),
-        db.from('orders').select('total, created_at').or(`employee_meal_id.eq.${EMP.id},employee_tab_name.eq."${EMP.name}"`).neq('status','cancelled').gte('created_at', monthStart.toISOString()),
+        db.from('orders').select('total, created_at').or(`employee_meal_id.eq.${EMP.id},employee_tab_name.eq."${EMP.name}"`).neq('status','cancelled').gte('created_at', monthStart.toISOString()).lte('created_at', new Date().toISOString()),
         linkedIds.length
-          ? db.from('shift_adjustments').select('amount').in('staff_id', linkedIds).eq('status','approved').gte('created_at', monthStart.toISOString())
-          : db.from('shift_adjustments').select('amount').eq('staff_name', EMP.name).eq('status','approved').gte('created_at', monthStart.toISOString()),
-        db.from('employee_deductions').select('amount, reason, created_at').eq('employee_id', EMP.id).gte('created_at', monthStart.toISOString()),
-        db.from('employee_rewards').select('amount, reason, created_at').eq('employee_id', EMP.id).gte('created_at', monthStart.toISOString()),
+          ? db.from('shift_adjustments').select('amount').in('staff_id', linkedIds).eq('status','approved').gte('created_at', monthStart.toISOString()).lte('created_at', new Date().toISOString())
+          : db.from('shift_adjustments').select('amount').eq('staff_name', EMP.name).eq('status','approved').gte('created_at', monthStart.toISOString()).lte('created_at', new Date().toISOString()),
+        db.from('employee_deductions').select('amount, reason, created_at').eq('employee_id', EMP.id).gte('created_at', monthStart.toISOString()).lte('created_at', new Date().toISOString()),
+        db.from('employee_rewards').select('amount, reason, created_at').eq('employee_id', EMP.id).gte('created_at', monthStart.toISOString()).lte('created_at', new Date().toISOString()),
         db.from('hr_breaks').select('started_at, ended_at').eq('employee_id', EMP.id).not('ended_at','is',null).gte('started_at', monthStart.toISOString()),
         linkedIds.length ? db.from('employee_ratings').select('rating, points').in('employee_id', linkedIds) : Promise.resolve({data:[]}),
         linkedIds.length ? db.from('point_redemptions').select('points_used').in('employee_id', linkedIds) : Promise.resolve({data:[]}),
