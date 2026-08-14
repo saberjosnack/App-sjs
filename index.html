@@ -778,10 +778,27 @@
         if(emp.pin) verifyEmpMealSelectionPin(emp);
         else toast('⚠️ "'+emp.name+'" ما إله رقم سري محفوظ — لحماية أفضل ضيفيله واحد من شاشة HR ← الموظفين');
       }
+      // 🍽️ نفحص فورًا (بدون ما ننتظر الحفظ) هل هاد الموظف أخذ وجبة بخصم اليوم أصلاً — لو إيه، منحذّر
+      // الكاشير فورًا إنه هاي الوجبة رح تنحسب كاملة بدون خصم (بس تضل مسجّلة بذمّته زي العادة)
+      if(emp) checkEmpAlreadyHadMealToday(emp);
     } else {
       window.__empMealVerified = null;
     }
     renderCart();
+  }
+  async function checkEmpAlreadyHadMealToday(emp){
+    try{
+      const todayStart = localDayStart(localTodayStr());
+      const { data: todaysMeals } = await db.from('orders').select('id')
+        .eq('employee_meal_id', emp.id).neq('status','cancelled').gte('created_at', todayStart).limit(1);
+      const info = document.getElementById('empMealDiscInfo');
+      if(todaysMeals && todaysMeals.length && info){
+        info.innerHTML = '⚠️ "'+esc(emp.name)+'" أخذ وجبة بخصم اليوم خلص — هاي الوجبة رح تنحسب كاملة بدون خصم';
+        info.style.color = 'var(--red)';
+      } else if(info){
+        info.style.color = '';
+      }
+    }catch(e){ console.error('checkEmpAlreadyHadMealToday failed:', e); }
   }
   // 🔒 تأكيد هوية صاحب "وجبة الموظف" بالرقم السري تبعه — يمنع حدا يطلب وجبة باسم موظف تاني بدون علمه
   function verifyEmpMealSelectionPin(emp){
@@ -4006,6 +4023,23 @@
     }
 
     const t = totals();
+    // 🍽️ وجبة موظف بخصم: بس أول وجبة بنفس اليوم تاخد الخصم — أي وجبة تانية بنفس اليوم لنفس الموظف
+    // تنحسب كاملة بدون خصم (بس تضل مسجّلة بذمّته زي العادة).
+    if(empMealName){
+      const empRec2 = MEAL_NAMES_DATA.find(n=>n.name===empMealName);
+      if(empRec2){
+        const todayStart = localDayStart(localTodayStr());
+        const { data: todaysMeals } = await db.from('orders').select('id')
+          .eq('employee_meal_id', empRec2.id)
+          .neq('status','cancelled')
+          .gte('created_at', todayStart)
+          .limit(1);
+        if(todaysMeals && todaysMeals.length){
+          t.disc = 0;
+          t.total = t.sub + t.del;
+        }
+      }
+    }
     const custPhone = document.getElementById('custPhone');
     const custName = document.getElementById('custName');
     const custAddr = document.getElementById('custAddr');
