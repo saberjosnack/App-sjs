@@ -16186,20 +16186,23 @@ try {
       const pointsRedeemed = (redRes.data||[]).reduce((a,x)=>a+x.points_used,0);
       const pointsAvailable = totalPointsEarned - pointsRedeemed;
       const adv = advRes.data||[];
-      // 🔧 نفس منطق الأدمن بالضبط: كل سلفة اتاخدت هالشهر بتخصم من الصافي، بغض النظر إذا اتسددت أو لسا —
-      // "متسددة" معناها بس إنها انحسبت/اتصفّت بمراجعة سابقة، مش إنها ما بتأثر عالشهر يلي اتاخدت فيه
-      const advTakenThisMonth = adv.filter(a=>new Date(a.created_at)>=monthStart).reduce((a,x)=>a+parseFloat(x.amount||0),0);
-      // 🔧 "القائم" لازم يعني السلف يلي لسا status='open' (مو متسددة) — قبل هيك كانت بتجمع كل سلفة
-      // اتاخدت بأي وقت حتى لو انطوت أصلًا جوا "الرصيد السابق" بقفل شهر سابق (تظهر مكررة كإنها لسا دين)
+      // 🔧 مصلّحة: كانت هون تحسب "كل سلفة اتاخدت هالشهر" بغض النظر عن حالتها، بعكس شاشة الأدمن
+      // يلي بتحسب بس السلف المفتوحة (status='open'). هلق موحّدة 100% مع نفس منطق الأدمن —
+      // سلفة اتسددت (مهما كان وقت أخذها) ما تنخصم من الصافي مرتين.
       const advOutstanding = adv.filter(x=>x.status==='open').reduce((a,x)=>a+parseFloat(x.amount||0),0);
       const meals = mealsRes.data||[];
       const mealsTotal = meals.reduce((a,o)=>a+parseFloat(o.total||0),0);
       const shiftDed = (shiftAdjRes.data||[]).reduce((a,x)=>a+Math.abs(x.amount||0),0);
       const deductionsTotal = (dedRes.data||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
       const rewardsTotal = (rwdRes.data||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
-      const gross = hoursThisMonth * (EMP.hourly_wage||0);
-      const prevBalance = parseFloat(EMP.opening_balance||0);
-      const net = gross - advTakenThisMonth - mealsTotal - shiftDed - deductionsTotal + rewardsTotal + prevBalance;
+      // 🔧 مصلّحة: كنا نستخدم EMP.hourly_wage من وقت أول تسجيل دخول (ممكن يكون قديم لو الأدمن
+      // غيّر سعر الساعة والموظف ضل فاتح البوابة من قبل). هلق بنجيب السعر الحالي الحقيقي فريش
+      // من قاعدة البيانات مباشرة قبل الحساب، بنفس لحظة عرض الصافي — نفس مصدر الحقيقة يلي الأدمن بيستخدمه.
+      const { data: freshEmp } = await db.from('meal_names').select('hourly_wage, opening_balance').eq('id', EMP.id).maybeSingle();
+      const currentWage = parseFloat(freshEmp?.hourly_wage ?? EMP.hourly_wage ?? 0);
+      const gross = hoursThisMonth * currentWage;
+      const prevBalance = parseFloat(freshEmp?.opening_balance ?? EMP.opening_balance ?? 0);
+      const net = gross - advOutstanding - mealsTotal - shiftDed - deductionsTotal + rewardsTotal + prevBalance;
 
       const { data: reqs } = await db.from('hr_advance_requests').select('*').eq('employee_id', EMP.id).order('created_at',{ascending:false}).limit(10);
       const allAdvances = adv.slice().sort((a,b)=>new Date(b.created_at)-new Date(a.created_at));
@@ -16274,7 +16277,7 @@ try {
           ${settingOn('hr_portal_show_hours')?`<div class="stat">ساعات هالشهر<b>${hoursThisMonth.toFixed(1)}</b></div>`:''}
           ${monthBreakExcessHours>0?`<div class="stat" style="grid-column:1/-1">☕ خصم بريك زايد عن ساعة/يوم<b style="color:var(--red)">-${monthBreakExcessHours.toFixed(2)} ساعة</b></div>`:''}
           ${settingOn('hr_portal_show_net')?`<div class="stat">صافي المستحق<b style="color:${net<0?'var(--red)':'var(--ok)'}">${fmt(net)} ${CURRENCY}</b></div>`:''}
-          ${settingOn('hr_portal_show_advances')?`<div class="stat">سلف هالشهر (تُخصم من الصافي)<b style="color:var(--warn)">${fmt(advTakenThisMonth)} ${CURRENCY}</b></div>`:''}
+          ${settingOn('hr_portal_show_advances')?`<div class="stat">سلف مفتوحة (تُخصم من الصافي)<b style="color:var(--warn)">${fmt(advOutstanding)} ${CURRENCY}</b></div>`:''}
           ${settingOn('hr_portal_show_advances')?`<div class="stat">إجمالي السلف القائمة (كل الوقت)<b style="color:var(--warn)">${fmt(advOutstanding)} ${CURRENCY}</b></div>`:''}
           ${settingOn('hr_portal_show_meals')?`<div class="stat">وجبات هالشهر<b>${meals.length} <small>(${fmt(mealsTotal)})</small></b></div>`:''}
           ${shiftDed>0?`<div class="stat" style="grid-column:1/-1">🔻 خصم عجز/زيادة شيفت (معتمد)<b style="color:var(--red)">${fmt(shiftDed)} ${CURRENCY}</b></div>`:''}
