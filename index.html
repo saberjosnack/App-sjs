@@ -16265,9 +16265,6 @@ try {
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
           ${settingOn('hr_portal_show_hours')?`<div class="stat">ساعات هالشهر<b>${hoursThisMonth.toFixed(1)}</b></div>`:''}
           ${netResult.breakExcess>0?`<div class="stat" style="grid-column:1/-1">☕ خصم بريك زايد عن ساعة/يوم<b style="color:var(--red)">-${netResult.breakExcess.toFixed(2)} ساعة</b></div>`:''}
-          <div class="stat" style="background:#eef7ff">ساعات العمل هالشهر<b style="color:var(--maroon)">${hoursThisMonth.toFixed(2)}</b></div>
-          <div class="stat" style="background:#eef7ff">سعر الساعة الحالي<b style="color:var(--maroon)">${currentWage.toFixed(2)}</b></div>
-          <div class="stat" style="background:#eef7ff">الإجمالي قبل الخصومات<b style="color:var(--maroon)">${fmt(gross)}</b></div>
           ${settingOn('hr_portal_show_net')?`<div class="stat">صافي المستحق<b style="color:${net<0?'var(--red)':'var(--ok)'}">${fmt(net)} ${CURRENCY}</b></div>`:''}
           ${settingOn('hr_portal_show_advances')?`<div class="stat">سلف هالشهر (تُخصم من الصافي)<b style="color:var(--warn)">${fmt(advOutstanding)} ${CURRENCY}</b></div>`:''}
           ${settingOn('hr_portal_show_advances')?`<div class="stat">إجمالي السلف القائمة (كل الوقت)<b style="color:var(--warn)">${fmt(advOutstanding)} ${CURRENCY}</b></div>`:''}
