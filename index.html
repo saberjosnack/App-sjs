@@ -11500,6 +11500,14 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
     });
     const totalNet = rows.reduce((a,r)=>a+r.net,0);
     window.__HR_ROWS = rows;
+    // 📌 مصدر الحقيقة الوحيد: نحفظ الصافي المحسوب هون مباشرة على سجل كل موظف — بوابة الموظف
+    // هلق بس بتعرض هاد الرقم المخزّن، صفر حسبة من عندها، صفر احتمال انزياح بين الشاشتين للأبد.
+    // 🔒 بس لما تكون الفترة المعروضة = الشهر الحالي (نفس تعريف بوابة الموظف)، وإلا رح نخزّن رقم فترة تانية بالغلط.
+    if(HR_FILTER.from===localMonthStartStr() && HR_FILTER.to===localTodayStr()){
+      rows.forEach(r=>{
+        db.from('meal_names').update({ cached_net_due: r.net, cached_net_due_at: new Date().toISOString() }).eq('id', r.emp.id).then(()=>{});
+      });
+    }
     const hrSuspicious = rows.filter(r=>r.suspiciousLogs && r.suspiciousLogs.length);
     const dupWarnings = [];
     for(let i=0;i<empList.length;i++){
@@ -16192,11 +16200,12 @@ try {
       const pointsRedeemed = (redRes.data||[]).reduce((a,x)=>a+x.points_used,0);
       const pointsAvailable = totalPointsEarned - pointsRedeemed;
       const adv = advRes.data||[];
-      // 🎯 موحّدة تمامًا مع شاشة الأدمن: نفس الدالة بالضبط، صفر احتمال انزياح بينهم من هلق وطلع.
-      // بنجيب سعر الساعة والرصيد السابق فريش من قاعدة البيانات (مش من ذاكرة الجلسة القديمة) قبل الحساب.
-      const { data: freshEmp } = await db.from('meal_names').select('hourly_wage, opening_balance, max_advance_percent').eq('id', EMP.id).maybeSingle();
+      // 🎯 بدون أي معادلة هون: "صافي المستحق" المعروض بالبوابة هو بالضبط نفس الرقم يلي شاشة HR
+      // حسبته وخزّنته آخر مرة اتفتحت فيها — صفر حسبة مستقلة، صفر احتمال انزياح، مصدر حقيقة وحيد.
+      const { data: freshEmp } = await db.from('meal_names').select('hourly_wage, opening_balance, max_advance_percent, cached_net_due, cached_net_due_at').eq('id', EMP.id).maybeSingle();
       const currentWage = parseFloat(freshEmp?.hourly_wage ?? EMP.hourly_wage ?? 0);
       const prevBalance = parseFloat(freshEmp?.opening_balance ?? EMP.opening_balance ?? 0);
+      // باقي التفاصيل (ساعات، سلف، وجبات...) بتضل محسوبة عادي للعرض بس — الرقم النهائي وحده جاي من HR
       const netResult = await computeEmployeeNetDue(EMP.id, EMP.name, currentWage, prevBalance, freshEmp?.max_advance_percent ?? EMP.max_advance_percent);
       const hoursThisMonth = netResult.hours;
       const gross = netResult.gross;
@@ -16205,7 +16214,9 @@ try {
       const shiftDed = netResult.shiftDed;
       const deductionsTotal = netResult.deductionsTotal;
       const rewardsTotal = netResult.rewardsTotal;
-      const net = netResult.net;
+      // ✅ الرقم النهائي المعروض = بالضبط نفس رقم شاشة HR (cached_net_due) — مش حساب مستقل من البوابة.
+      // لو لسا محدا فتح شاشة HR هالشهر (القيمة فاضية)، منستخدم الحساب المحلي كحل احتياطي مؤقت بس.
+      const net = (freshEmp?.cached_net_due!=null) ? parseFloat(freshEmp.cached_net_due) : netResult.net;
       // 📝 هاي بس للعرض التفصيلي (الأسباب)، المجاميع أصلًا جاية من computeEmployeeNetDue فوق
       const [dedRes, rwdRes] = await Promise.all([
         db.from('employee_deductions').select('amount, reason, created_at').eq('employee_id', EMP.id).gte('created_at', monthStart.toISOString()),
@@ -16558,10 +16569,13 @@ try {
     }
     const fromIso = monthStart.toISOString();
     const nowIso = new Date().toISOString();
+    // 🔧 مصلّحة: fromIso.split('T')[0] كان بياخد التاريخ بتوقيت UTC مش عمّان، فكان يرجع يوم كامل
+    // للوراء (٣١ تموز بدل ١ آب) — وهيك كانت بتنضاف ساعات حضور يدوية ليوم زيادة مش من الشهر الحالي.
+    const fromDateLocal = new Date(monthStart.getTime()+3*3600000).toISOString().split('T')[0];
     const { data: linkedStaffRows2 } = await db.from('staff').select('id').eq('linked_hr_id', empId);
     const linkedIds2 = (linkedStaffRows2||[]).map(s=>s.id);
     const [attRes, logsRes, advRes, mealsRes, shiftAdjRes, dedRes, rwdRes, brRes] = await Promise.all([
-      db.from('hr_attendance').select('hours').eq('employee_id', empId).gte('work_date', fromIso.split('T')[0]).lte('work_date', localTodayStr()),
+      db.from('hr_attendance').select('hours').eq('employee_id', empId).gte('work_date', fromDateLocal).lte('work_date', localTodayStr()),
       db.from('hr_time_logs').select('clock_in,clock_out,reviewed_ok').eq('employee_id', empId).not('clock_out','is',null).gte('clock_in', fromIso).lte('clock_in', nowIso),
       db.from('hr_advances').select('amount').eq('employee_id', empId).gte('created_at', fromIso).lte('created_at', nowIso),
       db.from('orders').select('total').or(`employee_meal_id.eq.${empId},employee_tab_name.eq."${empName}"`).neq('status','cancelled').gte('created_at', fromIso).lte('created_at', nowIso),
