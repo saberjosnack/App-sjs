@@ -11456,9 +11456,9 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
       myAtt.forEach(a=>{ if(a.work_date) uniqueDays.add(a.work_date); });
       validLogs.forEach(l=>{ if(l.clock_in) uniqueDays.add(new Date(l.clock_in).toLocaleDateString('en-CA')); });
       const days = uniqueDays.size;
-      // 🔧 مصلّحة: موحّدة الآن مع باقي أماكن الحساب (بوابة الموظف + computeEmployeeNetDue) —
-      // سلف مفتوحة بس (status='open')، مش كل سلف الفترة بغض النظر عن حالتها.
-      const advTotal = advances.filter(a=>a.employee_id===e.id && afterClosure(a.created_at) && a.status==='open').reduce((a,x)=>a+parseFloat(x.amount||0),0);
+      // 🔙 رجّعناها: أي سلفة اتاخدت هالفترة بتخصم من الصافي بغض النظر عن حالة "تسديدها" — "تسديد" هون
+      // معناها بس تنظيف/أرشفة السلف القديمة، مش إلغاء خصمها من راتب الشهر الحالي.
+      const advTotal = advances.filter(a=>a.employee_id===e.id && afterClosure(a.created_at)).reduce((a,x)=>a+parseFloat(x.amount||0),0);
       const myMeals = mealOrders.filter(o=>(o.employee_meal_id ? o.employee_meal_id===e.id : o.employee_tab_name===e.name) && afterClosure(o.created_at));
       const mealsCount = myMeals.length;
       const mealsTotal = myMeals.reduce((a,o)=>a+parseFloat(o.total||0),0);
@@ -16192,10 +16192,9 @@ try {
       const pointsRedeemed = (redRes.data||[]).reduce((a,x)=>a+x.points_used,0);
       const pointsAvailable = totalPointsEarned - pointsRedeemed;
       const adv = advRes.data||[];
-      // 🔧 مصلّحة: كانت هون تحسب "كل سلفة اتاخدت هالشهر" بغض النظر عن حالتها، بعكس شاشة الأدمن
-      // يلي بتحسب بس السلف المفتوحة (status='open'). هلق موحّدة 100% مع نفس منطق الأدمن —
-      // سلفة اتسددت (مهما كان وقت أخذها) ما تنخصم من الصافي مرتين.
-      const advOutstanding = adv.filter(x=>x.status==='open').reduce((a,x)=>a+parseFloat(x.amount||0),0);
+      // 🔙 رجّعناها: أي سلفة اتاخدت هالشهر بتخصم من الصافي، بغض النظر عن حالة "تسديدها" — نفس منطق
+      // شاشة الأدمن. "تسديد" هون معناها بس تنظيف/أرشفة، مش إلغاء خصمها من راتب الشهر الحالي.
+      const advOutstanding = adv.filter(a=>new Date(a.created_at)>=monthStart).reduce((a,x)=>a+parseFloat(x.amount||0),0);
       const meals = mealsRes.data||[];
       const mealsTotal = meals.reduce((a,o)=>a+parseFloat(o.total||0),0);
       const shiftDed = (shiftAdjRes.data||[]).reduce((a,x)=>a+Math.abs(x.amount||0),0);
@@ -16286,7 +16285,7 @@ try {
           <div class="stat" style="background:#eef7ff">سعر الساعة الحالي<b style="color:var(--maroon)">${currentWage.toFixed(2)}</b></div>
           <div class="stat" style="background:#eef7ff">الإجمالي قبل الخصومات<b style="color:var(--maroon)">${fmt(gross)}</b></div>
           ${settingOn('hr_portal_show_net')?`<div class="stat">صافي المستحق<b style="color:${net<0?'var(--red)':'var(--ok)'}">${fmt(net)} ${CURRENCY}</b></div>`:''}
-          ${settingOn('hr_portal_show_advances')?`<div class="stat">سلف مفتوحة (تُخصم من الصافي)<b style="color:var(--warn)">${fmt(advOutstanding)} ${CURRENCY}</b></div>`:''}
+          ${settingOn('hr_portal_show_advances')?`<div class="stat">سلف هالشهر (تُخصم من الصافي)<b style="color:var(--warn)">${fmt(advOutstanding)} ${CURRENCY}</b></div>`:''}
           ${settingOn('hr_portal_show_advances')?`<div class="stat">إجمالي السلف القائمة (كل الوقت)<b style="color:var(--warn)">${fmt(advOutstanding)} ${CURRENCY}</b></div>`:''}
           ${settingOn('hr_portal_show_meals')?`<div class="stat">وجبات هالشهر<b>${meals.length} <small>(${fmt(mealsTotal)})</small></b></div>`:''}
           ${shiftDed>0?`<div class="stat" style="grid-column:1/-1">🔻 خصم عجز/زيادة شيفت (معتمد)<b style="color:var(--red)">${fmt(shiftDed)} ${CURRENCY}</b></div>`:''}
@@ -16577,7 +16576,7 @@ try {
     const breakExcess = calcBreakExcessHours(brRes.data||[]);
     const hours = Math.max(0, manualHours+portalHours-breakExcess);
     const gross = hours*(hourlyWage||0);
-    const advOutstanding = (advRes.data||[]).filter(x=>x.status==='open').reduce((a,x)=>a+parseFloat(x.amount||0),0);
+    const advOutstanding = (advRes.data||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
     const mealsTotal = (mealsRes.data||[]).reduce((a,o)=>a+parseFloat(o.total||0),0);
     const shiftDed = (shiftAdjRes.data||[]).reduce((a,x)=>a+Math.abs(x.amount||0),0);
     const deductionsTotal = (dedRes.data||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
