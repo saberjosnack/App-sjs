@@ -1435,7 +1435,26 @@
     box.appendChild(line);
   }
 
-  const APP_VERSION = 'SJS-POS 1.0';
+  const APP_VERSION = '2026-08-13-01';
+  // 🔄 فحص تلقائي للنسخة — يحل مشكلة "الصفحة ما بتاخد آخر تحديث" نهائيًا: كل شوي منقارن نسختنا
+  // المحمّلة حاليًا مع ملف version.txt الحقيقي على السيرفر (بدون كاش أبدًا). لو مختلفة، معناته
+  // في نسخة أحدث انرفعت، فمنعمل تحديث كامل للصفحة تلقائيًا بدون ما ننتظر حدا يسكر التبويب يدويًا.
+  async function checkForUpdate(){
+    try{
+      const res = await fetch('version.txt?t='+Date.now(), {cache:'no-store'});
+      if(!res.ok) return;
+      const serverVersion = (await res.text()).trim();
+      if(serverVersion && serverVersion !== APP_VERSION){
+        const banner = document.createElement('div');
+        banner.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#0b8a4a;color:#fff;text-align:center;padding:12px;font-weight:800;z-index:99999;font-size:.95rem';
+        banner.textContent = '🔄 في تحديث جديد للنظام — عم يتحدّث تلقائيًا خلال 3 ثواني...';
+        document.body.appendChild(banner);
+        setTimeout(()=>location.reload(true), 3000);
+      }
+    }catch(e){ /* صامت — الفحص اختياري، ما لازم يعطّل شي لو فشل (مثلاً بدون إنترنت لحظيًا) */ }
+  }
+  setInterval(checkForUpdate, 45000); // كل 45 ثانية
+  setTimeout(checkForUpdate, 5000); // وفحصة أولى بعد 5 ثواني من فتح الصفحة
   function getDeviceId(){
     let id = localStorage.getItem('sjs_device_id');
     if(!id){
