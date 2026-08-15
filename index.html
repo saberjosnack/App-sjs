@@ -3636,7 +3636,11 @@
         : '<option value="">— ما في أجهزة مقرونة —</option>';
     }catch(e){ console.error(e); }
   };
-  function waitForNativePrintResult(timeoutMs=12000){
+  function waitForNativePrintResult(timeoutMs=35000){
+    // 🔧 مصلّحة: كانت المهلة 12 ثانية بس — أقصر من أطول وقت ممكن ياخده التطبيق وهو يعيد
+    // المحاولة 3 مرات لحاله جوّاه (ممكن توصل ~28 ثانية بأسوأ حالة شبكة بطيئة). لما كانت
+    // المهلة هون تنتهي أول، الموقع كان يفتكر إنه فشل ويحاول تاني، بينما التطبيق لسا شغال
+    // بالخلفية على المحاولة الأصلية — وهيك كانت الفاتورة تتبعت للطابعة مرتين فعليًا.
     return new Promise((resolve, reject)=>{
       _pendingNativePrint = { resolve, reject };
       setTimeout(()=>{
@@ -3678,22 +3682,15 @@
       catch(e) { console.error('App bluetooth print failed:', e); toast('⚠️ فشل البلوتوث الأصلي: '+(e.message||'')); if(method==='app_bluetooth') return; }
     }
     if ((method === 'app_network' || method === 'auto') && window.SJSPrinter && SETTINGS.printer_ip) {
-      let ok = false;
-      for(let attempt=1; attempt<=3 && !ok; attempt++){
-        try{
-          await printViaAppNetwork(text);
-          ok = true;
-          if(attempt>1) toast('✅ انطبعت (محاولة '+attempt+' — الشبكة كانت بطيئة/الطابعة نايمة)');
-          return;
-        }catch(e){
-          console.error('App network print failed (محاولة '+attempt+'):', e);
-          if(attempt<3) await new Promise(r=>setTimeout(r, 2000));
-        }
-      }
-      // 🔌 3 محاولات فشلت — لو الجهاز عندو RawBT كخيار احتياطي، منجربه قبل ما نستسلم
-      // (حتى لو طريقة الطباعة محددة يدويًا "شبكة"، لأنه أفضل من ما تطبع نهائيًا)
-      if(!ok){
-        toast('⚠️ فشل الاتصال بالطابعة بعد 3 محاولات — بنجرب طريقة احتياطية');
+      // 🔧 مصلّحة: كان عندنا طبقتين إعادة محاولة بنفس الوقت (هون + جوا تطبيق الأندرويد نفسه) —
+      // وهيك أحيانًا كان الطلب يتبعت مرتين فعليًا للطابعة لو رد التطبيق تأخر شوي عن مهلة الموقع.
+      // هلق محاولة واحدة بس من هون (التطبيق نفسه بيعيد المحاولة 3 مرات لحاله بشكل أوثق وأدق).
+      try{
+        await printViaAppNetwork(text);
+        return;
+      }catch(e){
+        console.error('App network print failed:', e);
+        toast('⚠️ فشل الاتصال بالطابعة — بنجرب طريقة احتياطية');
         if(isAndroid){ triggerRawbtIntent(text); return; }
         if(method==='app_network') { fallbackPrint(htmlFallback); return; }
       }
@@ -3747,20 +3744,13 @@
     }
     if ((method === 'app_network' || method === 'auto') && window.SJSPrinter && SETTINGS.printer_ip) {
       const text0 = generateReceiptText(ord, lines, t, cust);
-      let ok = false;
-      for(let attempt=1; attempt<=3 && !ok; attempt++){
-        try{
-          await printViaAppNetwork(text0);
-          ok = true;
-          if(attempt>1) toast('✅ انطبعت (محاولة '+attempt+' — الشبكة كانت بطيئة/الطابعة نايمة)');
-          return;
-        }catch(e){
-          console.error('App network print failed (محاولة '+attempt+'):', e);
-          if(attempt<3) await new Promise(r=>setTimeout(r, 2000));
-        }
-      }
-      if(!ok){
-        toast('⚠️ فشل الاتصال بالطابعة بعد 3 محاولات — بنجرب طريقة احتياطية');
+      // 🔧 مصلّحة: نفس مشكلة الازدواجية — محاولة واحدة بس من هون (التطبيق بيعيد المحاولة لحاله)
+      try{
+        await printViaAppNetwork(text0);
+        return;
+      }catch(e){
+        console.error('App network print failed:', e);
+        toast('⚠️ فشل الاتصال بالطابعة — بنجرب طريقة احتياطية');
         if(isAndroid){ triggerRawbtIntent(text0); return; }
         if(method==='app_network') { fallbackPrint(generateReceiptHTML(ord, lines, t, cust)); return; }
       }
