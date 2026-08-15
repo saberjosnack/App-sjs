@@ -5798,6 +5798,10 @@
           <input type="number" id="f_breakLimit" min="1" step="5" value="${SETTINGS.break_limit_minutes||60}" style="width:150px">
           <div style="font-size:.76rem;color:var(--muted);font-weight:600;margin-top:4px">أي دقيقة زايدة عن هالحد باليوم الواحد تنخصم تلقائيًا من ساعات دوام الموظف (بوابة HR وشاشة البريكات).</div>
         </div>
+        <div class="fld" style="margin-top:10px"><label>🕑 أقل فاصل زمني بين بريك وبريك (دقيقة)</label>
+          <input type="number" id="f_breakCooldown" min="0" step="15" value="${SETTINGS.break_cooldown_minutes ?? 120}" style="width:150px">
+          <div style="font-size:.76rem;color:var(--muted);font-weight:600;margin-top:4px">الموظف ما بيقدر ياخد بريك جديد قبل ما يعدي هالوقت من آخر بريك أخذه (افتراضيًا 120 = كل ساعتين). حطي 0 لإلغاء هالقيد.</div>
+        </div>
         <div class="fld" style="margin-top:10px"><label>🔓 حد سحب الدرج بدون رقم سري (${CURRENCY})</label>
           <input type="number" id="f_drawerPinThreshold" min="0" step="1" value="${SETTINGS.drawer_pin_threshold ?? 10}" style="width:150px">
           <div style="font-size:.76rem;color:var(--muted);font-weight:600;margin-top:4px">أي سحب درج أكبر من هالمبلغ بيطلب رقم سري المالك للتأكيد قبل ما يتنفذ. سحب أقل أو يساوي هالمبلغ بيمشي عادي بدون رقم سري.</div>
@@ -14770,6 +14774,7 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
       hr_portal_show_net: document.getElementById('f_hrShowNet')?.checked ?? true,
       hr_portal_show_advances: document.getElementById('f_hrShowAdvances')?.checked ?? true,
       break_limit_minutes: parseInt(document.getElementById('f_breakLimit')?.value) || 60,
+      break_cooldown_minutes: parseInt(document.getElementById('f_breakCooldown')?.value ?? 120),
       drawer_pin_threshold: parseFloat(document.getElementById('f_drawerPinThreshold')?.value) ?? 10,
       hr_portal_show_meals: document.getElementById('f_hrShowMeals')?.checked ?? true,
       hr_portal_show_balance: document.getElementById('f_hrShowBalance')?.checked ?? true,
@@ -16483,10 +16488,22 @@ try {
         toast('✓ رجعت من البريك'); loadEmpPortal();
         return;
       }
-      const { data } = await db.from('hr_breaks').select('started_at, ended_at').eq('time_log_id', EMP_OPEN_LOG.id).not('ended_at','is',null);
-      const usedMin = (data||[]).reduce((a,b)=>a+((new Date(b.ended_at)-new Date(b.started_at))/60000),0);
+      const { data } = await db.from('hr_breaks').select('started_at, ended_at').eq('time_log_id', EMP_OPEN_LOG.id).order('started_at',{ascending:false});
+      const usedMin = (data||[]).filter(b=>b.ended_at).reduce((a,b)=>a+((new Date(b.ended_at)-new Date(b.started_at))/60000),0);
       const remaining = 60 - usedMin;
       if(remaining<=0){ toast('⛔ خلصت الساعة المسموحة للبريك اليوم'); return; }
+      // 🕑 فاصل إجباري بين كل بريك وبريك (افتراضيًا ساعتين، قابل للتعديل من الإعدادات)
+      if(data && data.length){
+        const lastBreak = data[0]; // الأحدث (مرتّبة تنازليًا)
+        const cooldownMin = parseFloat(SETTINGS.break_cooldown_minutes ?? 120);
+        const minutesSinceLast = (new Date() - new Date(lastBreak.started_at))/60000;
+        if(cooldownMin>0 && minutesSinceLast < cooldownMin){
+          const waitMore = Math.ceil(cooldownMin - minutesSinceLast);
+          const h = Math.floor(waitMore/60), m = waitMore%60;
+          toast('⛔ لازم يعدي '+cooldownMin+' دقيقة بين كل بريك — باقيلك '+(h>0?h+' ساعة و':'')+m+' دقيقة');
+          return;
+        }
+      }
       // 🚫 ممنوع أكتر من موظف ياخد بريك بنفس الوقت بنفس الفرع
       if(EMP.branch_id){
         const { data: activeBreaks } = await db.from('hr_breaks').select('employee_id, meal_names(name, branch_id)').is('ended_at', null);
