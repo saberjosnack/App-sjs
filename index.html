@@ -681,6 +681,24 @@
   }
   const db = supabase.createClient(SB_URL, SB_KEY);
 
+  // 🔒 بوابة الكتابة المحمية — لأخطر 4 جداول (مصاري، سلف). بدل ما نتواصل مباشرة مع قاعدة
+  // البيانات، بنمر عبر سيرفر صغير (Edge Function) هو الوحيد يلي عنده صلاحية الكتابة الحقيقية.
+  // نفس شكل رد Supabase العادي {data, error} عشان الكود الحالي يستمر يشتغل بدون تغيير كبير.
+  async function protectedWrite(table, action, payload, filter){
+    try{
+      const res = await fetch(SB_URL+'/functions/v1/protected-write', {
+        method: 'POST',
+        headers: { 'Content-Type':'application/json', 'Authorization':'Bearer '+SB_KEY, 'apikey': SB_KEY },
+        body: JSON.stringify({ table, action, payload, filter })
+      });
+      const json = await res.json();
+      if(!res.ok) return { data: null, error: { message: json.error||'فشل الاتصال بالسيرفر المحمي' } };
+      return { data: json.data, error: null };
+    }catch(e){
+      return { data: null, error: { message: e.message||'فشل الاتصال بالسيرفر المحمي' } };
+    }
+  }
+
   let ME = null;
   let BRANCHES = [], CATS = [], ITEMS = [], STAFF = [], CUSTOMERS = [], SETTINGS = {};
   // 🔒 حماية من النقر المزدوج — لو المستخدم كبس زر حفظ مرتين بسرعة (جرد، مصاريف، سلف...)،
@@ -3854,7 +3872,7 @@
   // 🏦 رأس المال — محفظة المالك المنفصلة والتراكمية، مالها علاقة بمصاري أي فرع
   async function addCapitalTx(amount, type, refId, note, sourceBranchId){
     try{
-      await db.from('capital_transactions').insert({
+      await protectedWrite('capital_transactions', 'insert', {
         amount, type, ref_id: refId||null, note: note||null, created_by: ME?.full_name||null, source_branch_id: sourceBranchId||null
       });
     }catch(e){ console.error('addCapitalTx failed (تأكد من تنفيذ SQL جدول capital_transactions):', e); }
@@ -3862,7 +3880,7 @@
 
   async function addTreasuryTx(account, amount, type, refId, note, branchId){
     try{
-      await db.from('treasury_transactions').insert({
+      await protectedWrite('treasury_transactions', 'insert', {
         account, amount, type, ref_id: refId||null, note: note||null, created_by: ME?.full_name||null, branch_id: branchId||null
       });
     }catch(e){ console.error('addTreasuryTx failed (تأكد من تنفيذ SQL جدول treasury_transactions):', e); }
@@ -11297,7 +11315,7 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
     const note = document.getElementById('adv_edit_note')?.value.trim();
     if(isNaN(newAmt)||newAmt<=0){ toast('⚠️ اكتب مبلغ صحيح'); return; }
     try{
-      const { error } = await db.from('hr_advances').update({ amount: newAmt, account: acc, note: note||null }).eq('id', advId);
+      const { error } = await protectedWrite('hr_advances', 'update', { amount: newAmt, account: acc, note: note||null }, { id: advId });
       if(error){ toast('✗ '+error.message); return; }
       // 🏦 لو اتغيّر المبلغ، نصحح الفرق برأس المال (كان مخصوم المبلغ القديم، لازم ينخصم/يرجع الفرق)
       const diff = newAmt - oldAmount;
@@ -11321,10 +11339,11 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
     const note = document.getElementById('adv_note')?.value.trim();
     if(isNaN(amt)||amt<=0){ toast('⚠️ اكتب مبلغ صحيح'); return; }
     try{
-      const { data: adv, error } = await db.from('hr_advances').insert({
+      const { data: advArr, error } = await protectedWrite('hr_advances', 'insert', {
         employee_id: empId, employee_name: empName, amount: amt, account: acc, note: note||null, status:'open', created_by: ME.full_name
-      }).select().single();
-      if(error){ toast('✗ '+error.message); console.error(error); return; }
+      });
+      const adv = advArr?.[0];
+      if(error || !adv){ toast('✗ '+(error?.message||'فشل الحفظ')); console.error(error); return; }
       // 🏦 السلف بتخصم من رأس المال (محفظة المالك)، مش من مصاري فرع معيّن
       await addCapitalTx(-amt, 'advance', adv.id, 'سلفة موظف — '+empName);
       toast('✓ اتسجلت السلفة'); hrAdvancesView(empId, empName);
@@ -11358,7 +11377,7 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
     try{
       const { data: adv } = await db.from('hr_advances').select('*').eq('id', advId).single();
       if(!adv) return;
-      await db.from('hr_advances').update({ status:'repaid', repaid_at: new Date().toISOString() }).eq('id', advId);
+      await protectedWrite('hr_advances', 'update', { status:'repaid', repaid_at: new Date().toISOString() }, { id: advId });
       await addCapitalTx(+adv.amount, 'advance', advId, 'تسديد سلفة — '+empName);
       toast('✓ اتسددت السلفة'); renderOpenAdvancesPanel();
     }catch(e){ toast('✗ '+e.message); console.error(e); }
@@ -11368,7 +11387,7 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
     try{
       const { data: adv } = await db.from('hr_advances').select('*').eq('id', advId).single();
       if(!adv) return;
-      await db.from('hr_advances').update({ status:'repaid', repaid_at: new Date().toISOString() }).eq('id', advId);
+      await protectedWrite('hr_advances', 'update', { status:'repaid', repaid_at: new Date().toISOString() }, { id: advId });
       await addCapitalTx(+adv.amount, 'advance', advId, 'تسديد سلفة — '+empName);
       toast('✓ اتسددت السلفة'); hrAdvancesView(empId, empName);
     }catch(e){ toast('✗ '+e.message); console.error(e); }
@@ -11695,10 +11714,11 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
     const wasEdited = amount !== originalAmount;
     if(!confirm('تأكيد الموافقة على سلفة '+fmt(amount)+' '+CURRENCY+' لـ'+empName+(wasEdited?' (المبلغ الأصلي المطلوب كان '+fmt(originalAmount)+')':'')+'؟')) return;
     try{
-      const { data: adv, error } = await db.from('hr_advances').insert({
+      const { data: advArr, error } = await protectedWrite('hr_advances', 'insert', {
         employee_id: empId, employee_name: empName, amount, account:'cash', note:'طلب ذاتي من بوابة الموظف', status:'open', created_by: ME.full_name
-      }).select().single();
-      if(error){ toast('✗ '+error.message); return; }
+      });
+      const adv = advArr?.[0];
+      if(error || !adv){ toast('✗ '+(error?.message||'فشل الحفظ')); return; }
       await addCapitalTx(-amount, 'advance', adv.id, 'سلفة موظف (طلب ذاتي) — '+empName);
       const updatePayload = { status:'approved', approved_by: ME.full_name, approved_at: new Date().toISOString() };
       if(wasEdited){
@@ -12278,9 +12298,12 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
       if(e2){ toast('✗ فشل ترحيل الرصيد: '+e2.message); return; }
       // 🔧 مهم: السلف يلي انأخدت جوا هالفترة صارت محسوبة ومطوية جوا "الرصيد السابق" الجديد —
       // لازم نعلّمها "متسددة" (status=repaid) وإلا رح تضل تظهر "قائمة/غير مسددة" بكل شاشة كمان بعد القفل
-      await db.from('hr_advances').update({ status:'repaid', repaid_at: new Date().toISOString() })
+      const { data: toRepay } = await db.from('hr_advances').select('id')
         .eq('employee_id', empId).eq('status','open')
         .gte('created_at', localDayStart(HR_FILTER.from)).lte('created_at', localDayEnd(HR_FILTER.to));
+      if(toRepay && toRepay.length){
+        await protectedWrite('hr_advances', 'update', { status:'repaid', repaid_at: new Date().toISOString() }, { ids: toRepay.map(x=>x.id) });
+      }
       toast('✓ اتقفل الشهر وترحّل الرصيد ('+fmt(r.net)+' '+CURRENCY+') لبداية الشهر الجاي');
       closeModal(); renderHR();
     }catch(e){ toast('✗ '+e.message); console.error(e); }
@@ -12505,7 +12528,7 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
       for(const t of list){
         const branchId = t.type==='sale' ? ordMap[t.ref_id] : purMap[t.ref_id];
         if(branchId){
-          await db.from('treasury_transactions').update({ branch_id: branchId }).eq('id', t.id);
+          await protectedWrite('treasury_transactions', 'update', { branch_id: branchId }, { id: t.id });
           fixed++;
         }
       }
@@ -12539,14 +12562,14 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
         if(Math.abs(total) < 0.005) continue;
         const realBranchId = branchId==='__none__' ? null : branchId;
         if(d.cash && Math.abs(d.cash)>=0.005){
-          const { error: e1 } = await db.from('treasury_transactions').insert({ account:'cash', amount:-d.cash, type:'sweep_out', note:'ترحيل لرأس المال', branch_id: realBranchId, created_by: ME?.full_name||null });
+          const { error: e1 } = await protectedWrite('treasury_transactions', 'insert', { account:'cash', amount:-d.cash, type:'sweep_out', note:'ترحيل لرأس المال', branch_id: realBranchId, created_by: ME?.full_name||null });
           if(e1){ toast('✗ فشل ترحيل الكاش لفرع '+brName(realBranchId)+': '+e1.message); console.error('sweep cash insert failed', e1); continue; }
         }
         if(d.bank && Math.abs(d.bank)>=0.005){
-          const { error: e2 } = await db.from('treasury_transactions').insert({ account:'bank', amount:-d.bank, type:'sweep_out', note:'ترحيل لرأس المال', branch_id: realBranchId, created_by: ME?.full_name||null });
+          const { error: e2 } = await protectedWrite('treasury_transactions', 'insert', { account:'bank', amount:-d.bank, type:'sweep_out', note:'ترحيل لرأس المال', branch_id: realBranchId, created_by: ME?.full_name||null });
           if(e2){ toast('✗ فشل ترحيل البنك لفرع '+brName(realBranchId)+': '+e2.message); console.error('sweep bank insert failed', e2); continue; }
         }
-        const { error: e3 } = await db.from('capital_transactions').insert({ amount: total, type:'sweep_in', note:'ترحيل من '+brName(realBranchId), source_branch_id: realBranchId, created_by: ME?.full_name||null });
+        const { error: e3 } = await protectedWrite('capital_transactions', 'insert', { amount: total, type:'sweep_in', note:'ترحيل من '+brName(realBranchId), source_branch_id: realBranchId, created_by: ME?.full_name||null });
         if(e3){ toast('✗ فشل تسجيل رأس المال: '+e3.message); console.error('sweep capital insert failed', e3); continue; }
         swept++; totalSwept += total;
       }
@@ -12750,7 +12773,7 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
     if(!canFinApprove()){ toast('⛔ صلاحية المالك فقط'); return; }
     if(!confirm('⚠️ حذف هاي الحركة نهائيًا من مصاري الفرع؟ هاد بيغيّر الرصيد المحسوب.\nمتابعة؟')) return;
     try{
-      const { error } = await db.from('treasury_transactions').delete().eq('id', id);
+      const { error } = await protectedWrite('treasury_transactions', 'delete', null, { id });
       if(error){ toast('✗ '+error.message); return; }
       toast('✓ انحذفت الحركة'); renderTreasury();
     }catch(e){ toast('✗ '+e.message); console.error(e); }
@@ -12759,7 +12782,7 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
     if(!canFinApprove()){ toast('⛔ صلاحية المالك فقط'); return; }
     if(!confirm('⚠️ حذف هاي الحركة نهائيًا من رأس المال؟ هاد بيغيّر الرصيد المحسوب.\nمتابعة؟')) return;
     try{
-      const { error } = await db.from('capital_transactions').delete().eq('id', id);
+      const { error } = await protectedWrite('capital_transactions', 'delete', null, { id });
       if(error){ toast('✗ '+error.message); return; }
       toast('✓ انحذفت الحركة'); renderTreasury();
     }catch(e){ toast('✗ '+e.message); console.error(e); }
