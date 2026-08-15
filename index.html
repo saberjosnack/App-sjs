@@ -780,6 +780,7 @@
       }
       // 🍽️ نفحص فورًا (بدون ما ننتظر الحفظ) هل هاد الموظف أخذ وجبة بخصم اليوم أصلاً — لو إيه، منحذّر
       // الكاشير فورًا إنه هاي الوجبة رح تنحسب كاملة بدون خصم (بس تضل مسجّلة بذمّته زي العادة)
+      window.__empMealAlreadyToday = false; // نصفّرها فورًا لحد ما يوصل رد الفحص، عشان ما تبقى قيمة موظف سابق
       if(emp) checkEmpAlreadyHadMealToday(emp);
     } else {
       window.__empMealVerified = null;
@@ -792,12 +793,14 @@
       const { data: todaysMeals } = await db.from('orders').select('id')
         .eq('employee_meal_id', emp.id).neq('status','cancelled').gte('created_at', todayStart).limit(1);
       const info = document.getElementById('empMealDiscInfo');
-      if(todaysMeals && todaysMeals.length && info){
+      window.__empMealAlreadyToday = !!(todaysMeals && todaysMeals.length);
+      if(window.__empMealAlreadyToday && info){
         info.innerHTML = '⚠️ "'+esc(emp.name)+'" أخذ وجبة بخصم اليوم خلص — هاي الوجبة رح تنحسب كاملة بدون خصم';
         info.style.color = 'var(--red)';
       } else if(info){
         info.style.color = '';
       }
+      renderCart(); // 🔧 نحدّث الإجمالي المعروض فورًا ليطابق التحذير (بدل ما يضل عارض الخصم القديم لحد الحفظ)
     }catch(e){ console.error('checkEmpAlreadyHadMealToday failed:', e); }
   }
   // 🔒 تأكيد هوية صاحب "وجبة الموظف" بالرقم السري تبعه — يمنع حدا يطلب وجبة باسم موظف تاني بدون علمه
@@ -841,6 +844,7 @@
       if(payBarEl){ payBarEl.style.opacity = '1'; payBarEl.style.pointerEvents = 'auto'; }
       nameInput.classList.add('hidden');
       nameInput.value = '';
+      window.__empMealAlreadyToday = false;
       payMethod = 'cash';
       const cashBtn = document.querySelector('#payBar [data-p="cash"]');
       document.querySelectorAll('#payBar button').forEach(x=>x.classList.remove('on'));
@@ -3100,8 +3104,16 @@
       const sel = document.getElementById('empMealName');
       const opt = sel?.selectedOptions[0];
       const discPct = opt ? parseFloat(opt.dataset.disc||20) : 20;
-      disc = sub * discPct/100;
-      lbl = '(وجبة موظف '+discPct+'%)';
+      // 🔧 مصلّحة: لو الموظف أخذ خصلته اليوم خلص، الإجمالي المعروض قدام الكاشير كان لسا يطلع
+      // فيه الخصم مطروح (رغم إنه التحذير الأحمر فوقه بيقول "بدون خصم") — لخبطة بين التحذير والرقم.
+      // هلق العرض المباشر بيطابق تمامًا شو رح ينحسب فعليًا وقت الحفظ.
+      if(window.__empMealAlreadyToday){
+        disc = 0;
+        lbl = '(وجبة موظف — أخذ خصمه اليوم، بدون خصم إضافي)';
+      } else {
+        disc = sub * discPct/100;
+        lbl = '(وجبة موظف '+discPct+'%)';
+      }
     } else if(appliedCode){
       disc = appliedCode.kind==='percent' ? sub*appliedCode.value/100 : +appliedCode.value;
       lbl = '('+appliedCode.code+')';
