@@ -4375,7 +4375,7 @@
       let available = totalPoints - redeemed;
       while(available >= POINTS_PER_REDEMPTION){
         await db.from('point_redemptions').insert({ employee_id: empId, employee_name: empName, points_used: POINTS_PER_REDEMPTION, reward_amount: REDEMPTION_VALUE, created_by: 'تلقائي (سكّر تارجيت)' });
-        await db.from('employee_rewards').insert({ employee_id: empId, employee_name: empName, amount: REDEMPTION_VALUE, reason: '🎯 سكّر تارجيت '+POINTS_PER_REDEMPTION+' نقطة رضا عملاء (تلقائي)', created_by: 'تلقائي' });
+        await protectedWrite('employee_rewards', 'insert', { employee_id: empId, employee_name: empName, amount: REDEMPTION_VALUE, reason: '🎯 سكّر تارجيت '+POINTS_PER_REDEMPTION+' نقطة رضا عملاء (تلقائي)', created_by: 'تلقائي' });
         available -= POINTS_PER_REDEMPTION;
         toast('🎉 '+empName+' سكّر تارجيت '+POINTS_PER_REDEMPTION+' نقطة — انضافت مكافأة '+REDEMPTION_VALUE+' '+CURRENCY+' تلقائيًا!');
       }
@@ -6173,11 +6173,12 @@
       const insertedIds = []; const names = [];
       for(const c of checked){
         const perReason = (reason||'') + (checked.length>1 ? ' (حصته من مخالفة جماعية — الأصل '+fmt(amount)+' '+CURRENCY+' مقسومة على '+checked.length+')' : '');
-        const { data, error } = await db.from('employee_deductions').insert({
+        const { data: insArr, error } = await protectedWrite('employee_deductions', 'insert', {
           employee_id: c.value, employee_name: c.dataset.name, amount: per, reason: perReason||null,
           images: window.__dedImgs||[], created_by: ME.full_name
-        }).select().single();
-        if(error){ toast('✗ '+error.message+' — توقفت بعد '+insertedIds.length+' من '+checked.length+' — يلي اتسجلوا ما بيرجعوا تلقائيًا، احذفيهم يدويًا من جدول الخصومات لو بدك تلغي'); return; }
+        });
+        const data = insArr?.[0];
+        if(error || !data){ toast('✗ '+(error?.message||'فشل الحفظ')+' — توقفت بعد '+insertedIds.length+' من '+checked.length+' — يلي اتسجلوا ما بيرجعوا تلقائيًا، احذفيهم يدويًا من جدول الخصومات لو بدك تلغي'); return; }
         insertedIds.push(data.id); names.push(c.dataset.name);
       }
       await db.from('violations').update({
@@ -6236,10 +6237,11 @@
     const reason = document.getElementById('dedReason')?.value?.trim();
     if(!empId || !amount || amount<=0){ toast('⚠️ اختر الموظف والمبلغ'); return; }
     try{
-      const { data, error } = await db.from('employee_deductions').insert({
+      const { data: insArr, error } = await protectedWrite('employee_deductions', 'insert', {
         employee_id: empId, employee_name: empName, amount, reason: reason||null,
         complaint_id: complaintId||null, images: window.__dedImgs||[], created_by: ME.full_name
-      }).select().single();
+      });
+      const data = insArr?.[0];
       if(error){ toast('✗ '+error.message); return; }
       toast('✓ اتسجّل الخصم'); window.__dedImgs=[]; closeModal();
       if(document.getElementById('complaintsBox')) renderComplaints();
@@ -6276,7 +6278,7 @@
   async function deleteDeduction(id){
     if(!confirm('⚠️ حذف هاد الخصم نهائيًا؟')) return;
     try{
-      await db.from('employee_deductions').delete().eq('id', id);
+      await protectedWrite('employee_deductions', 'delete', null, { id });
       // 🔧 مهم: لو هاد الخصم كان جاي من مخالفة (لشخص واحد أو مقسوم على أكتر من شخص)، المخالفة الأصلية
       // كانت تضل "متسوّى" مرتبطة بخصم محذوف فتضل عالقة نهائيًا. هلأ منفك الربط، وإذا كانت المخالفة
       // مقسومة على أكتر من شخص، ما نفتحها من جديد إلا لما كل الحصص تتحذف (مش أول وحدة بس).
@@ -6425,7 +6427,7 @@
   async function deleteCcBonus(id){
     if(!confirm('⚠️ حذف هاد البونص نهائيًا؟')) return;
     try{
-      const { error } = await db.from('employee_rewards').delete().eq('id', id);
+      const { error } = await protectedWrite('employee_rewards', 'delete', null, { id });
       if(error){ toast('✗ '+error.message); return; }
       toast('✓ انحذف البونص'); renderCcPoints();
     }catch(e){ toast('✗ '+e.message); }
@@ -6442,7 +6444,7 @@
     const note = document.getElementById('cc_bonus_note')?.value.trim();
     if(!amt || amt<=0){ toast('⚠️ اكتبي مبلغ صحيح'); return; }
     try{
-      const { error } = await db.from('employee_rewards').insert({ employee_id: staffId, employee_name: staffName, amount: amt, reason: note||'بونص مبيعات كول سنتر', created_by: ME.full_name, cc_bonus: true });
+      const { error } = await protectedWrite('employee_rewards', 'insert', { employee_id: staffId, employee_name: staffName, amount: amt, reason: note||'بونص مبيعات كول سنتر', created_by: ME.full_name, cc_bonus: true });
       if(error){ toast('✗ '+error.message); return; }
       // 🔧 مهم: لما نعتمد بونص لموظف، لازم النقاط والمبيعات يلي اعتمدنا عليها البونص "تصفر" تلقائيًا —
       // وإلا بتضل ظاهرة وكأنها لسا مستحقة رغم إنه اتصرفت، وهيك كانت تتكرر بونصات لنفس المبيعات بالغلط
@@ -6552,7 +6554,7 @@
         employee_id: empId, employee_name: empName, points_used: POINTS_PER_REDEMPTION, reward_amount: REDEMPTION_VALUE, created_by: ME.full_name
       });
       if(e1){ toast('✗ '+e1.message); return; }
-      const { error: e2 } = await db.from('employee_rewards').insert({
+      const { error: e2 } = await protectedWrite('employee_rewards', 'insert', {
         employee_id: empId, employee_name: empName, amount: REDEMPTION_VALUE,
         reason: 'استبدال '+POINTS_PER_REDEMPTION+' نقطة رضا عملاء', created_by: ME.full_name
       });
@@ -6588,7 +6590,7 @@
   async function deleteReward(id){
     if(!confirm('⚠️ حذف هاي المكافأة نهائيًا؟')) return;
     try{
-      const { error } = await db.from('employee_rewards').delete().eq('id', id);
+      const { error } = await protectedWrite('employee_rewards', 'delete', null, { id });
       if(error){ toast('✗ '+error.message); return; }
       toast('✓ انحذفت المكافأة'); renderRewardsLedger();
     }catch(e){ toast('✗ '+e.message); }
@@ -6609,7 +6611,7 @@
     const reason = document.getElementById('rwdReason')?.value?.trim();
     if(!empId || !amount || amount<=0){ toast('⚠️ اختر الموظف والمبلغ'); return; }
     try{
-      const { error } = await db.from('employee_rewards').insert({ employee_id: empId, employee_name: empName, amount, reason: reason||null, created_by: ME.full_name });
+      const { error } = await protectedWrite('employee_rewards', 'insert', { employee_id: empId, employee_name: empName, amount, reason: reason||null, created_by: ME.full_name });
       if(error){ toast('✗ '+error.message); return; }
       toast('✓ اتسجّلت المكافأة'); closeModal(); renderRewardsLedger();
     }catch(e){ toast('✗ '+e.message); }
@@ -12014,7 +12016,7 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
     if(!amt || amt<=0){ toast('⚠️ اكتبي مبلغ صحيح'); return; }
     if(!reason){ toast('⚠️ السبب إجباري'); return; }
     try{
-      const { error } = await db.from('employee_deductions').insert({ employee_id: empId, employee_name: empName, amount: amt, reason, created_by: ME.full_name });
+      const { error } = await protectedWrite('employee_deductions', 'insert', { employee_id: empId, employee_name: empName, amount: amt, reason, created_by: ME.full_name });
       if(error){ toast('✗ '+error.message); return; }
       await logActivity('break_deduction', 'خصم مغادرة غير مسجّلة لـ'+empName+' — '+fmt(amt));
       toast('✓ اتسجل الخصم'); closeModal();
@@ -12148,11 +12150,11 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
     const outVal = document.getElementById('etl_out')?.value;
     if(!inVal){ toast('⚠️ وقت الدخول مطلوب'); return; }
     try{
-      const { error } = await db.from('hr_time_logs').update({
+      const { error } = await protectedWrite('hr_time_logs', 'update', {
         clock_in: new Date(inVal).toISOString(),
         clock_out: outVal ? new Date(outVal).toISOString() : null,
         edited: true, edited_by: ME.full_name
-      }).eq('id', logId);
+      }, { id: logId });
       if(error){ toast('✗ '+error.message); return; }
       toast('✓ اتعدّل السجل'); hrTimeLogsView(empId, empName);
     }catch(e){ toast('✗ '+e.message); }
@@ -12208,7 +12210,7 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
     if(hoursVal===null) return;
     const hours = parseFloat(normalizeDigits(hoursVal));
     if(isNaN(hours)||hours<=0){ toast('⚠️ رقم غير صحيح'); return; }
-    db.from('hr_attendance').update({ work_date: dateVal, hours }).eq('id', a.id).then(({error})=>{
+    protectedWrite('hr_attendance', 'update', { work_date: dateVal, hours }, { id: a.id }).then(({error})=>{
       if(error){ toast('✗ '+error.message); return; }
       toast('✓ اتعدّل'); loadAttendanceList(empId, empName);
     });
@@ -12216,7 +12218,7 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
   async function deleteAttendance(id, empId, empName){
     if(!confirm('⚠️ حذف هاي السجلة نهائيًا؟')) return;
     try{
-      const { error } = await db.from('hr_attendance').delete().eq('id', id);
+      const { error } = await protectedWrite('hr_attendance', 'delete', null, { id });
       if(error){ toast('✗ '+error.message); return; }
       toast('✓ انحذفت'); loadAttendanceList(empId, empName);
     }catch(e){ toast('✗ '+e.message); console.error(e); }
@@ -12228,7 +12230,7 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
     if(!date){ toast('⚠️ اختر التاريخ'); return; }
     if(isNaN(hours)||hours<=0){ toast('⚠️ اكتب عدد ساعات صحيح'); return; }
     try{
-      const { error } = await db.from('hr_attendance').insert({
+      const { error } = await protectedWrite('hr_attendance', 'insert', {
         employee_id: empId, employee_name: empName, work_date: date, hours, note: note||null, created_by: ME.full_name
       });
       if(error){ toast('✗ '+error.message); console.error(error); return; }
@@ -12285,7 +12287,7 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
     }catch(e){}
     if(!confirm(`🔒 قفل الفترة ${HR_FILTER.from} → ${HR_FILTER.to} لـ"${r.emp.name}"؟\n\nصافي هالفترة (${fmt(r.net)} ${CURRENCY}) رح يصير هو "الرصيد السابق" الجديد لهالموظف تلقائيًا.\nبعد القفل، أي تعديل على بيانات هالفترة لازم يكون من المالك حصرًا.\n\nمتابعة؟`)) return;
     try{
-      const { error: e1 } = await db.from('hr_month_closures').insert({
+      const { error: e1 } = await protectedWrite('hr_month_closures', 'insert', {
         employee_id: empId, employee_name: r.emp.name, month_label: monthLabel,
         period_from: HR_FILTER.from, period_to: HR_FILTER.to,
         hours: r.hours, hourly_wage: r.emp.hourly_wage||0, gross: r.gross,
@@ -15903,7 +15905,7 @@ try {
   async function deleteDhManual(attId){
     if(!confirm('⚠️ حذف هاي السجلة اليدوية نهائيًا؟')) return;
     try{
-      const { error } = await db.from('hr_attendance').delete().eq('id', attId);
+      const { error } = await protectedWrite('hr_attendance', 'delete', null, { id: attId });
       if(error){ toast('✗ '+error.message); return; }
       toast('✓ انحذفت'); loadDutyHoursTable();
     }catch(e){ toast('✗ '+e.message); console.error(e); }
@@ -15921,11 +15923,11 @@ try {
     const outVal = document.getElementById('dh_edit_out')?.value;
     if(!inVal){ toast('⚠️ وقت الدخول مطلوب'); return; }
     try{
-      const { error } = await db.from('hr_time_logs').update({
+      const { error } = await protectedWrite('hr_time_logs', 'update', {
         clock_in: new Date(inVal).toISOString(),
         clock_out: outVal ? new Date(outVal).toISOString() : null,
         edited: true, edited_by: ME.full_name
-      }).eq('id', logId);
+      }, { id: logId });
       if(error){ toast('✗ '+error.message); return; }
       closeModal(); toast('✓ اتعدّل السجل'); loadDutyHoursTable();
     }catch(e){ toast('✗ '+e.message); console.error(e); }
@@ -15934,7 +15936,7 @@ try {
     const l = (window.__DH_LOGS||[])[idx]; if(!l) return;
     if(!confirm('⚠️ حذف سجل حضور "'+(l.employee_name||'—')+'" بتاريخ '+new Date(l.clock_in).toLocaleDateString('ar-JO')+' نهائيًا؟')) return;
     try{
-      const { error } = await db.from('hr_time_logs').delete().eq('id', l.id);
+      const { error } = await protectedWrite('hr_time_logs', 'delete', null, { id: l.id });
       if(error){ toast('✗ '+error.message); return; }
       toast('✓ انحذف السجل'); loadDutyHoursTable();
     }catch(e){ toast('✗ '+e.message); console.error(e); }
@@ -15944,7 +15946,7 @@ try {
     // تنحسب بمجموع الساعات هون وبشاشة الرواتب مع بعض، بدل ما تضل مستبعدة تلقائيًا
     if(!confirm('تأكيد إنه هاي الجلسة (أطول من 16 ساعة) دوام حقيقي وتترجع تنحسب بالمجموع؟')) return;
     try{
-      const { error } = await db.from('hr_time_logs').update({ reviewed_ok:true }).eq('id', logId);
+      const { error } = await protectedWrite('hr_time_logs', 'update', { reviewed_ok:true }, { id: logId });
       if(error){ toast('✗ '+error.message); return; }
       toast('✓ اتعتمدت الجلسة'); loadDutyHoursTable();
     }catch(e){ toast('✗ '+e.message); console.error(e); }
@@ -16440,7 +16442,7 @@ try {
           const [fh,fm] = (EMP.shift_window_from||'00:00').split(':').map(Number); const fromMin = fh*60+fm;
           const pastCloseTime = fromMin<=toMin ? (nowMin>toMin) : (nowMin>toMin && nowMin<fromMin);
           if(pastCloseTime){
-            await db.from('hr_time_logs').update({ clock_out: new Date().toISOString() }).eq('id', EMP_OPEN_LOG.id);
+            await protectedWrite('hr_time_logs', 'update', { clock_out: new Date().toISOString() }, { id: EMP_OPEN_LOG.id });
             stopGeofenceWatch();
             alert('⏰ سُجّل خروجك تلقائيًا لأنك تجاوزت وقت دوامك المحدد ('+EMP.shift_window_to+').');
             loadEmpPortal();
@@ -16450,9 +16452,9 @@ try {
         const geo = await getGeo();
         const fence = await checkGeofence(geo.lat, geo.lng, EMP.id);
         if(!fence.ok){
-          await db.from('hr_time_logs').update({
+          await protectedWrite('hr_time_logs', 'update', {
             clock_out: new Date().toISOString(), lat_out: geo.lat, lng_out: geo.lng,
-          }).eq('id', EMP_OPEN_LOG.id);
+          }, { id: EMP_OPEN_LOG.id });
           stopGeofenceWatch();
           alert('⚠️ سُجّل خروجك تلقائيًا لأنك خرجت من نطاق العمل المسموح.');
           loadEmpPortal();
@@ -16574,7 +16576,7 @@ try {
       const geo = await getGeo();
       const fence = await checkGeofence(geo.lat, geo.lng, EMP.id);
       if(!fence.ok){ toast('⛔ مش مسموح تسجل دخول من هاد الموقع — لازم تكون بمكان العمل'); return; }
-      const { error } = await db.from('hr_time_logs').insert({
+      const { error } = await protectedWrite('hr_time_logs', 'insert', {
         employee_id: EMP.id, employee_name: EMP.name, clock_in: new Date().toISOString(),
         lat_in: geo.lat, lng_in: geo.lng
       });
@@ -16624,9 +16626,9 @@ try {
     try{
       toast('📍 جاري تحديد موقعك...');
       const geo = await getGeo();
-      const { error } = await db.from('hr_time_logs').update({
+      const { error } = await protectedWrite('hr_time_logs', 'update', {
         clock_out: new Date().toISOString(), lat_out: geo.lat, lng_out: geo.lng
-      }).eq('id', EMP_OPEN_LOG.id);
+      }, { id: EMP_OPEN_LOG.id });
       if(error){ toast('✗ '+error.message); return; }
       toast('✅ تم تسجيل الخروج');
       loadEmpPortal();
