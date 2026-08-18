@@ -13488,6 +13488,10 @@ window.__lastEmpMealsData = null;
           <button class="mini ok" onclick="sortTopCust('orders')">🔢 الأكثر طلبات</button>
           <button class="mini edit" onclick="sortTopCust('rating')">⭐ الأفضل تقييم</button>
           <button class="mini ok" style="background:#0d6efd" onclick="filterTodayCustomers()">📅 عملاء اليوم بس (وحددهم للإرسال)</button>
+          <div style="display:inline-flex;gap:6px;align-items:center;background:#fff8e1;border-radius:10px;padding:4px 8px">
+            <input type="date" id="topCustDatePick" value="${localTodayStr()}" style="border:1.5px solid var(--line);border-radius:8px;padding:6px 8px">
+            <button class="mini ok" style="background:var(--maroon);color:var(--yellow)" onclick="filterCustomersByDate(document.getElementById('topCustDatePick').value)">📆 عملاء هاليوم بالتحديد</button>
+          </div>
           <button class="mini" onclick="TOP_CUST_DATA=TOP_CUST_ALL.slice(0,100);document.getElementById('topCustTableWrap').innerHTML=renderTopCustRows(TOP_CUST_DATA)">↩️ إلغاء الفلتر</button>
         </div>
         <div id="topCustTableWrap">${renderTopCustRows(TOP_CUST_DATA)}</div>
@@ -13526,6 +13530,27 @@ window.__lastEmpMealsData = null;
       if(wrap) wrap.innerHTML = renderTopCustRows(todayList);
       updateCustBulkBarTop();
       toast('✓ اتحدد '+todayList.length+' عميل طلبوا اليوم — جاهزين للإرسال الجماعي');
+    }catch(e){ toast('✗ '+e.message); }
+  }
+  async function filterCustomersByDate(dateStr){
+    // 📅 نفس فكرة "عملاء اليوم" بس لأي تاريخ تختاريه (أمس، أول امبارح، أي يوم) — عشان تقدري
+    // تبعتيلهم خصم مستهدف حسب يوم طلبهم بالذات
+    if(!dateStr){ toast('⚠️ اختاري تاريخ أول'); return; }
+    try{
+      const from = localDayStart(dateStr);
+      const to = localDayStart(addDaysStr(dateStr,1));
+      const { data, error } = await db.from('orders').select('customer_id').gte('created_at', from).lt('created_at', to).not('customer_id','is',null).neq('status','cancelled');
+      if(error){ toast('✗ '+error.message); return; }
+      const dayIds = new Set((data||[]).map(o=>o.customer_id));
+      if(!dayIds.size){ toast('⚠️ ما في عملاء طلبوا بهاد التاريخ'); return; }
+      const dayList = TOP_CUST_ALL.filter(c=>dayIds.has(c.id));
+      TOP_CUST_DATA = dayList;
+      CUST_SELECTED.clear();
+      dayList.forEach(c=>CUST_SELECTED.add(c.id));
+      const wrap = document.getElementById('topCustTableWrap');
+      if(wrap) wrap.innerHTML = renderTopCustRows(dayList);
+      updateCustBulkBarTop();
+      toast('✓ اتحدد '+dayList.length+' عميل طلبوا بتاريخ '+dateStr+' — جاهزين للإرسال الجماعي');
     }catch(e){ toast('✗ '+e.message); }
   }
   function searchTopCust(q){
