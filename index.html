@@ -8853,6 +8853,20 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
       if(error){ toast('✗ '+error.message); console.error(error); if(btn){ btn.disabled=false; btn.textContent='أوافق وأؤكد التوقيع ✓'; } return; }
       if(table==='staff' && ME) ME.terms_accepted_at = now;
       if(table==='meal_names' && EMP) EMP.terms_accepted_at = now;
+      // 🔗 مصلّحة: الموظف يلي عنده حساب بوابة (meal_names) مربوط بحساب كاشير (staff) — كان توقيعه
+      // بمكان وحدة بس ما يعدّي للمكان التاني، فكان يطلب منه توقيع تاني بأول دخول له بالحساب التاني.
+      // هلق توقيع واحد بيغطي الحسابين المرتبطين مع بعض دفعة وحدة.
+      if(table==='meal_names'){
+        const { data: linkedStaff } = await db.from('staff').select('id').eq('linked_hr_id', id);
+        if(linkedStaff && linkedStaff.length){
+          await db.from('staff').update({ terms_accepted_at: now }).in('id', linkedStaff.map(s=>s.id));
+        }
+      } else if(table==='staff'){
+        const { data: thisStaff } = await db.from('staff').select('linked_hr_id').eq('id', id).maybeSingle();
+        if(thisStaff?.linked_hr_id){
+          await db.from('meal_names').update({ terms_accepted_at: now }).eq('id', thisStaff.linked_hr_id);
+        }
+      }
       document.getElementById('termsGateOverlay')?.remove();
       const cb = window.__pendingTermsCallback; window.__pendingTermsCallback = null;
       if(cb) cb();
