@@ -11553,11 +11553,12 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
       const deductionsTotal = myDeductions.reduce((a,x)=>a+parseFloat(x.amount||0),0);
       const myRewards = rewards.filter(r=>r.employee_id===e.id && afterClosure(r.created_at));
       const rewardsTotal = myRewards.reduce((a,x)=>a+parseFloat(x.amount||0),0);
-      const gross = hours * (e.hourly_wage||0);
+      // 💼 موظف براتب شهري ثابت: نفس منطق الحساب المشترك — الساعات تتحسب وتتعرض بس، ما تأثر عالراتب
+      const gross = e.pay_type==='monthly' ? parseFloat(e.monthly_salary||0) : hours * (e.hourly_wage||0);
       const opening = parseFloat(e.opening_balance||0);
       const net = gross - advTotal - mealsTotal - shiftDeduction - deductionsTotal + rewardsTotal + opening;
       const closureOverlap = closureDate && HR_FILTER.from <= closureDate;
-      return { emp:e, hours, days, advTotal, mealsCount, mealsTotal, shiftDeduction, deductionsTotal, rewardsTotal, opening, gross, net, suspiciousLogs, breakExcessHours, closureOverlap, closureDate };
+      return { emp:e, hours, days, advTotal, mealsCount, mealsTotal, shiftDeduction, deductionsTotal, rewardsTotal, opening, gross, net, suspiciousLogs, breakExcessHours, closureOverlap, closureDate, payType: e.pay_type||'hourly' };
     });
     const totalNet = rows.reduce((a,r)=>a+r.net,0);
     window.__HR_ROWS = rows;
@@ -11659,9 +11660,9 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
     wrap.innerHTML = `<div class="tbl-wrap"><table class="tbl">
         <tr><th>الموظف</th><th>سعر الساعة</th><th>ساعات العمل</th><th>أيام الحضور</th><th>الوجبات</th><th>قيمة الوجبات</th><th>السلف</th><th>خصم الشيفتات</th><th>خصومات</th><th>مكافآت</th><th>صافي المستحق</th><th></th></tr>
         ${filteredRows.map(r=>`<tr class="${r.emp.is_active===false?'off':''}">
-          <td><b>${esc(r.emp.name)}</b>${(r.emp.phone||phoneByHrId[r.emp.id])?`<br><small style="color:var(--muted)">📱 ${esc(r.emp.phone||phoneByHrId[r.emp.id])}</small>`:''}${r.emp.is_active===false?' <span style="color:var(--red);font-size:.75rem;font-weight:800">(غير فعّال)</span>':''}${r.closureOverlap?` <span title="فترة الفلتر الحالي بتتقاطع مع شهر مقفول لهاد الموظف (آخر قفل: ${r.closureDate}) — الرقم ممكن يطلع مضاعف، حرّكي الفلتر لبعد تاريخ القفل" style="color:var(--warn);font-size:.75rem;font-weight:800">⚠️ متقاطع مع قفل سابق</span>`:''}</td>
-          <td>${fmt(r.emp.hourly_wage||0)}</td>
-          <td>${r.hours.toFixed(1)}</td>
+          <td><b>${esc(r.emp.name)}</b>${(r.emp.phone||phoneByHrId[r.emp.id])?`<br><small style="color:var(--muted)">📱 ${esc(r.emp.phone||phoneByHrId[r.emp.id])}</small>`:''}${r.emp.is_active===false?' <span style="color:var(--red);font-size:.75rem;font-weight:800">(غير فعّال)</span>':''}${r.payType==='monthly'?' <span style="background:#e0e8ff;color:#2b3fa0;font-size:.72rem;font-weight:800;padding:2px 7px;border-radius:999px">💼 راتب ثابت</span>':''}${r.closureOverlap?` <span title="فترة الفلتر الحالي بتتقاطع مع شهر مقفول لهاد الموظف (آخر قفل: ${r.closureDate}) — الرقم ممكن يطلع مضاعف، حرّكي الفلتر لبعد تاريخ القفل" style="color:var(--warn);font-size:.75rem;font-weight:800">⚠️ متقاطع مع قفل سابق</span>`:''}</td>
+          <td>${r.payType==='monthly'?`<span title="راتب شهري ثابت">${fmt(r.emp.monthly_salary||0)} (شهري)</span>`:fmt(r.emp.hourly_wage||0)}</td>
+          <td>${r.hours.toFixed(1)}${r.payType==='monthly'?' <small style="color:var(--muted)">(للمتابعة بس)</small>':''}</td>
           <td>${r.days}</td>
           <td>${r.mealsCount}</td>
           <td>${r.mealsTotal>0?`<b style="color:var(--warn)">${fmt(r.mealsTotal)}</b>`:'—'}</td>
@@ -13098,6 +13099,18 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
       <div class="fld"><label>الاسم</label><input id="mn_name" value="${esc(n.name||'')}" placeholder="مثال: أبو محمد (نظافة)"></div>
       <div class="fld"><label>📱 رقم الهاتف</label><input id="mn_phone" inputmode="tel" value="${esc(n.phone||'')}"></div>
       <div class="fld"><label>نسبة خصم الوجبة %</label><input id="mn_disc" type="number" step="1" min="0" max="100" value="${n.discount_percent??20}"></div>
+      <div class="fld" style="background:#f0f7ff;border-radius:10px;padding:10px 12px">
+        <label>💼 نوع الراتب</label>
+        <select id="mn_paytype" onchange="document.getElementById('mn_monthlyWrap').classList.toggle('hidden', this.value!=='monthly')">
+          <option value="hourly" ${(n.pay_type||'hourly')==='hourly'?'selected':''}>بالساعة (الوضع الافتراضي — حسب معادلاتك الحالية)</option>
+          <option value="monthly" ${n.pay_type==='monthly'?'selected':''}>راتب شهري ثابت</option>
+        </select>
+        <div id="mn_monthlyWrap" class="${n.pay_type==='monthly'?'':'hidden'}" style="margin-top:8px">
+          <label>💰 الراتب الشهري الثابت (${CURRENCY})</label>
+          <input id="mn_monthlySalary" type="number" step="0.01" min="0" value="${n.monthly_salary||''}" placeholder="مثال: 300">
+          <div style="font-size:.76rem;color:var(--muted);font-weight:600;margin-top:4px">الراتب الشهري بينحسب ثابت بغض النظر عن عدد الساعات — بس الساعات بتضل تتسجّل وتظهرلك للمتابعة بس، بدون ما تأثر على الراتب. باقي الحسومات (سلف، وجبات، خصومات) بتضل تنطبق عادي.</div>
+        </div>
+      </div>
       <div class="fld"><label>💰 سعر ساعة العمل (${CURRENCY})</label><input id="mn_wage" type="number" step="0.01" min="0" value="${n.hourly_wage||''}" placeholder="مثال: 1.5"></div>
       <div class="fld"><label>📒 رصيد سابق (اختياري)</label><input id="mn_opening" type="number" step="0.01" value="${n.opening_balance||0}">
         <div style="font-size:.78rem;color:var(--muted);font-weight:700;margin-top:2px">رقم موجب = له عندنا، رقم سالب (بإشارة −) = عليه لنا — بينضاف لصافي المستحق تلقائيًا</div></div>
@@ -13168,7 +13181,9 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
     const pin = document.getElementById('mn_pin')?.value.trim()||null;
     if(!name){ toast('⚠️ الاسم مطلوب'); return; }
     if(isNaN(disc)||disc<0||disc>100){ toast('⚠️ نسبة الخصم يجب أن تكون بين 0 و100'); return; }
-    const rec = { name, phone: document.getElementById('mn_phone')?.value.trim()||null, notes: document.getElementById('mn_notes')?.value.trim()||null, discount_percent: disc, hourly_wage: wage, opening_balance, max_advance_percent, username, pin, shift_window_from: document.getElementById('mn_swf')?.value||null, shift_window_to: document.getElementById('mn_swt')?.value||null, branch_id: document.getElementById('mn_branch')?.value||null };
+    const pay_type = document.getElementById('mn_paytype')?.value || 'hourly';
+    const monthly_salary = pay_type==='monthly' ? (parseFloat(document.getElementById('mn_monthlySalary')?.value)||0) : null;
+    const rec = { name, phone: document.getElementById('mn_phone')?.value.trim()||null, notes: document.getElementById('mn_notes')?.value.trim()||null, discount_percent: disc, hourly_wage: wage, opening_balance, max_advance_percent, username, pin, shift_window_from: document.getElementById('mn_swf')?.value||null, shift_window_to: document.getElementById('mn_swt')?.value||null, branch_id: document.getElementById('mn_branch')?.value||null, pay_type, monthly_salary };
     if(id) rec.is_active = document.getElementById('mn_active')?.checked ?? true;
     const r = id ? await db.from('meal_names').update(rec).eq('id',id) : await db.from('meal_names').insert(rec).select().single();
     if(r.error){ toast('✗ '+r.error.message+(r.error.message.includes('username')?' — اسم المستخدم هاد مستخدم لموظف تاني':'')); return; }
@@ -16268,11 +16283,11 @@ try {
       const adv = advRes.data||[];
       // 🎯 بدون أي معادلة هون: "صافي المستحق" المعروض بالبوابة هو بالضبط نفس الرقم يلي شاشة HR
       // حسبته وخزّنته آخر مرة اتفتحت فيها — صفر حسبة مستقلة، صفر احتمال انزياح، مصدر حقيقة وحيد.
-      const { data: freshEmp } = await db.from('meal_names').select('hourly_wage, opening_balance, max_advance_percent, cached_net_due, cached_net_due_at').eq('id', EMP.id).maybeSingle();
+      const { data: freshEmp } = await db.from('meal_names').select('hourly_wage, opening_balance, max_advance_percent, cached_net_due, cached_net_due_at, pay_type, monthly_salary').eq('id', EMP.id).maybeSingle();
       const currentWage = parseFloat(freshEmp?.hourly_wage ?? EMP.hourly_wage ?? 0);
       const prevBalance = parseFloat(freshEmp?.opening_balance ?? EMP.opening_balance ?? 0);
       // باقي التفاصيل (ساعات، سلف، وجبات...) بتضل محسوبة عادي للعرض بس — الرقم النهائي وحده جاي من HR
-      const netResult = await computeEmployeeNetDue(EMP.id, EMP.name, currentWage, prevBalance, freshEmp?.max_advance_percent ?? EMP.max_advance_percent);
+      const netResult = await computeEmployeeNetDue(EMP.id, EMP.name, currentWage, prevBalance, freshEmp?.max_advance_percent ?? EMP.max_advance_percent, freshEmp?.pay_type ?? EMP.pay_type, freshEmp?.monthly_salary ?? EMP.monthly_salary);
       const hoursThisMonth = netResult.hours;
       const gross = netResult.gross;
       const advOutstanding = netResult.advOutstanding;
@@ -16634,7 +16649,7 @@ try {
       loadEmpPortal();
     }catch(e){ toast('⛔ '+e.message); }
   }
-  async function computeEmployeeNetDue(empId, empName, hourlyWage, openingBalance, maxAdvPercent){
+  async function computeEmployeeNetDue(empId, empName, hourlyWage, openingBalance, maxAdvPercent, payType, monthlySalary){
     // 🔧 مهم: نفس نطاق التاريخ (الشهر الحالي) المستخدم بكل مكان تاني بالنظام —
     // كان هاد الحساب يجمع كل تاريخ الموظف من أول يوم (بدون حد)، فيطلع رقم مختلف
     // عن الشاشة الرئيسية وعن كشف الأدمن يلي بيحسبوا الشهر الحالي بس
@@ -16668,7 +16683,10 @@ try {
     const portalHours = (logsRes.data||[]).filter(l=>((new Date(l.clock_out)-new Date(l.clock_in))/3600000)<=16 || l.reviewed_ok).reduce((a,l)=>a+((new Date(l.clock_out)-new Date(l.clock_in))/3600000),0);
     const breakExcess = calcBreakExcessHours(brRes.data||[]);
     const hours = Math.max(0, manualHours+portalHours-breakExcess);
-    const gross = hours*(hourlyWage||0);
+    // 💼 موظف براتب شهري ثابت: الساعات بتضل تتحسب وتتعرض للمتابعة بس، بدون ما تأثر على الراتب —
+    // الراتب المستحق ثابت (monthly_salary) بغض النظر عن عدد الساعات. موظف بالساعة (الافتراضي)
+    // ما إله أي تغيير — نفس معادلة hours*hourlyWage القديمة بالحرف.
+    const gross = payType==='monthly' ? parseFloat(monthlySalary||0) : hours*(hourlyWage||0);
     const advOutstanding = (advRes.data||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
     const mealsRows = mealsRes.data||[];
     const mealsTotal = mealsRows.reduce((a,o)=>a+parseFloat(o.total||0),0);
@@ -16678,7 +16696,7 @@ try {
     const opening = parseFloat(openingBalance||0);
     const net = gross - advOutstanding - mealsTotal - shiftDed - deductionsTotal + rewardsTotal + opening;
     const maxAllowed = Math.max(0, net * ((maxAdvPercent||30)/100));
-    return { net, maxAllowed, hours, hourlyWage: parseFloat(hourlyWage||0), gross, advOutstanding, mealsTotal, mealsCount: mealsRows.length, shiftDed, deductionsTotal, rewardsTotal, opening, breakExcess };
+    return { net, maxAllowed, hours, hourlyWage: parseFloat(hourlyWage||0), gross, advOutstanding, mealsTotal, mealsCount: mealsRows.length, shiftDed, deductionsTotal, rewardsTotal, opening, breakExcess, payType: payType||'hourly', monthlySalary: parseFloat(monthlySalary||0) };
   }
   async function empShowRecipes(){
     modal('<h3>📋 وصفات التحضير</h3><div id="empRecipesBody" class="empty-note">... جاري التحميل</div>');
@@ -16714,7 +16732,7 @@ try {
       <div class="fld"><label>السبب (اختياري)</label><input id="epa_note" placeholder="اكتب سبب الطلب..."></div>
       <div class="m-act"><button class="save" onclick="empSubmitAdvanceRequest()">إرسال الطلب ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
     try{
-      const { net, maxAllowed } = await computeEmployeeNetDue(EMP.id, EMP.name, EMP.hourly_wage, EMP.opening_balance, EMP.max_advance_percent);
+      const { net, maxAllowed } = await computeEmployeeNetDue(EMP.id, EMP.name, EMP.hourly_wage, EMP.opening_balance, EMP.max_advance_percent, EMP.pay_type, EMP.monthly_salary);
       window.__empAdvMax = maxAllowed;
       const infoEl = document.getElementById('epaLimitInfo');
       if(infoEl) infoEl.innerHTML = `<div style="background:#fff8e1;border-radius:10px;padding:8px 12px;font-size:.85rem;font-weight:700">صافي مستحقك حاليًا: ${fmt(net)} ${CURRENCY} — أقصى سلفة ممكن تطلبها: <b style="color:var(--ok)">${fmt(maxAllowed)} ${CURRENCY}</b></div>`;
@@ -16728,7 +16746,7 @@ try {
     if(isNaN(amt)||amt<=0){ toast('⚠️ اكتب مبلغ صحيح'); return; }
     try{
       // 🚦 فحص الحد الأقصى المسموح تلقائيًا قبل الإرسال (نعيد الحساب لحظيًا عشان ما حد يتلاعب بالرقم المعروض)
-      const { net, maxAllowed } = await computeEmployeeNetDue(EMP.id, EMP.name, EMP.hourly_wage, EMP.opening_balance, EMP.max_advance_percent);
+      const { net, maxAllowed } = await computeEmployeeNetDue(EMP.id, EMP.name, EMP.hourly_wage, EMP.opening_balance, EMP.max_advance_percent, EMP.pay_type, EMP.monthly_salary);
       if(amt > maxAllowed + 0.005){
         toast('⛔ ما بقدر — أقصى سلفة مسموحة إلك هلأ هي '+fmt(maxAllowed)+' '+CURRENCY+' ('+(EMP.max_advance_percent||30)+'% من صافي مستحقك '+fmt(net)+')');
         return;
