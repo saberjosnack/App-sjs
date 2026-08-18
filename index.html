@@ -8175,7 +8175,14 @@
     renderReports();
   }
   function addDaysStr(dateStr, n){
-    const dt = new Date(dateStr+'T00:00:00+03:00');
+    // 🔧 مصلّحة: كانت هاي الدالة بترجع نفس التاريخ بالضبط بدون أي إضافة فعلية! السبب: كانت
+    // تبني التاريخ بمنتصف ليل عمّان (+03:00)، ويلي بتوقيت UTC هو فعليًا اليوم يلي قبله بـ3
+    // ساعات — فلما تجمع "1" على رقم اليوم بتوقيت UTC، كانت ترجع بالضبط لنفس التاريخ المحلي
+    // الأصلي بدل ما تتقدم يوم كامل. هاد كان بيكسر أي نطاق تاريخ "من X لغاية Y" بكل مكان
+    // بالنظام بيستخدم هاي الدالة (تقارير، فلاتر) — كانت النطاقات كلها تطلع صفر بصمت.
+    // الحل: نشتغل على أرقام التقويم (سنة-شهر-يوم) مباشرة بدون أي تحويل توقيت إطلاقًا.
+    const [y,m,d] = dateStr.split('-').map(Number);
+    const dt = new Date(Date.UTC(y, m-1, d));
     dt.setUTCDate(dt.getUTCDate()+n);
     return dt.toISOString().split('T')[0];
   }
@@ -13469,7 +13476,21 @@ window.__lastEmpMealsData = null;
       const custIds = (customers||[]).map(c=>c.id);
       const orderCounts = await computeOrderCounts(custIds);
       // متوسط تقييم كل عميل من طلباته
-      const { data: ratedOrders } = custIds.length ? await db.from('orders').select('customer_id, customer_rating').in('customer_id', custIds).not('customer_rating','is',null) : {data:[]};
+      // 🔧 مصلّحة: نفس بگ الرابط الطويل يلي صلّحناه قبل بـcomputeOrderCounts — .in('customer_id', custIds)
+      // بقائمة آلاف العملاء كانت بتكسر الرابط وترجع خطأ 400 بصمت (كل التقييمات تطلع "—" فارغة).
+      // هلق منجيب كل الطلبات المقيّمة صفحة صفحة بدون فلترة عملاء، بنفس أسلوب الإصلاح السابق.
+      let ratedOrders = [];
+      {
+        let rf = 0; const rp = 1000;
+        while(true){
+          const { data: rd, error: re } = await db.from('orders').select('customer_id, customer_rating').not('customer_rating','is',null).range(rf, rf+rp-1);
+          if(re){ console.error('ratedOrders page error:', re); break; }
+          if(!rd || !rd.length) break;
+          ratedOrders = ratedOrders.concat(rd);
+          if(rd.length < rp) break;
+          rf += rp;
+        }
+      }
       const ratingMap = {};
       (ratedOrders||[]).forEach(o=>{
         if(!ratingMap[o.customer_id]) ratingMap[o.customer_id] = {sum:0,count:0};
