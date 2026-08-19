@@ -8207,11 +8207,21 @@
         return;
       }
       if(type==='foodcost'){
-        let q = db.from('orders').select('status, created_at, branch_id, order_items(menu_item_id, item_name, quantity, unit_price)')
-          .gte('created_at', localDayStart(from)).lt('created_at', localDayStart(addDaysStr(to,1))).neq('status','cancelled');
-        if(branchId) q = q.eq('branch_id', branchId);
-        const { data: ordersData, error: ordersErr } = await q;
-        if(ordersErr){ box.innerHTML = `<div class="alert-red">⚠️ ${esc(ordersErr.message||'خطأ')}</div>`; console.error(ordersErr); return; }
+        let ordersData = [];
+        {
+          let rf = 0; const rp = 1000;
+          while(true){
+            let q = db.from('orders').select('status, created_at, branch_id, order_items(menu_item_id, item_name, quantity, unit_price)')
+              .gte('created_at', localDayStart(from)).lt('created_at', localDayStart(addDaysStr(to,1))).neq('status','cancelled').range(rf, rf+rp-1);
+            if(branchId) q = q.eq('branch_id', branchId);
+            const { data: rd, error: re } = await q;
+            if(re){ box.innerHTML = `<div class="alert-red">⚠️ ${esc(re.message||'خطأ')}</div>`; console.error(re); return; }
+            if(!rd || !rd.length) break;
+            ordersData = ordersData.concat(rd);
+            if(rd.length < rp) break;
+            rf += rp;
+          }
+        }
         const tally = {}; // menu_item_id -> {name, qty, revenue}
         (ordersData||[]).forEach(o=>(o.order_items||[]).forEach(li=>{
           if(!li.menu_item_id) return;
@@ -8291,12 +8301,24 @@
         renderWithdrawalsReportResult(rows);
         return;
       }
-      let q = db.from('orders').select('id, order_number, total, subtotal, discount, delivery_fee, payment_method, order_type, status, split_details, employee_tab_name, platform_id, branch_id, created_at, order_items(item_name, quantity, unit_price), branches(name_ar)')
-        .gte('created_at', localDayStart(from)).lt('created_at', localDayStart(addDaysStr(to,1)));
-      if(branchId) q = q.eq('branch_id', branchId);
-      const { data, error } = await q;
-      if(error){ box.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message||'خطأ')}</div>`; console.error(error); return; }
-      const all = data||[];
+      // 🔧 مصلّحة: نفس بگ حد الـ1000 صف يلي صلّحناه بأماكن تانية بالنظام — أي فترة فيها أكتر من
+      // 1000 طلب (شائع لفترة شهر أو أكتر) كانت تتقطع بصمت عند أول 1000 وتتجاهل الباقي، فكان الرقم
+      // يطلع أقل بكثير من الحقيقي، وثابت تقريبًا بغض النظر عن طول الفترة (لأنه دايمًا يوصل لنفس السقف).
+      let all = [];
+      {
+        let rf = 0; const rp = 1000;
+        while(true){
+          let q = db.from('orders').select('id, order_number, total, subtotal, discount, delivery_fee, payment_method, order_type, status, split_details, employee_tab_name, platform_id, branch_id, created_at, order_items(item_name, quantity, unit_price), branches(name_ar)')
+            .gte('created_at', localDayStart(from)).lt('created_at', localDayStart(addDaysStr(to,1))).range(rf, rf+rp-1);
+          if(branchId) q = q.eq('branch_id', branchId);
+          const { data: rd, error: re } = await q;
+          if(re){ box.innerHTML = `<div class="alert-red">⚠️ ${esc(re.message||'خطأ')}</div>`; console.error(re); return; }
+          if(!rd || !rd.length) break;
+          all = all.concat(rd);
+          if(rd.length < rp) break;
+          rf += rp;
+        }
+      }
       const cancelled = all.filter(o=>o.status==='cancelled');
       const ok = all.filter(o=>o.status!=='cancelled');
       window.__repData = { type, from, to, branchId, rows: ok, cancelled };
