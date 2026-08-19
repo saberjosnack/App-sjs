@@ -13155,6 +13155,10 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
         </div>
       </div>
       <div class="fld"><label>💰 سعر ساعة العمل (${CURRENCY})</label><input id="mn_wage" type="number" step="0.01" min="0" value="${n.hourly_wage||''}" placeholder="مثال: 1.5"></div>
+      <div class="fld" style="background:#fff3e0;border-radius:10px;padding:10px 12px">
+        <label class="chk"><input type="checkbox" id="mn_canSeeBalance" ${n.can_see_balance===false?'':'checked'}> يقدر يشوف صافي راتبه/رصيده ببوابته</label>
+        <div style="font-size:.76rem;color:var(--muted);font-weight:600;margin-top:4px">لو شيلتيها، بوابة هاد الموظف بتخفي "صافي المستحق" عنه بالكامل (بس يضل يقدر يستخدم باقي البوابة عادي — طلب سلفة، وجبات، بريك...).</div>
+      </div>
       <div class="fld"><label>📒 رصيد سابق (اختياري)</label><input id="mn_opening" type="number" step="0.01" value="${n.opening_balance||0}">
         <div style="font-size:.78rem;color:var(--muted);font-weight:700;margin-top:2px">رقم موجب = له عندنا، رقم سالب (بإشارة −) = عليه لنا — بينضاف لصافي المستحق تلقائيًا</div></div>
       <div class="fld"><label>🏪 الفرع</label><select id="mn_branch"><option value="">— بدون تحديد —</option>
@@ -13226,7 +13230,8 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
     if(isNaN(disc)||disc<0||disc>100){ toast('⚠️ نسبة الخصم يجب أن تكون بين 0 و100'); return; }
     const pay_type = document.getElementById('mn_paytype')?.value || 'hourly';
     const monthly_salary = pay_type==='monthly' ? (parseFloat(document.getElementById('mn_monthlySalary')?.value)||0) : null;
-    const rec = { name, phone: document.getElementById('mn_phone')?.value.trim()||null, notes: document.getElementById('mn_notes')?.value.trim()||null, discount_percent: disc, hourly_wage: wage, opening_balance, max_advance_percent, username, pin, shift_window_from: document.getElementById('mn_swf')?.value||null, shift_window_to: document.getElementById('mn_swt')?.value||null, branch_id: document.getElementById('mn_branch')?.value||null, pay_type, monthly_salary };
+    const can_see_balance = document.getElementById('mn_canSeeBalance')?.checked ?? true;
+    const rec = { name, phone: document.getElementById('mn_phone')?.value.trim()||null, notes: document.getElementById('mn_notes')?.value.trim()||null, discount_percent: disc, hourly_wage: wage, opening_balance, max_advance_percent, username, pin, shift_window_from: document.getElementById('mn_swf')?.value||null, shift_window_to: document.getElementById('mn_swt')?.value||null, branch_id: document.getElementById('mn_branch')?.value||null, pay_type, monthly_salary, can_see_balance };
     if(id) rec.is_active = document.getElementById('mn_active')?.checked ?? true;
     const r = id ? await db.from('meal_names').update(rec).eq('id',id) : await db.from('meal_names').insert(rec).select().single();
     if(r.error){ toast('✗ '+r.error.message+(r.error.message.includes('username')?' — اسم المستخدم هاد مستخدم لموظف تاني':'')); return; }
@@ -16367,7 +16372,7 @@ try {
       const adv = advRes.data||[];
       // 🎯 بدون أي معادلة هون: "صافي المستحق" المعروض بالبوابة هو بالضبط نفس الرقم يلي شاشة HR
       // حسبته وخزّنته آخر مرة اتفتحت فيها — صفر حسبة مستقلة، صفر احتمال انزياح، مصدر حقيقة وحيد.
-      const { data: freshEmp } = await db.from('meal_names').select('hourly_wage, opening_balance, max_advance_percent, cached_net_due, cached_net_due_at, pay_type, monthly_salary').eq('id', EMP.id).maybeSingle();
+      const { data: freshEmp } = await db.from('meal_names').select('hourly_wage, opening_balance, max_advance_percent, cached_net_due, cached_net_due_at, pay_type, monthly_salary, can_see_balance').eq('id', EMP.id).maybeSingle();
       const currentWage = parseFloat(freshEmp?.hourly_wage ?? EMP.hourly_wage ?? 0);
       const prevBalance = parseFloat(freshEmp?.opening_balance ?? EMP.opening_balance ?? 0);
       // باقي التفاصيل (ساعات، سلف، وجبات...) بتضل محسوبة عادي للعرض بس — الرقم النهائي وحده جاي من HR
@@ -16460,7 +16465,7 @@ try {
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
           ${settingOn('hr_portal_show_hours')?`<div class="stat">ساعات هالشهر<b>${hoursThisMonth.toFixed(1)}</b></div>`:''}
           ${netResult.breakExcess>0?`<div class="stat" style="grid-column:1/-1">☕ خصم بريك زايد عن ساعة/يوم<b style="color:var(--red)">-${netResult.breakExcess.toFixed(2)} ساعة</b></div>`:''}
-          ${settingOn('hr_portal_show_net')?`<div class="stat">صافي المستحق<b style="color:${net<0?'var(--red)':'var(--ok)'}">${fmt(net)} ${CURRENCY}</b></div>`:''}
+          ${(settingOn('hr_portal_show_net') && (freshEmp?.can_see_balance ?? EMP.can_see_balance ?? true))?`<div class="stat">صافي المستحق<b style="color:${net<0?'var(--red)':'var(--ok)'}">${fmt(net)} ${CURRENCY}</b></div>`:''}
           ${settingOn('hr_portal_show_advances')?`<div class="stat">سلف هالشهر (تُخصم من الصافي)<b style="color:var(--warn)">${fmt(advOutstanding)} ${CURRENCY}</b></div>`:''}
           ${settingOn('hr_portal_show_advances')?`<div class="stat">إجمالي السلف القائمة (كل الوقت)<b style="color:var(--warn)">${fmt(advOutstanding)} ${CURRENCY}</b></div>`:''}
           ${settingOn('hr_portal_show_meals')?`<div class="stat">وجبات هالشهر<b>${netResult.mealsCount} <small>(${fmt(mealsTotal)})</small></b></div>`:''}
@@ -16811,15 +16816,15 @@ try {
     document.getElementById('emp_recipe_detail_'+idx)?.classList.toggle('hidden');
   }
   async function empRequestAdvanceForm(){
-    modal(`<h3>🧾 طلب سلفة</h3><div id="epaLimitInfo" class="empty-note">... جاري الحساب</div>
+    modal(`<h3>🧾 طلب سلفة</h3>
       <div class="fld"><label>المبلغ</label><input id="epa_amt" type="number" step="0.01" min="0"></div>
       <div class="fld"><label>السبب (اختياري)</label><input id="epa_note" placeholder="اكتب سبب الطلب..."></div>
       <div class="m-act"><button class="save" onclick="empSubmitAdvanceRequest()">إرسال الطلب ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
     try{
-      const { net, maxAllowed } = await computeEmployeeNetDue(EMP.id, EMP.name, EMP.hourly_wage, EMP.opening_balance, EMP.max_advance_percent, EMP.pay_type, EMP.monthly_salary);
+      // 🔒 مصلّحة: ما بنكشف صافي المستحق ولا أقصى سلفة للموظف هون بعد الآن — الحد الأقصى لسا
+      // مطبّق فعليًا وقت الإرسال (empSubmitAdvanceRequest)، بس بدون ما نوريه الرقم مسبقًا.
+      const { maxAllowed } = await computeEmployeeNetDue(EMP.id, EMP.name, EMP.hourly_wage, EMP.opening_balance, EMP.max_advance_percent, EMP.pay_type, EMP.monthly_salary);
       window.__empAdvMax = maxAllowed;
-      const infoEl = document.getElementById('epaLimitInfo');
-      if(infoEl) infoEl.innerHTML = `<div style="background:#fff8e1;border-radius:10px;padding:8px 12px;font-size:.85rem;font-weight:700">صافي مستحقك حاليًا: ${fmt(net)} ${CURRENCY} — أقصى سلفة ممكن تطلبها: <b style="color:var(--ok)">${fmt(maxAllowed)} ${CURRENCY}</b></div>`;
     }catch(e){ console.error(e); }
   }
   async function empSubmitAdvanceRequest(){
@@ -16830,9 +16835,9 @@ try {
     if(isNaN(amt)||amt<=0){ toast('⚠️ اكتب مبلغ صحيح'); return; }
     try{
       // 🚦 فحص الحد الأقصى المسموح تلقائيًا قبل الإرسال (نعيد الحساب لحظيًا عشان ما حد يتلاعب بالرقم المعروض)
-      const { net, maxAllowed } = await computeEmployeeNetDue(EMP.id, EMP.name, EMP.hourly_wage, EMP.opening_balance, EMP.max_advance_percent, EMP.pay_type, EMP.monthly_salary);
+      const { maxAllowed } = await computeEmployeeNetDue(EMP.id, EMP.name, EMP.hourly_wage, EMP.opening_balance, EMP.max_advance_percent, EMP.pay_type, EMP.monthly_salary);
       if(amt > maxAllowed + 0.005){
-        toast('⛔ ما بقدر — أقصى سلفة مسموحة إلك هلأ هي '+fmt(maxAllowed)+' '+CURRENCY+' ('+(EMP.max_advance_percent||30)+'% من صافي مستحقك '+fmt(net)+')');
+        toast('⛔ ما بقدر — أقصى سلفة مسموحة إلك هلأ هي '+fmt(maxAllowed)+' '+CURRENCY);
         return;
       }
       const { error } = await db.from('hr_advance_requests').insert({
