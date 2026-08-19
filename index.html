@@ -15673,8 +15673,10 @@ try {
   function getFinancialMonth(){
     const now=new Date();
     const from=new Date(now.getFullYear(),now.getMonth(),1,FIN_START_H);
+    // 🔧 مصلّحة: كان "to" محسوب بس لساعة ثابتة بكري اليوم (FIN_END_H+1) بدون ما يمتد للحظة الحالية —
+    // فكان يقطع كل مبيعات اليوم الحالي (وأحيانًا جزء من أمس) من إجمالي الشهر، بعكس فلتر "اليوم"
+    // و"الأسبوع" يلي عندهم نفس هالتصحيح أصلاً. هلق "إلى" دايمًا = دلوقتي بالضبط.
     const to=new Date();
-    to.setHours(FIN_END_H+1,0,0,0);
     return {from:from.toISOString(), to:to.toISOString()};
   }
 
