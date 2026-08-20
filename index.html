@@ -1164,7 +1164,25 @@
                 }
             }, 500);
           };
-          if(!ME.terms_accepted_at && (SETTINGS.terms_text||'').trim()){
+          // 🔧 مصلّحة نهائيًا: بدل ما نعتمد بس على terms_accepted_at لهاد الحساب، نفحص الحساب المرتبط
+          // (بوابة الموظف) كمان — لو موقّع من فيه، منعتبره موقّع هون تلقائيًا (ونصلّح البيانات لحظيًا)،
+          // حتى لو كان في بيانات قديمة غير متزامنة من قبل هالإصلاح. هيك التوقيع بيصير مرة وحدة فعليًا،
+          // بغض النظر من أي حساب وقّع.
+          let alreadySigned = !!ME.terms_accepted_at;
+          if(!alreadySigned){
+            // ⚠️ ME جاي من Edge Function خارجية (verify-pin) وما نعرف بالتأكيد شو الحقول يلي بترجعها —
+            // فنجيب linked_hr_id فريش من قاعدة البيانات مباشرة، بدل ما نعتمد عليه من جواب الفنكشن
+            const { data: staffRow } = await db.from('staff').select('linked_hr_id').eq('id', ME.id).maybeSingle();
+            if(staffRow?.linked_hr_id){
+              const { data: linkedHr } = await db.from('meal_names').select('terms_accepted_at').eq('id', staffRow.linked_hr_id).maybeSingle();
+              if(linkedHr?.terms_accepted_at){
+                alreadySigned = true;
+                ME.terms_accepted_at = linkedHr.terms_accepted_at;
+                await db.from('staff').update({ terms_accepted_at: linkedHr.terms_accepted_at }).eq('id', ME.id);
+              }
+            }
+          }
+          if(!alreadySigned && (SETTINGS.terms_text||'').trim()){
             showTermsGate('staff', ME, proceedAfterLogin);
           } else {
             proceedAfterLogin();
@@ -7253,7 +7271,7 @@
           return `<div class="panel" style="margin-bottom:10px">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
               <b style="color:var(--maroon);font-size:1.05rem">${esc(r.menu_items?.name_ar||'—')}</b>
-              <span style="font-size:.82rem;color:var(--muted)">تكلفة ${fmt(cost)} / سعر ${fmt(price)} <button class="mini edit" onclick="recipeForm('${r.id}')">تعديل</button></span>
+              <span style="font-size:.82rem;color:var(--muted)">تكلفة ${fmt(cost)} / سعر ${fmt(price)} <button class="mini edit" onclick="recipeForm('${r.id}')">تعديل</button> <button class="mini" style="background:#e0d4f7" onclick="copyRecipeToItemForm('${r.id}')">📋 نسخ لصنف تاني</button></span>
             </div>
             <div style="font-size:.88rem">
               ${(r.recipe_items||[]).map(ri=>{
@@ -7274,7 +7292,8 @@
             <td><b style="color:${fc>35?'var(--red)':fc>25?'var(--warn)':'var(--ok)'}">${fc}%</b></td>
             <td style="color:var(--ok)"><b>${fmt(profit)}</b></td>
             <td><button class="mini edit" onclick="recipeForm('${r.id}')">تعديل</button>
-                <button class="mini tog" onclick="showRecipeDetail('${r.id}')">👁️</button></td></tr>`;
+                <button class="mini tog" onclick="showRecipeDetail('${r.id}')">👁️</button>
+                <button class="mini" style="background:#e0d4f7" onclick="copyRecipeToItemForm('${r.id}')" title="انسخي هاي الوصفة لصنف تاني">📋 نسخ</button></td></tr>`;
         }).join('')||'<tr><td colspan="6" class="empty-note">ما في وصفات</td></tr>'}
       </table></div>`}`;
   }
@@ -7320,6 +7339,43 @@
     printRaw(text, html);
   }
   let riIdx=1;
+  function copyRecipeToItemForm(sourceRecipeId){
+    const src = RECIPES_DATA.find(x=>x.id===sourceRecipeId);
+    if(!src){ toast('✗ ما لقيت الوصفة'); return; }
+    const alreadyRecipedIds = new Set(RECIPES_DATA.map(r=>r.menu_item_id));
+    modal(`<h3>📋 نسخ وصفة "${esc(src.menu_items?.name_ar||'')}" لصنف تاني</h3>
+      <div style="font-size:.82rem;color:var(--muted);font-weight:700;margin-bottom:10px">رح تتنسخ كل المكونات والكميات وطريقة التحضير كما هي — بعدها فورًا رح تنفتحلك شاشة تعديل عشان تغيّري أي كمية حسب الصنف الجديد قبل الحفظ.</div>
+      <div class="fld"><label>انسخيها لصنف:</label><select id="cri_target">
+        <option value="">اختاري الصنف...</option>
+        ${ITEMS.filter(i=>i.id!==src.menu_item_id).map(i=>`<option value="${i.id}">${esc(i.name_ar)}${alreadyRecipedIds.has(i.id)?' — ⚠️ عنده وصفة أصلاً (رح تتستبدل)':''}</option>`).join('')}
+      </select></div>
+      <div class="m-act"><button class="save" onclick="copyRecipeToItem('${sourceRecipeId}')">نسخ وفتح للتعديل ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
+  }
+  async function copyRecipeToItem(sourceRecipeId){
+    const targetId = document.getElementById('cri_target')?.value;
+    if(!targetId){ toast('⚠️ اختاري الصنف الهدف'); return; }
+    const src = RECIPES_DATA.find(x=>x.id===sourceRecipeId);
+    if(!src){ toast('✗ ما لقيت الوصفة الأصلية'); return; }
+    try{
+      // لو الصنف الهدف عنده وصفة أصلاً، منستبدلها (نحذف القديمة أول)
+      const existing = RECIPES_DATA.find(r=>r.menu_item_id===targetId);
+      if(existing){
+        await db.from('recipe_items').delete().eq('recipe_id', existing.id);
+        await db.from('recipes').delete().eq('id', existing.id);
+      }
+      const { data: newRecipe, error } = await db.from('recipes').insert({ menu_item_id: targetId, prep_method: src.prep_method||null }).select().single();
+      if(error){ toast('✗ '+error.message); console.error(error); return; }
+      const items = (src.recipe_items||[]).map(ri=>({ recipe_id: newRecipe.id, ingredient_id: ri.ingredient_id, quantity: ri.quantity }));
+      if(items.length){
+        const { error: e2 } = await db.from('recipe_items').insert(items);
+        if(e2){ toast('✗ '+e2.message); console.error(e2); return; }
+      }
+      toast('✓ اتنسخت الوصفة — عدّلي الكميات وبعدين احفظي');
+      closeModal();
+      await renderRecipes();
+      recipeForm(newRecipe.id);
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
+  }
   function recipeForm(id, preselectItemId){
     const r=RECIPES_DATA.find(x=>x.id===id)||{};
     const existItems=r.recipe_items||[];
@@ -16306,7 +16362,20 @@ try {
         if(!window.__empHeartbeatInterval) window.__empHeartbeatInterval = setInterval(sendDeviceHeartbeat, 45000);
         loadEmpPortal();
       };
-      if(!data.terms_accepted_at && (SETTINGS.terms_text||'').trim()){
+      // 🔧 مصلّحة نهائيًا: نفحص الحساب المرتبط (كاشير) كمان قبل ما نطلب توقيع جديد — لو موقّع من
+      // فيه، منعتبره موقّع هون تلقائيًا ونصلّح البيانات لحظيًا، حتى لو كانت البيانات قديمة وغير
+      // متزامنة من قبل هالإصلاح.
+      let alreadySignedP = !!data.terms_accepted_at;
+      if(!alreadySignedP){
+        const { data: linkedStaffRows } = await db.from('staff').select('id, terms_accepted_at').eq('linked_hr_id', data.id);
+        const signedLinked = (linkedStaffRows||[]).find(s=>s.terms_accepted_at);
+        if(signedLinked){
+          alreadySignedP = true;
+          data.terms_accepted_at = signedLinked.terms_accepted_at;
+          await db.from('meal_names').update({ terms_accepted_at: signedLinked.terms_accepted_at }).eq('id', data.id);
+        }
+      }
+      if(!alreadySignedP && (SETTINGS.terms_text||'').trim()){
         showTermsGate('meal_names', data, proceedIntoPortal);
       } else {
         proceedIntoPortal();
