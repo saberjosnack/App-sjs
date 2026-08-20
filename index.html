@@ -615,6 +615,7 @@
         <button data-a="hr" onclick="admTab('hr')" style="background:#ffe0c2;border-color:#e8890c">🧑‍💼 HR</button>
         <button data-a="chats" onclick="admTab('chats')" style="background:#d0ecff;border-color:#0d6efd">💬 المحادثات</button>
         <button data-a="hrLocations" onclick="admTab('hrLocations')" style="background:#ffd9ec;border-color:#e0409a">📍 مواقع الدخول</button>
+        <button data-a="geoExcursions" onclick="admTab('geoExcursions')" style="background:#ffe0d9;border-color:#e05a40">🚨 خروج من النطاق</button>
         <button data-a="dutyHours" onclick="admTab('dutyHours')" style="background:#d9f0ff;border-color:#0d9cdb">⏰ ساعات الدوام</button>
         <button data-a="shiftSchedule" onclick="admTab('shiftSchedule')" style="background:#e0d9ff;border-color:#7b2cbf">🕐 جدول الدوام المحدد</button>
         <button data-a="hrClosures" onclick="admTab('hrClosures')" style="background:#e8d9ff;border-color:#7b2cbf">📜 كشوفات الأشهر</button>
@@ -807,13 +808,13 @@
   }
   async function checkEmpAlreadyHadMealToday(emp){
     try{
-      const todayStart = localDayStart(localTodayStr());
+      const windowStart = getMealWindowStart();
       const { data: todaysMeals } = await db.from('orders').select('id')
-        .eq('employee_meal_id', emp.id).neq('status','cancelled').gte('created_at', todayStart).limit(1);
+        .eq('employee_meal_id', emp.id).neq('status','cancelled').gte('created_at', windowStart).limit(1);
       const info = document.getElementById('empMealDiscInfo');
       window.__empMealAlreadyToday = !!(todaysMeals && todaysMeals.length);
       if(window.__empMealAlreadyToday && info){
-        info.innerHTML = '⚠️ "'+esc(emp.name)+'" أخذ وجبة بخصم اليوم خلص — هاي الوجبة رح تنحسب كاملة بدون خصم';
+        info.innerHTML = '⚠️ "'+esc(emp.name)+'" أخذ وجبة بخصم بنفس فترة الشغل خلص — هاي الوجبة رح تنحسب كاملة بدون خصم';
         info.style.color = 'var(--red)';
       } else if(info){
         info.style.color = '';
@@ -1273,6 +1274,7 @@
       tab_hr: 'HR',
       tab_chats: 'المحادثات',
       tab_hrLocations: 'مواقع الدخول',
+      tab_geoExcursions: 'خروج من النطاق',
       tab_dutyHours: 'ساعات الدوام',
       tab_hrClosures: 'كشوفات الأشهر',
       tab_reports: 'التقارير',
@@ -3146,6 +3148,9 @@
       if(window.__empMealAlreadyToday){
         disc = 0;
         lbl = '(وجبة موظف — أخذ خصمه اليوم، بدون خصم إضافي)';
+      } else if(!isWithinMealDiscountWindow()){
+        disc = 0;
+        lbl = '(وجبة موظف — برّه وقت الخصم المسموح 10ص-3ف، بدون خصم)';
       } else {
         disc = sub * discPct/100;
         lbl = '(وجبة موظف '+discPct+'%)';
@@ -4066,15 +4071,21 @@
     if(empMealName){
       const empRec2 = MEAL_NAMES_DATA.find(n=>n.name===empMealName);
       if(empRec2){
-        const todayStart = localDayStart(localTodayStr());
+        // 🕙 خصم وجبة الموظف بس بين 10 صباحًا و3 فجرًا — أي طلب برّه هالوقت يُحسب كامل بدون خصم
+        if(!isWithinMealDiscountWindow()){
+          t.disc = 0;
+          t.total = t.sub + t.del;
+        } else {
+        const windowStart = getMealWindowStart();
         const { data: todaysMeals } = await db.from('orders').select('id')
           .eq('employee_meal_id', empRec2.id)
           .neq('status','cancelled')
-          .gte('created_at', todayStart)
+          .gte('created_at', windowStart)
           .limit(1);
         if(todaysMeals && todaysMeals.length){
           t.disc = 0;
           t.total = t.sub + t.del;
+        }
         }
       }
     }
@@ -5747,6 +5758,7 @@
     if(admView==='hr'){ renderHR(); return; }
     if(admView==='chats'){ renderChatAdmin(); return; }
     if(admView==='hrLocations'){ renderHrLocations(); return; }
+    if(admView==='geoExcursions'){ renderGeoExcursions(); return; }
     if(admView==='dutyHours'){ renderDutyHours(); return; }
     if(admView==='hrClosures'){ renderHrMonthClosures(); return; }
     if(admView==='activityLog'){ renderActivityLog(); return; }
@@ -11670,6 +11682,28 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
   // ممكن يخلي فلتر HR الافتراضي يبلش بتاريخ مختلف بيوم عن بوابة الموظف قرب منتصف الليل بالضبط
   // 🔧 إصلاح: الطريقة الصحيحة لحساب توقيت عمّان (UTC+3) — بس نضيف 3 ساعات لطابع الوقت العالمي
   // (Date.getTime() أصلًا عالمي دايمًا بغض النظر عن توقيت جهاز المستخدم، ما بيحتاج أي تصحيح إضافي
+  // 🍽️ نافذة خصم وجبة الموظف: من 10 صباحًا لحد 3 فجرًا (وقت عمل المطعم الفعلي). أي طلب "وجبة
+  // موظف" برّه هالنطاق (بين 3 و10 صباحًا) ما بياخد خصم إطلاقًا، بغض النظر هل أخذ خصمه اليوم أو لأ.
+  function isWithinMealDiscountWindow(){
+    const amman = new Date(Date.now() + 3*60*60000);
+    const h = amman.getUTCHours();
+    return h >= 10 || h < 3; // 10:00 → 23:59 أو 00:00 → 02:59
+  }
+  // 🍽️ بداية "النطاق" الحالي (مش بداية اليوم التقويمي) — عشان "مرة وحدة بالخصم" تتحسب صح
+  // حتى لو النطاق عدّى منتصف الليل. مثلاً أكل الساعة 11 مساءً وبعدين الساعة 1 فجرًا — نفس
+  // النطاق المتواصل (بلّش الساعة 10ص أمس)، فمفروض ما ياخد خصم تاني، رغم إنهم "يومين" بالتقويم.
+  function getMealWindowStart(){
+    const amman = new Date(Date.now() + 3*60*60000);
+    const h = amman.getUTCHours();
+    const todayStr = amman.toISOString().split('T')[0];
+    if(h >= 10){
+      return todayStr+'T10:00:00+03:00'; // النطاق بلّش اليوم الساعة 10ص
+    } else {
+      // لسا قبل الساعة 10 صباحًا — يعني إحنا بنطاق بلّش أمس الساعة 10ص
+      const yesterdayStr = addDaysStr(todayStr, -1);
+      return yesterdayStr+'T10:00:00+03:00';
+    }
+  }
   // — الطريقة القديمة كانت تضيف getTimezoneOffset() بالغلط فوق كمان، وهاد كان يعطي تاريخ غلط
   // حسب توقيت جهاز المستخدم نفسه، فيستبعد آخر يوم دوام من حساب HR أحيانًا)
   function localTodayStr(){
@@ -11699,7 +11733,11 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
         else { endTime = new Date(b.started_at); endTime.setHours(23,59,59,999); }
       }
       const mins = (endTime-new Date(b.started_at))/60000;
-      byDay[day] = (byDay[day]||0) + Math.max(0, mins);
+      // 🛡️ حماية دائمة: أي بريك واحد (مهما كان السبب — نسيان، خلل، تصحيح بيانات غلط زي يلي صار)
+      // ما بيُحسب بأكتر من 4 ساعات (240 دقيقة) كحد أقصى مطلق. هيك حتى لو صار خطأ بالبيانات
+      // بالمستقبل، أسوأ ضرر ممكن يصير هو خصم كذا ساعة، مش مئات الساعات زي يلي صار بمحمد وحمزة وعبدالرحمن.
+      const cappedMins = Math.min(mins, 240);
+      byDay[day] = (byDay[day]||0) + Math.max(0, cappedMins);
     });
     let excessMin = 0;
     Object.values(byDay).forEach(mins=>{ if(mins>limit) excessMin += (mins-limit); });
@@ -16291,6 +16329,44 @@ try {
     }, 80);
   }
 
+  async function renderGeoExcursions(){
+    const C = document.getElementById('admContent');
+    C.innerHTML = '<div class="empty-note">... جاري التحميل</div>';
+    try{
+      const { data, error } = await db.from('hr_geofence_excursions').select('*').eq('dismissed', false).order('started_at',{ascending:false}).limit(300);
+      if(error){ C.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message)} — تأكد نفّذتي SQL جدول hr_geofence_excursions</div>`; return; }
+      const rows = data||[];
+      C.innerHTML = `
+        <div style="font-size:.85rem;color:var(--muted);font-weight:700;margin-bottom:12px">
+          هون بتشوفي أي موظف خرج من نطاق العمل المسموح وقت ما كان مسجّل دخول — بدون ما ينسجّل خروجه تلقائيًا (هو بس يقدر يسجّل خروجه بنفسه). دوسي "🗑️ حذف من هون" بعد ما تراجعي السجل — بيختفي من عندك بس بيضل محفوظ بالأرشيف.
+        </div>
+        <div class="tbl-wrap"><table class="tbl">
+          <tr><th>الموظف</th><th>خرج الساعة</th><th>رجع/انتهى الساعة</th><th>المدة</th><th></th></tr>
+          ${rows.map(r=>{
+            const start = new Date(r.started_at);
+            const end = r.ended_at ? new Date(r.ended_at) : null;
+            const durMin = Math.round(((end||new Date())-start)/60000);
+            const h = Math.floor(durMin/60), m = durMin%60;
+            return `<tr>
+              <td><b>${esc(r.employee_name)}</b></td>
+              <td>${start.toLocaleString('ar-JO',{dateStyle:'short',timeStyle:'short'})}</td>
+              <td>${end ? end.toLocaleString('ar-JO',{dateStyle:'short',timeStyle:'short'}) : '<span style="color:var(--red);font-weight:800">🔴 لسا برّه</span>'}</td>
+              <td>${h>0?h+' سا ':''}${m} دقيقة</td>
+              <td><button class="mini del" onclick="dismissGeoExcursion('${r.id}')">🗑️ حذف من هون</button></td>
+            </tr>`;
+          }).join('') || '<tr><td colspan="5" class="empty-note">ما في أي خروج من النطاق مسجّل حاليًا 🎉</td></tr>'}
+        </table></div>`;
+    }catch(e){ C.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message)}</div>`; console.error(e); }
+  }
+  async function dismissGeoExcursion(id){
+    // 🗄️ "حذف" هون معناها أرشفة بس (dismissed=true) — السجل بيضل محفوظ بقاعدة البيانات للأبد،
+    // بس بيختفي من هاي القائمة عشان ما تراجعيه مرتين
+    try{
+      const { error } = await db.from('hr_geofence_excursions').update({ dismissed: true }).eq('id', id);
+      if(error){ toast('✗ '+error.message); return; }
+      toast('✓ اتحذف من القائمة (محفوظ بالأرشيف)'); renderGeoExcursions();
+    }catch(e){ toast('✗ '+e.message); }
+  }
   async function renderHrLocations(){
     const C = document.getElementById('admContent');
     C.innerHTML = '<div class="empty-note">... جاري التحميل</div>';
@@ -16785,13 +16861,19 @@ try {
         }
         const geo = await getGeo();
         const fence = await checkGeofence(geo.lat, geo.lng, EMP.id);
+        // 📍 مصلّحة بطلب صاحبة المطعم: الجهاز ما عاد يسجّل خروج تلقائي لمجرد الخروج من النطاق —
+        // بس بيسجّل/يحدّث "خرجة" (excursion) بجدول منفصل للمراجعة، وهي يلي بتقرر تحذفها (تؤرشفها)
+        // بعد ما تشوفها. تسجيل الخروج الحقيقي بيصير بس لما الموظف نفسه يدوس زر "تسجيل خروج".
         if(!fence.ok){
-          await protectedWrite('hr_time_logs', 'update', {
-            clock_out: new Date().toISOString(), lat_out: geo.lat, lng_out: geo.lng,
-          }, { id: EMP_OPEN_LOG.id });
-          stopGeofenceWatch();
-          alert('⚠️ سُجّل خروجك تلقائيًا لأنك خرجت من نطاق العمل المسموح.');
-          loadEmpPortal();
+          if(!window.__empOpenExcursionId){
+            const { data: exc } = await db.from('hr_geofence_excursions').insert({
+              employee_id: EMP.id, employee_name: EMP.name, time_log_id: EMP_OPEN_LOG.id, started_at: new Date().toISOString()
+            }).select().single();
+            if(exc) window.__empOpenExcursionId = exc.id;
+          }
+        } else if(window.__empOpenExcursionId){
+          await db.from('hr_geofence_excursions').update({ ended_at: new Date().toISOString() }).eq('id', window.__empOpenExcursionId);
+          window.__empOpenExcursionId = null;
         }
       }catch(e){ console.error('geofence check failed:', e); }
     }, 10000);
@@ -16982,6 +17064,10 @@ try {
         clock_out: new Date().toISOString(), lat_out: geo.lat, lng_out: geo.lng
       }, { id: EMP_OPEN_LOG.id });
       if(error){ toast('✗ '+error.message); return; }
+      if(window.__empOpenExcursionId){
+        await db.from('hr_geofence_excursions').update({ ended_at: new Date().toISOString() }).eq('id', window.__empOpenExcursionId);
+        window.__empOpenExcursionId = null;
+      }
       toast('✅ تم تسجيل الخروج');
       loadEmpPortal();
     }catch(e){ toast('⛔ '+e.message); }
