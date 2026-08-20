@@ -8214,6 +8214,7 @@
             </select>
           </div>
           <button class="mini ok" onclick="generateReport()" style="height:41px">📊 توليد التقرير</button>
+          <button class="mini ok" style="background:#1D6F42;height:41px" onclick="exportOrdersExcel()">📥 تصدير الطلبات (Excel)</button>
         </div>
       </div>
       <div id="reportResult"></div>
@@ -8241,6 +8242,62 @@
     const dt = new Date(Date.UTC(y, m-1, d));
     dt.setUTCDate(dt.getUTCDate()+n);
     return dt.toISOString().split('T')[0];
+  }
+  async function exportOrdersExcel(){
+    const from = document.getElementById('rep_from')?.value;
+    const to = document.getElementById('rep_to')?.value;
+    const branchId = document.getElementById('rep_branch')?.value || '';
+    if(!from || !to){ toast('⚠️ حددي الفترة أول (من تاريخ - لغاية تاريخ) فوق'); return; }
+    try{
+      toast('⏳ جاري تجهيز الملف (ممكن ياخد شوي حسب عدد الطلبات)...');
+      // 🔧 نفس أسلوب الصفحات (بدون حد أقصى) يلي استخدمناه بباقي التقارير — يجيب كل الطلبات
+      // مهما كان عددها، بدون ما يتقطع عند حد الـ1000 صف الافتراضي.
+      let all = [];
+      {
+        let rf = 0; const rp = 1000;
+        while(true){
+          let q = db.from('orders').select('order_number, total, subtotal, discount, delivery_fee, payment_method, order_type, status, employee_tab_name, platform_id, created_at, branches(name_ar), order_items(item_name, quantity, unit_price)')
+            .gte('created_at', localDayStart(from)).lt('created_at', localDayStart(addDaysStr(to,1))).range(rf, rf+rp-1);
+          if(branchId) q = q.eq('branch_id', branchId);
+          const { data: rd, error: re } = await q;
+          if(re){ toast('✗ '+re.message); console.error(re); return; }
+          if(!rd || !rd.length) break;
+          all = all.concat(rd);
+          if(rd.length < rp) break;
+          rf += rp;
+        }
+      }
+      if(!all.length){ toast('⚠️ ما في طلبات بهاي الفترة'); return; }
+      const rows = [];
+      all.forEach(o=>{
+        const items = o.order_items||[];
+        const localTime = new Date(o.created_at);
+        const timeStr = localTime.toLocaleString('ar-EG', { timeZone:'Asia/Amman', dateStyle:'short', timeStyle:'short' });
+        if(!items.length){
+          rows.push({ 'رقم الطلب':o.order_number, 'الفرع':o.branches?.name_ar||'—', 'الوقت':timeStr, 'الصنف':'—', 'الكمية':'', 'سعر الوحدة':'', 'الإجمالي':o.total, 'طريقة الدفع':o.payment_method||'', 'نوع الطلب':o.order_type||'', 'الحالة':o.status||'' });
+          return;
+        }
+        items.forEach((li,idx)=>{
+          rows.push({
+            'رقم الطلب': idx===0?o.order_number:'',
+            'الفرع': idx===0?(o.branches?.name_ar||'—'):'',
+            'الوقت': idx===0?timeStr:'',
+            'الصنف': li.item_name,
+            'الكمية': li.quantity,
+            'سعر الوحدة': li.unit_price,
+            'الإجمالي': idx===0?o.total:'',
+            'طريقة الدفع': idx===0?(o.payment_method||''):'',
+            'نوع الطلب': idx===0?(o.order_type||''):'',
+            'الحالة': idx===0?(o.status||''):'',
+          });
+        });
+      });
+      const ws = XLSX.utils.json_to_sheet(rows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'الطلبات');
+      XLSX.writeFile(wb, 'طلبات_'+from+'_الى_'+to+'.xlsx');
+      toast('✓ تم التصدير — '+all.length+' طلب');
+    }catch(e){ toast('✗ '+e.message); console.error(e); }
   }
   async function generateReport(){
     const from = document.getElementById('rep_from')?.value;
@@ -8399,6 +8456,7 @@
         <button class="mini ok" onclick="printReport()">🖨️ طباعة التقرير</button>
         <button class="mini" style="background:#0d6efd;color:#fff" onclick="downloadReportPDF()">⬇️ تحميل PDF</button>
         <button class="mini" style="background:#7b2cbf;color:#fff" onclick="generateAIInsights()">🤖 تحليل ذكي (AI)</button>
+        <button class="mini" style="background:#0f766e;color:#fff" onclick="generateStaffScheduleAI()">🤖 أفضل جدول دوام (AI)</button>
         <button class="mini edit" onclick="openAISettings()" title="إعدادات المفتاح والموديل">⚙️</button>
       </div>
     </div>`;
@@ -8713,6 +8771,109 @@
     localStorage.setItem('sjs_ai_key', key);
     localStorage.setItem('sjs_ai_model', model||'claude-sonnet-4-6');
     closeModal(); toast('✓ انحفظت الإعدادات');
+  }
+  async function generateStaffScheduleAI(){
+    const key = localStorage.getItem('sjs_ai_key');
+    if(!key){ openAISettings(); return; }
+    const from = window.__repFrom, to = window.__repTo, branchId = window.__repBranch;
+    if(!from||!to){ toast('⚠️ ولّدي تقرير أول (حددي الفترة فوق) عشان نحدد فترة التحليل'); return; }
+    const box = document.getElementById('reportResult');
+    let aiBox = document.getElementById('aiInsightsBox');
+    if(!aiBox && box){ box.insertAdjacentHTML('afterbegin', '<div id="aiInsightsBox" class="panel" style="margin-bottom:14px;border:2px solid #0f766e"></div>'); aiBox = document.getElementById('aiInsightsBox'); }
+    if(aiBox) aiBox.innerHTML = '<div class="empty-note">🤖 جاري تحليل ساعات وأيام الشغل السابقة... (ممكن ياخد لحظات)</div>';
+    try{
+      // 1) نجيب كل الطلبات بالفترة (بدون حد أقصى) عشان نحسب حجم المبيعات لكل ساعة ولكل يوم بالأسبوع
+      let orders = [];
+      {
+        let rf = 0; const rp = 1000;
+        while(true){
+          let q = db.from('orders').select('total, created_at').gte('created_at', localDayStart(from)).lt('created_at', localDayStart(addDaysStr(to,1))).neq('status','cancelled').range(rf, rf+rp-1);
+          if(branchId) q = q.eq('branch_id', branchId);
+          const { data: rd, error: re } = await q;
+          if(re) throw re;
+          if(!rd || !rd.length) break;
+          orders = orders.concat(rd);
+          if(rd.length < rp) break;
+          rf += rp;
+        }
+      }
+      if(!orders.length){ if(aiBox) aiBox.innerHTML = '<div class="empty-note">ما في طلبات كفاية بهاي الفترة للتحليل</div>'; return; }
+      const DAY_AR = ['الأحد','الإثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت'];
+      const byHour = Array(24).fill(0).map(()=>({count:0,total:0}));
+      const byDay = Array(7).fill(0).map(()=>({count:0,total:0}));
+      const byDayHour = {}; // 'day-hour' -> {count,total}
+      orders.forEach(o=>{
+        const localStr = new Date(o.created_at).toLocaleString('en-US',{timeZone:'Asia/Amman',hour12:false,weekday:'short',hour:'2-digit'});
+        const d = new Date(new Date(o.created_at).toLocaleString('en-US',{timeZone:'Asia/Amman'}));
+        const day = d.getDay(), hour = d.getHours();
+        byHour[hour].count++; byHour[hour].total += parseFloat(o.total||0);
+        byDay[day].count++; byDay[day].total += parseFloat(o.total||0);
+        const k = day+'-'+hour;
+        if(!byDayHour[k]) byDayHour[k] = {count:0,total:0};
+        byDayHour[k].count++; byDayHour[k].total += parseFloat(o.total||0);
+      });
+      // 2) نجيب ساعات الحضور الفعلية المسجّلة بنفس الفترة (بوابة + يدوي) عشان الذكاء الاصطناعي يشوف
+      // كيف التغطية الحالية موزّعة مقارنة بحجم المبيعات الفعلي
+      let attRows = [], logRows = [];
+      {
+        const [{data:ar},{data:lr}] = await Promise.all([
+          db.from('hr_attendance').select('work_date, hours').gte('work_date', from).lte('work_date', to),
+          db.from('hr_time_logs').select('clock_in, clock_out').gte('clock_in', localDayStart(from)).lt('clock_in', localDayStart(addDaysStr(to,1))).not('clock_out','is',null),
+        ]);
+        attRows = ar||[]; logRows = lr||[];
+      }
+      const totalManualHours = attRows.reduce((a,x)=>a+parseFloat(x.hours||0),0);
+      const totalPortalHours = logRows.reduce((a,l)=>a+((new Date(l.clock_out)-new Date(l.clock_in))/3600000),0);
+
+      const hourlySummary = byHour.map((h,i)=>`الساعة ${i}:00 — عدد الطلبات: ${h.count} — المبيعات: ${h.total.toFixed(1)} ${CURRENCY}`).join('\n');
+      const dailySummary = byDay.map((d,i)=>`${DAY_AR[i]} — عدد الطلبات: ${d.count} — المبيعات: ${d.total.toFixed(1)} ${CURRENCY}`).join('\n');
+      const peakSummary = Object.entries(byDayHour).sort((a,b)=>b[1].total-a[1].total).slice(0,15)
+        .map(([k,v])=>{ const [d,h]=k.split('-'); return DAY_AR[d]+' الساعة '+h+':00 — '+v.count+' طلب — '+v.total.toFixed(1)+' '+CURRENCY; }).join('\n');
+
+      const summary = `بيانات مطعم "Saber JO Snack" لتحليل جدول الدوام الأمثل، للفترة من ${from} إلى ${to}${branchId?' (فرع محدد)':' (كل الفروع)'}:
+
+إجمالي عدد الطلبات بالفترة: ${orders.length}
+
+توزيع المبيعات حسب ساعة اليوم (24 ساعة):
+${hourlySummary}
+
+توزيع المبيعات حسب يوم الأسبوع:
+${dailySummary}
+
+أعلى 15 نقطة ذروة (يوم+ساعة) من حيث المبيعات:
+${peakSummary}
+
+إجمالي ساعات العمل المسجّلة لكل الموظفين بنفس الفترة (يدوي + بوابة): ${(totalManualHours+totalPortalHours).toFixed(1)} ساعة`;
+
+      const model = localStorage.getItem('sjs_ai_model')||'claude-sonnet-4-6';
+      const resp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': key,
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-direct-browser-access': 'true'
+        },
+        body: JSON.stringify({
+          model: model,
+          max_tokens: 1400,
+          messages: [{ role:'user', content:
+            'إنتِ خبير تشغيل مطاعم (Operations). حللي بيانات ساعات وأيام المبيعات التالية واقترحي جدول دوام أمثل بالعربي (فصحى بسيطة، فقرات وعناوين واضحة بدون رموز markdown معقدة)، يغطي:\n'+
+            '1) أوقات الذروة الحقيقية (أي أيام وساعات محتاجة أكبر عدد موظفين)\n'+
+            '2) أوقات الهدوء (ممكن تخفيف عدد الموظفين فيها لتوفير تكلفة)\n'+
+            '3) اقتراح شكل عملي لجدول الدوام الأسبوعي (كم شيفت، بأي أوقات تقريبًا، وكم موظف بكل شيفت) بناءً على حجم المبيعات\n'+
+            '4) أي ملاحظة على التوازن بين ساعات العمل المسجّلة حاليًا وحجم المبيعات الفعلي (هل في تكديس موظفين بوقت هادئ أو نقص بوقت ذروة)\n'+
+            '5) 3 توصيات عملية محددة لتقوية التشغيل.\n\n'+summary }]
+        })
+      });
+      const data = await resp.json();
+      if(data.error){ throw new Error(data.error.message||'خطأ من Anthropic'); }
+      const text = data.content?.[0]?.text || 'ما قدرت أحلل';
+      if(aiBox) aiBox.innerHTML = `<h3 style="color:#0f766e;margin-bottom:8px">🤖 أفضل جدول دوام مقترح</h3><div style="white-space:pre-line;line-height:1.8;font-size:.92rem">${esc(text)}</div>`;
+    }catch(e){
+      if(aiBox) aiBox.innerHTML = '<div class="alert-red">⚠️ '+esc(e.message||'فشل التحليل')+'</div>';
+      console.error(e);
+    }
   }
   async function generateAIInsights(){
     const key = localStorage.getItem('sjs_ai_key');
