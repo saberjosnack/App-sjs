@@ -16843,10 +16843,19 @@ try {
   async function empToggleBreak(){
     if(!EMP_OPEN_LOG){ toast('⚠️ لازم تكون مسجل دخول'); return; }
     try{
-      if(window.__empActiveBreak){
-        const { error } = await db.from('hr_breaks').update({ ended_at: new Date().toISOString() }).eq('id', window.__empActiveBreak.id);
-        if(error){ toast('✗ '+error.message); return; }
-        toast('✓ رجعت من البريك'); loadEmpPortal();
+      // 🔧 مصلّحة: كان الزر بيعتمد على نسخة محفوظة بالذاكرة (window.__empActiveBreak) بدل ما
+      // يتأكد من قاعدة البيانات مباشرة لحظة الضغط — لو صار أي خلل عابر (تقطيع نت، دبل كبسة)،
+      // كان البريك يضل "مفتوح" للأبد بدون ما يظهر أي خطأ واضح، وهاد كان بيمنع موظفين تانيين
+      // من أخذ بريك بنفس الفرع (لأنه النظام كان لسا يعتقد فيه حدا مفتوح البريك).
+      // هلق منتحقق فريش من القاعدة، ومنقفل أي بريكات مفتوحة عالقة (مش وحدة بس) كل مرة.
+      const { data: openBreaks } = await db.from('hr_breaks').select('id').eq('time_log_id', EMP_OPEN_LOG.id).is('ended_at', null);
+      if(openBreaks && openBreaks.length){
+        const nowIso = new Date().toISOString();
+        const { error } = await db.from('hr_breaks').update({ ended_at: nowIso }).in('id', openBreaks.map(b=>b.id));
+        if(error){ toast('✗ '+error.message); console.error(error); return; }
+        window.__empActiveBreak = null;
+        toast('✓ رجعت من البريك'+(openBreaks.length>1?' (وصلّحنا '+openBreaks.length+' سجلات عالقة)':''));
+        loadEmpPortal();
         return;
       }
       const { data } = await db.from('hr_breaks').select('started_at, ended_at').eq('time_log_id', EMP_OPEN_LOG.id).order('started_at',{ascending:false});
@@ -16866,9 +16875,18 @@ try {
         }
       }
       // 🚫 ممنوع أكتر من موظف ياخد بريك بنفس الوقت بنفس الفرع
+      // 🔧 مصلّحة: لو صار خلل قديم وضل بريك "مفتوح" بالغلط (من قبل تصليح اليوم)، كان بيقفل الفرع
+      // بالكامل عن أخذ أي بريك جديد للأبد. هلق منتجاهل أي بريك "مفتوح" أقدم من 3 ساعات (مستحيل
+      // منطقيًا يكون بريك حقيقي مستمر)، ونقفلها تلقائيًا بالخلفية بدل ما تضل عالقة.
       if(EMP.branch_id){
-        const { data: activeBreaks } = await db.from('hr_breaks').select('employee_id, meal_names(name, branch_id)').is('ended_at', null);
-        const conflict = (activeBreaks||[]).find(b=>b.employee_id!==EMP.id && b.meal_names?.branch_id===EMP.branch_id);
+        const { data: activeBreaks } = await db.from('hr_breaks').select('id, employee_id, started_at, meal_names(name, branch_id)').is('ended_at', null);
+        const staleThreshold = new Date(Date.now() - 3*3600000);
+        const stale = (activeBreaks||[]).filter(b=>new Date(b.started_at) < staleThreshold);
+        if(stale.length){
+          await db.from('hr_breaks').update({ ended_at: new Date().toISOString() }).in('id', stale.map(b=>b.id));
+        }
+        const staleIds = new Set(stale.map(b=>b.id));
+        const conflict = (activeBreaks||[]).find(b=>!staleIds.has(b.id) && b.employee_id!==EMP.id && b.meal_names?.branch_id===EMP.branch_id);
         if(conflict){ toast('⛔ '+(conflict.meal_names?.name||'موظف تاني')+' عم ياخد بريك هلأ من نفس فرعك — استنى يرجع أول'); return; }
       }
       const { error } = await db.from('hr_breaks').insert({ time_log_id: EMP_OPEN_LOG.id, employee_id: EMP.id });
