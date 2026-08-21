@@ -3136,6 +3136,9 @@
   }
   function totals(){
     const sub = cart.reduce((s,l)=>s + l.item.price*l.qty, 0);
+    // 🚫 بعض الأصناف ممكن تكون مستبعدة من خصم وجبة الموظف (من إعدادات الصنف نفسه) — بتحتسب
+    // كامل السعر حتى لو الفاتورة كلها "وجبة موظف"
+    const discountableSub = cart.reduce((s,l)=>s + (l.item.exclude_employee_discount ? 0 : l.item.price*l.qty), 0);
     let disc = 0, lbl = '';
     const isEmpMeal = document.getElementById('empMealChk')?.checked;
     if(isEmpMeal){
@@ -3152,8 +3155,8 @@
         disc = 0;
         lbl = '(وجبة موظف — برّه وقت الخصم المسموح 10ص-3ف، بدون خصم)';
       } else {
-        disc = sub * discPct/100;
-        lbl = '(وجبة موظف '+discPct+'%)';
+        disc = discountableSub * discPct/100;
+        lbl = discountableSub<sub ? '(وجبة موظف '+discPct+'% — بعض الأصناف مستبعدة من الخصم)' : '(وجبة موظف '+discPct+'%)';
       }
     } else if(appliedCode){
       disc = appliedCode.kind==='percent' ? sub*appliedCode.value/100 : +appliedCode.value;
@@ -15251,7 +15254,7 @@ try {
     } catch(e) { console.error(e); }
   }
   async function toggleCode(id,v){ try { const r=await db.from('discount_codes').update({is_active:v}).eq('id',id); if(r.error){toast('✗ '+r.error.message);console.error(r.error);return;} toast(v?'✓ فعال':'✓ موقوف'); renderAdmin(); } catch(e) { toast('✗ '+e.message); console.error(e); } }
-  function itemForm(id){ const it=ITEMS.find(x=>x.id===id)||{}; modal(`<h3>${id?'تعديل صنف':'صنف جديد'}</h3><div class="fld"><label>اسم الصنف</label><input id="f_nm" value="${esc(it.name_ar||'')}"></div><div class="fld"><label>السعر</label><input id="f_pr" inputmode="decimal" value="${it.price??''}"></div><div class="fld"><label>التكلفة (اختياري — لحساب الأرباح)</label><input id="f_cost" inputmode="decimal" value="${it.cost??''}"></div><div class="fld"><label>صورة الصنف (اختياري)</label><input type="file" id="f_img" accept="image/*" onchange="resizeItemImage(this)"><div id="f_imgPrev" style="margin-top:6px">${it.image_url?`<img src="${it.image_url}" style="width:76px;height:76px;object-fit:cover;border-radius:10px;border:1px solid var(--line)"> <button type="button" class="mini del" onclick="window.__itemImg='';document.getElementById('f_imgPrev').innerHTML='(انحذفت)'">حذف</button>`:''}</div></div><div class="fld"><label>التصنيف</label><select id="f_cat"><option value="">— بدون —</option>${CATS.map(c=>`<option ${c.name_ar===it.category?'selected':''}>${esc(c.name_ar)}</option>`).join('')}</select></div><div class="fld"><label>الترتيب</label><input id="f_so" inputmode="numeric" value="${it.sort_order??0}"></div><div class="fld"><label>🧩 نوع الصنف</label><select id="f_type"><option value="simple" ${(!it.item_type||it.item_type==='simple')?'selected':''}>عادي</option><option value="composite" ${it.item_type==='composite'?'selected':''}>مركّب (وجبة عائلية بمكونات قابلة للاختيار)</option></select>
+  function itemForm(id){ const it=ITEMS.find(x=>x.id===id)||{}; modal(`<h3>${id?'تعديل صنف':'صنف جديد'}</h3><div class="fld"><label>اسم الصنف</label><input id="f_nm" value="${esc(it.name_ar||'')}"></div><div class="fld"><label>السعر</label><input id="f_pr" inputmode="decimal" value="${it.price??''}"></div><div class="fld"><label>التكلفة (اختياري — لحساب الأرباح)</label><input id="f_cost" inputmode="decimal" value="${it.cost??''}"></div><div class="fld"><label class="chk"><input type="checkbox" id="f_noEmpDisc" ${it.exclude_employee_discount?'checked':''}> استبعاد هاد الصنف من خصم وجبة الموظف (بيتحسب سعر كامل حتى بطلب "وجبة موظف")</label></div><div class="fld"><label>صورة الصنف (اختياري)</label><input type="file" id="f_img" accept="image/*" onchange="resizeItemImage(this)"><div id="f_imgPrev" style="margin-top:6px">${it.image_url?`<img src="${it.image_url}" style="width:76px;height:76px;object-fit:cover;border-radius:10px;border:1px solid var(--line)"> <button type="button" class="mini del" onclick="window.__itemImg='';document.getElementById('f_imgPrev').innerHTML='(انحذفت)'">حذف</button>`:''}</div></div><div class="fld"><label>التصنيف</label><select id="f_cat"><option value="">— بدون —</option>${CATS.map(c=>`<option ${c.name_ar===it.category?'selected':''}>${esc(c.name_ar)}</option>`).join('')}</select></div><div class="fld"><label>الترتيب</label><input id="f_so" inputmode="numeric" value="${it.sort_order??0}"></div><div class="fld"><label>🧩 نوع الصنف</label><select id="f_type"><option value="simple" ${(!it.item_type||it.item_type==='simple')?'selected':''}>عادي</option><option value="composite" ${it.item_type==='composite'?'selected':''}>مركّب (وجبة عائلية بمكونات قابلة للاختيار)</option></select>
       ${id?`<div style="margin-top:6px"><button type="button" class="mini ok" onclick="openCompositeManagerSafely('${id}','${esc(it.name_ar||'')}')">🧩 إدارة تركيبة الوجبة</button></div>`:'<div style="font-size:.78rem;color:var(--muted);margin-top:4px">احفظ الصنف الأول، وبعدين افتحه من جديد لتضيف تركيبته</div>'}</div><div class="m-act"><button class="save" onclick="saveItem('${id||''}')">حفظ</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`); }
   // 🔒 يحفظ نوع الصنف "مركّب" فورًا قبل ما يفتح شاشة التركيبة — عشان ما يصير إنه يضيف مكونات
   // بس ينسى يحفظ نموذج الصنف نفسه، فيضل الصنف "عادي" بقاعدة البيانات وما يشتغل صح بالكاشير
@@ -15287,7 +15290,7 @@ try {
     const f_so = document.getElementById('f_so');
     const f_cost = document.getElementById('f_cost');
     const f_type = document.getElementById('f_type');
-    const rec={name_ar: f_nm ? f_nm.value.trim() : '', category: f_cat ? f_cat.value||null : null, price: f_pr ? parseFloat(f_pr.value) : 0, cost: f_cost && f_cost.value ? parseFloat(f_cost.value)||0 : 0, sort_order: f_so ? parseInt(f_so.value)||0 : 0, item_type: f_type ? f_type.value : 'simple'};
+    const rec={name_ar: f_nm ? f_nm.value.trim() : '', category: f_cat ? f_cat.value||null : null, price: f_pr ? parseFloat(f_pr.value) : 0, cost: f_cost && f_cost.value ? parseFloat(f_cost.value)||0 : 0, sort_order: f_so ? parseInt(f_so.value)||0 : 0, item_type: f_type ? f_type.value : 'simple', exclude_employee_discount: document.getElementById('f_noEmpDisc')?.checked||false};
     if(window.__itemImg !== undefined){ rec.image_url = window.__itemImg || null; }
     window.__itemImg = undefined;
     if(!rec.name_ar||!(rec.price>0)){ toast('⚠️ الاسم وسعر صحيح'); return; }
@@ -16852,7 +16855,17 @@ try {
           const [fh,fm] = (EMP.shift_window_from||'00:00').split(':').map(Number); const fromMin = fh*60+fm;
           const pastCloseTime = fromMin<=toMin ? (nowMin>toMin) : (nowMin>toMin && nowMin<fromMin);
           if(pastCloseTime){
-            await protectedWrite('hr_time_logs', 'update', { clock_out: new Date().toISOString() }, { id: EMP_OPEN_LOG.id });
+            // 🔧 مصلّحة: كان الإغلاق التلقائي يستخدم "الوقت الحالي" كوقت خروج — لو الموظف ما فتح
+            // التطبيق يومين مثلًا، كان "الوقت الحالي" يصير بعد يومين من دوامه الحقيقي، فيسجّل
+            // ساعات وهمية (24+ ساعة) بدل ما يقفل بوقت دوامه الفعلي المحدد. هلق منحسب وقت إغلاق
+            // منطقي: نفس يوم الدخول (أو اليوم يلي بعده لو الدوام عدّى نص الليل) عند وقت الطلوع المحدد.
+            const clockInDate = new Date(EMP_OPEN_LOG.clock_in);
+            const sensibleClose = new Date(clockInDate);
+            sensibleClose.setHours(th, tm, 0, 0);
+            if(sensibleClose <= clockInDate) sensibleClose.setDate(sensibleClose.getDate()+1);
+            // لو حتى الوقت المنطقي هاد صار بالمستقبل (نادر، بس للأمان)، نستخدم الوقت الحالي بدله
+            const closeAt = sensibleClose > now ? now : sensibleClose;
+            await protectedWrite('hr_time_logs', 'update', { clock_out: closeAt.toISOString() }, { id: EMP_OPEN_LOG.id });
             stopGeofenceWatch();
             alert('⏰ سُجّل خروجك تلقائيًا لأنك تجاوزت وقت دوامك المحدد ('+EMP.shift_window_to+').');
             loadEmpPortal();
