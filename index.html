@@ -13840,9 +13840,19 @@ window.__lastEmpMealsData = null;
       const fd = getFinancialDay();
       const { data, error } = await db.from('orders').select('customer_id').gte('created_at', fd.from).lte('created_at', fd.to).not('customer_id','is',null).neq('status','cancelled');
       if(error){ toast('✗ '+error.message); return; }
-      const todayIds = new Set((data||[]).map(o=>o.customer_id));
-      if(!todayIds.size){ toast('⚠️ ما في عملاء طلبوا اليوم لسا'); return; }
-      const todayList = TOP_CUST_ALL.filter(c=>todayIds.has(c.id));
+      const todayIds = [...new Set((data||[]).map(o=>o.customer_id))];
+      if(!todayIds.length){ toast('⚠️ ما في عملاء طلبوا اليوم لسا'); return; }
+      // 🔧 نفس تصليح فلتر التاريخ — نجيب العملاء مباشرة من قاعدة البيانات بدل الاعتماد على قائمة محمّلة مسبقًا
+      let todayList = [];
+      {
+        const chunkSize = 200;
+        for(let i=0; i<todayIds.length; i+=chunkSize){
+          const chunk = todayIds.slice(i, i+chunkSize);
+          const { data: rows, error: e2 } = await db.from('customers').select('*').in('id', chunk);
+          if(e2){ toast('✗ '+e2.message); return; }
+          todayList = todayList.concat(rows||[]);
+        }
+      }
       TOP_CUST_DATA = todayList;
       CUST_SELECTED.clear();
       todayList.forEach(c=>CUST_SELECTED.add(c.id));
@@ -13861,9 +13871,21 @@ window.__lastEmpMealsData = null;
       const to = localDayStart(addDaysStr(dateStr,1));
       const { data, error } = await db.from('orders').select('customer_id').gte('created_at', from).lt('created_at', to).not('customer_id','is',null).neq('status','cancelled');
       if(error){ toast('✗ '+error.message); return; }
-      const dayIds = new Set((data||[]).map(o=>o.customer_id));
-      if(!dayIds.size){ toast('⚠️ ما في عملاء طلبوا بهاد التاريخ'); return; }
-      const dayList = TOP_CUST_ALL.filter(c=>dayIds.has(c.id));
+      const dayIds = [...new Set((data||[]).map(o=>o.customer_id))];
+      if(!dayIds.length){ toast('⚠️ ما في عملاء طلبوا بهاد التاريخ'); return; }
+      // 🔧 مصلّحة: كان بيدوّر بس جوا TOP_CUST_ALL (قائمة محمّلة مسبقًا بشاشة "أفضل العملاء") —
+      // لو الفلتر انضغط قبل ما هاي القائمة تخلص تحميلها بالكامل، كانت النتيجة تطلع ناقصة جدًا.
+      // هلق منجيب بيانات العملاء مباشرة من قاعدة البيانات بالـID، بدون أي اعتماد على تحميل سابق.
+      let dayList = [];
+      {
+        const chunkSize = 200; // نتجنب رابط طويل جدًا لو كان اليوم فيه مئات العملاء
+        for(let i=0; i<dayIds.length; i+=chunkSize){
+          const chunk = dayIds.slice(i, i+chunkSize);
+          const { data: rows, error: e2 } = await db.from('customers').select('*').in('id', chunk);
+          if(e2){ toast('✗ '+e2.message); return; }
+          dayList = dayList.concat(rows||[]);
+        }
+      }
       TOP_CUST_DATA = dayList;
       CUST_SELECTED.clear();
       dayList.forEach(c=>CUST_SELECTED.add(c.id));
