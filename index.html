@@ -7956,6 +7956,13 @@
     if(!window.__PT_EXPORT_ROWS || !window.__PT_EXPORT_ROWS.length){ toast('⚠️ ما في بيانات نصدّرها'); return; }
     exportToExcel(window.__PT_EXPORT_ROWS, 'خط_سير_'+(window.__PT_EXPORT_NAME||'منتج')+'_'+new Date().toISOString().split('T')[0], 'خط السير');
   }
+  // 📋 بتستخرج "الفعلي" (الرقم يلي عدّه الموظف/المالك بإيده) من نص ملاحظة تصحيح الجرد المحفوظة، مثلًا
+  // "تصحيح جرد (المتوقع 63 ← الفعلي 70)" ← بترجع 70. بترجع null لو النص مش بصيغة تصحيح جرد معروفة.
+  function auditActualFromNote(note){
+    if(!note) return null;
+    const m = /الفعلي\s*(-?[\d.]+)/.exec(note);
+    return m ? parseFloat(m[1]) : null;
+  }
   async function loadProductTimeline(){
     const R = document.getElementById('pt_result'); if(!R) return;
     R.innerHTML = '<div class="empty-note">... جاري التحميل</div>';
@@ -7971,18 +7978,32 @@
       // 🔧 مصلّحة: الطريقة القديمة كانت تاخد "الرصيد الحالي الآن" وتطرح منه صافي حركات الفترة بس، وهاي
       // كانت تطلع صحيحة بس لو "إلى" = اليوم بالضبط. أي فترة قديمة كانت تطلع كل الأرصدة منزاحة غلط
       // بمقدار كل الحركات اللي صارت بعد "إلى" ولحد الآن. هلأ منحسبها من التاريخ الحقيقي مباشرة.
+      // 🔧 مصلّحة كمان: الجرد الفعلي هو "الحقيقة المطلقة" — أي انحراف صار قبل آخر تصحيح جرد ما لازم
+      // يضل يتراكم للأبد بعرض الأرصدة. فبدل ما نجمع كل الحركات من أول يوم بوجود المادة، منلاقي آخر
+      // "تصحيح جرد" قبل الفترة المختارة، ومنبلّش الحساب من رقمه الفعلي (يلي إنتي عديتيه بإيدك) مباشرة،
+      // ومنجمع بس الحركات اللي صارت بعده. هيك الرصيد المعروض بيرجع يطابق المستودع الحقيقي أول ما تجردي.
       let openingStock = 0;
       {
         let obFrom = 0;
         const pageSize = 1000;
+        let allPre = [];
         while(true){
-          let qq = db.from('inventory_movements').select('qty').eq('ingredient_id', PT_FILTER.ingredient).lt('created_at', localDayStart(PT_FILTER.from)).range(obFrom, obFrom+pageSize-1);
+          let qq = db.from('inventory_movements').select('qty, type, note, created_at').eq('ingredient_id', PT_FILTER.ingredient).lt('created_at', localDayStart(PT_FILTER.from)).order('created_at',{ascending:true}).range(obFrom, obFrom+pageSize-1);
           if(PT_FILTER.branch) qq = qq.eq('branch_id', PT_FILTER.branch);
           const { data: obData, error: obErr } = await qq;
           if(obErr){ console.error('opening balance calc error:', obErr); break; }
-          (obData||[]).forEach(m=>{ openingStock += parseFloat(m.qty||0); });
+          allPre = allPre.concat(obData||[]);
           if(!obData || obData.length < pageSize) break;
           obFrom += pageSize;
+        }
+        let lastAuditIdx = -1;
+        for(let k=allPre.length-1; k>=0; k--){ if(allPre[k].type==='audit'){ lastAuditIdx = k; break; } }
+        const anchorActual = lastAuditIdx>=0 ? auditActualFromNote(allPre[lastAuditIdx].note) : null;
+        if(anchorActual!==null){
+          openingStock = anchorActual;
+          for(let k=lastAuditIdx+1; k<allPre.length; k++) openingStock += parseFloat(allPre[k].qty||0);
+        } else {
+          allPre.forEach(m=>{ openingStock += parseFloat(m.qty||0); }); // لا يوجد جرد سابق (أو تعذّر قراءة رقمه) — نرجع للطريقة القديمة
         }
       }
       let running = openingStock;
@@ -8007,7 +8028,13 @@
       const totalMfgConsume = Math.abs(byType['manufacture_consume']||0);
       const totalMfgProduce = byType['manufacture_produce']||0;
       const netInPeriod = moves.reduce((a,m)=>a+parseFloat(m.qty||0),0);
-      const balanceAtPeriodEnd = openingStock + netInPeriod;
+      // 🔧 نفس منطق "الارتكاز على الجرد" — لو صار تصحيح جرد بنفس الفترة المختارة، الرصيد بنهاية الفترة
+      // لازم يرتكز على آخر رقم فعلي اتعدّ بإيد حدا، مش يضل يجمع رياضيًا فوق رقم ممكن يكون منزاح من قبل.
+      let balanceAtPeriodEnd = openingStock;
+      moves.forEach(m=>{
+        const a = m.type==='audit' ? auditActualFromNote(m.note) : null;
+        balanceAtPeriodEnd = a!==null ? a : (balanceAtPeriodEnd + parseFloat(m.qty||0));
+      });
       const totalCostMoved = moves.reduce((a,m)=>a+parseFloat(m.total_cost||0),0);
       // 🔎 فحص تسوية صادق: لو الفترة توصل لليوم، لازم "الرصيد بنهاية الفترة" (محسوب من كل الحركات
       // المسجّلة) يطابق "الرصيد الحالي الفعلي" بجدول المخزون. أي فرق هون معناه في تغيير صار عالمخزون
@@ -8017,7 +8044,8 @@
       // 📥 نخزّن نسخة فيها الرصيد المتراكم لكل صف، جاهزة للتصدير لـExcel
       let runningForExport = openingStock;
       window.__PT_EXPORT_ROWS = moves.map(m=>{
-        runningForExport += parseFloat(m.qty||0);
+        const auditActual = m.type==='audit' ? auditActualFromNote(m.note) : null;
+        runningForExport = auditActual!==null ? auditActual : (runningForExport + parseFloat(m.qty||0));
         return {
           'التاريخ والوقت': new Date(m.created_at).toLocaleString('ar-JO'),
           'النوع': MOVEMENT_TYPE_AR[m.type]||m.type||'—',
@@ -8059,14 +8087,15 @@
         <div class="tbl-wrap"><table class="tbl">
           <tr><th>التاريخ والوقت</th><th>النوع</th><th>الفرع</th><th>الكمية</th><th>الرصيد بعدها</th><th>سعر الوحدة</th><th>التكلفة</th><th>ملاحظة</th><th>بواسطة</th></tr>
           ${moves.map(m=>{
-            running += parseFloat(m.qty||0);
+            const auditActual = m.type==='audit' ? auditActualFromNote(m.note) : null;
+            running = auditActual!==null ? auditActual : (running + parseFloat(m.qty||0));
             const positive = parseFloat(m.qty||0) >= 0;
             return `<tr>
               <td style="white-space:nowrap">${new Date(m.created_at).toLocaleString('ar-JO')}</td>
               <td>${MOVEMENT_TYPE_AR[m.type]||esc(m.type||'—')}</td>
               <td>${esc(m.branches?.name_ar||'عام')}</td>
               <td><b style="color:${positive?'var(--ok)':'var(--red)'}">${positive?'+':''}${parseFloat(m.qty||0).toFixed(2)}</b></td>
-              <td><b>${running.toFixed(2)}</b></td>
+              <td><b${auditActual!==null?' style="color:var(--maroon)" title="مرتكز مباشرة على الجرد الفعلي المعدود"':''}>${running.toFixed(2)}${auditActual!==null?' 📋':''}</b></td>
               <td>${fmt(m.unit_cost||0)}</td>
               <td>${fmt(m.total_cost||0)}</td>
               <td style="font-size:.82rem;color:var(--muted)">${esc(m.note||'—')}</td>
