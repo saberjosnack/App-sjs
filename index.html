@@ -4299,7 +4299,7 @@
       const invIngMap = isAdmin() ? await ensureIngredientCostMap() : null;
       const invPlatMap = isAdmin() ? await ensurePlatformCommissionMap() : null;
       L.innerHTML = `<div style="font-weight:800;color:var(--muted);margin-bottom:8px">نتائج البحث: ${orders.length} فاتورة — اضغط على أي سطر للتفاصيل</div>
-        <table class="tbl"><tr><th>#</th><th>التاريخ</th><th>الفرع</th><th>العميل</th><th>الهاتف</th><th>النوع</th><th>الإجمالي</th>${isAdmin()?'<th>الربح</th>':''}<th>الحالة</th><th></th></tr>
+        <table class="tbl"><tr><th>#</th><th>التاريخ</th><th>الفرع</th><th>العميل</th><th>الهاتف</th><th>النوع</th><th>الإجمالي</th>${isAdmin()?'<th>أجور التوصيل</th><th>الربح</th>':''}<th>الحالة</th><th></th></tr>
         ${orders.map(o=>`<tr class="${o.status==='cancelled'?'off':''}" style="cursor:pointer" onclick="showInvoice('${o.id}')">
           <td><b>${o.order_number}</b></td>
           <td>${new Date(o.created_at).toLocaleString('ar-JO')}</td>
@@ -4308,7 +4308,7 @@
           <td dir="ltr" style="text-align:right">${esc(o.customers?.phone||'—')}</td>
           <td>${TYPE_AR[o.order_type]||''}</td>
           <td><b>${fmt(o.total)}</b></td>
-          ${isAdmin()?`<td>${o.status==='cancelled'?'—':orderProfitBadge(o, invCostMap, invIngMap, invPlatMap)}</td>`:''}
+          ${isAdmin()?`<td>${+o.delivery_fee>0?fmt(o.delivery_fee):'—'}</td><td>${o.status==='cancelled'?'—':orderProfitBadge(o, invCostMap, invIngMap, invPlatMap)}</td>`:''}
           <td>${o.status==='cancelled'?'❌':'✅'}</td>
           <td style="white-space:nowrap">
             <button class="mini tog" onclick="event.stopPropagation();reprintDay('${o.id}')">🖨️</button>
@@ -4333,6 +4333,44 @@
       else toast('⚠️ ما لقيت الطلب');
     }catch(e){ console.error('jumpToOrder failed:', e); toast('✗ خطأ بفتح الطلب'); }
   }
+  // بيحسب ربح كل سطر (صنف) لحاله جوا الطلب — للعرض بتفاصيل الفاتورة. للوجبات المركّبة (🧩) بيفكّكها
+  // لمكوناتها الثابتة (composite_fixed) + المكونات يلي فعليًا اختارها الزبون بهالسطر (composition)،
+  // وبياخد تكلفة كل مكوّن من نفس recipeCostMap (يلي أصلًا فيه تكلفة كل الأصناف يلي إلها وصفة، شاملة
+  // مكونات الوجبات المركّبة الفرعية). ملاحظة: هاي أرقام "إجمالية" (قبل طرح خصم الطلب أو عمولة المنصة)
+  // — الرقم الصافي الدقيق للطلب كامل هو "الربح" بأسفل الفاتورة (calcOrderProfit).
+  async function calcLineItemProfits(o, recipeCostMap){
+    const lines = o.order_items||[];
+    const compositeIds = [...new Set(lines.filter(l=>ITEMS.find(i=>i.id===l.menu_item_id)?.item_type==='composite').map(l=>l.menu_item_id))];
+    let fixedByComposite = {};
+    if(compositeIds.length){
+      const { data } = await db.from('composite_fixed').select('menu_item_id, component_item_id, qty').in('menu_item_id', compositeIds);
+      (data||[]).forEach(f=>{ (fixedByComposite[f.menu_item_id] ||= []).push(f); });
+    }
+    return lines.map(li=>{
+      const qty = parseFloat(li.quantity||0);
+      const revenue = qty*parseFloat(li.unit_price||0);
+      const isComposite = ITEMS.find(i=>i.id===li.menu_item_id)?.item_type==='composite';
+      let unitCost=0, hasCost=true;
+      if(isComposite){
+        (fixedByComposite[li.menu_item_id]||[]).forEach(f=>{
+          const uc = recipeCostMap[f.component_item_id];
+          if(uc===undefined){ hasCost=false; return; }
+          unitCost += (f.qty||0)*uc;
+        });
+        (li.composition||[]).forEach(c=>{
+          const uc = recipeCostMap[c.component_item_id];
+          if(uc===undefined){ hasCost=false; return; }
+          unitCost += (c.qty||0)*uc;
+        });
+      } else {
+        const uc = li.menu_item_id!=null ? recipeCostMap[li.menu_item_id] : undefined;
+        hasCost = uc!==undefined;
+        unitCost = hasCost ? uc : 0;
+      }
+      const cost = hasCost ? unitCost*qty : 0;
+      return { name: li.item_name, notes: li.notes, qty, unitPrice: parseFloat(li.unit_price||0), revenue, cost, hasCost, profit: revenue-cost };
+    });
+  }
   async function showInvoice(id){
     if(!canSeeAllBranches() && !isCallCenter()) return;
     const o = DAY.find(x=>x.id===id); if(!o) return;
@@ -4345,14 +4383,17 @@
     const currentAssignedId = existingRating?.employee_id || o.created_by;
     const currentAssignedName = existingRating?.employee_name || o.created_by_name;
     let profitRow = '';
+    let lineProfits = null;
     if(isAdmin() && o.status!=='cancelled'){
       const costMap = await ensureRecipeCostMap();
       const ingMap = await ensureIngredientCostMap();
       const platMap = await ensurePlatformCommissionMap();
       const { cost, commission, profit, missing } = calcOrderProfit(o, costMap, ingMap, platMap);
+      lineProfits = await calcLineItemProfits(o, costMap);
       profitRow = `<div class="trow" style="color:var(--muted)"><span>تكلفة الأصناف (Food Cost)</span><span>${fmt(cost)}</span></div>
       ${commission>0?`<div class="trow" style="color:var(--muted)"><span>عمولة المنصة</span><span>− ${fmt(commission)}</span></div>`:''}
-      <div class="trow"><span>الربح${missing?' <span title="جزء من الحساب مجهول (تكلفة صنف أو عمولة منصة) — الرقم ناقص" style="cursor:help">⚠️</span>':''}</span><span style="color:${profit>0?'var(--ok)':(profit<0?'var(--red)':'var(--muted)')}"><b>${fmt(profit)}</b></span></div>`;
+      <div class="trow"><span>الربح${missing?' <span title="جزء من الحساب مجهول (تكلفة صنف أو عمولة منصة) — الرقم ناقص" style="cursor:help">⚠️</span>':''}</span><span style="color:${profit>0?'var(--ok)':(profit<0?'var(--red)':'var(--muted)')}"><b>${fmt(profit)}</b></span></div>
+      <div style="font-size:.72rem;color:var(--muted);font-weight:600;margin-top:2px">💡 ربح كل صنف بالجدول فوق هو إجمالي (قبل خصم الطلب/عمولة المنصة) — الربح الصافي الدقيق لكل الفاتورة هو السطر يلي فوق هون.</div>`;
     }
     modal(`<h3>🧾 فاتورة #${o.order_number}</h3>
       <table class="tbl" style="margin-bottom:12px">
@@ -4366,8 +4407,12 @@
         ${o.status==='cancelled'?`<tr><td><b style="color:var(--red)">ملغي — السبب</b></td><td>${esc(o.cancel_reason||'—')}</td></tr>`:''}
       </table>
       <table class="tbl" style="margin-bottom:12px">
-        <tr><th>الصنف</th><th>الكمية</th><th>السعر</th><th>المجموع</th></tr>
-        ${(o.order_items||[]).map(l=>`<tr><td>${esc(l.item_name)}${l.notes?`<br><small style="color:var(--muted)">📝 ${esc(l.notes)}</small>`:''}</td><td>×${l.quantity}</td><td>${fmt(l.unit_price)}</td><td><b>${fmt(l.unit_price*l.quantity)}</b></td></tr>`).join('')}
+        <tr><th>الصنف</th><th>الكمية</th><th>السعر</th><th>المجموع</th>${lineProfits?'<th>الربح</th>':''}</tr>
+        ${(o.order_items||[]).map((l,idx)=>{
+          const lp = lineProfits ? lineProfits[idx] : null;
+          const profitCell = lp ? `<td style="color:${lp.profit>0?'var(--ok)':(lp.profit<0?'var(--red)':'var(--muted)')}"><b>${fmt(lp.profit)}</b>${!lp.hasCost?' <span title="تكلفة هاد الصنف مجهولة (بدون وصفة) — الرقم ناقص" style="cursor:help">⚠️</span>':''}</td>` : '';
+          return `<tr><td>${esc(l.item_name)}${l.notes?`<br><small style="color:var(--muted)">📝 ${esc(l.notes)}</small>`:''}</td><td>×${l.quantity}</td><td>${fmt(l.unit_price)}</td><td><b>${fmt(l.unit_price*l.quantity)}</b></td>${profitCell}</tr>`;
+        }).join('')}
       </table>
       <div class="trow"><span>المجموع</span><span>${fmt(o.subtotal)}</span></div>
       ${+o.discount>0?`<div class="trow"><span>خصم ${o.discount_code?'('+esc(o.discount_code)+')':''}</span><span>− ${fmt(o.discount)}</span></div>`:''}
@@ -4472,6 +4517,10 @@
     try {
       const adm = canSeeAllBranches();
       const cc = isCallCenter();
+      // 🔒 مهم: عمود التكلفة/الربح/أجور التوصيل لازم يظهر للمالك الحقيقي بس (isAdmin — يشمل صاحب
+      // صلاحية "act_as_owner" الشاملة)، مش لأي موظف معاه بس صلاحية "cross_branch_reports" (رؤية كل
+      // الفروع). "adm" هون أوسع من قصد، فلازم نستخدم متغير منفصل أدق لهاي الأرقام المالية الحساسة.
+      const ownerView = isAdmin();
       console.log('جاري تحميل الطلبات...');
 
       // صف اختيار الفرع — للكول سنتر دايمًا، وللمدير لو حسابه مش مربوط بفرع معيّن (يشوف كل الفروع)
@@ -4530,9 +4579,9 @@
       DAY = data||[];
       console.log('عدد الطلبات:', DAY.length);
       // 💰 ربح كل طلب — للمالك بس (مش الكول سنتر ولا الموظف)، عشان أرقام التكلفة/الربح حساسة
-      const dayCostMap = adm ? await ensureRecipeCostMap() : null;
-      const dayIngMap = adm ? await ensureIngredientCostMap() : null;
-      const dayPlatMap = adm ? await ensurePlatformCommissionMap() : null;
+      const dayCostMap = ownerView ? await ensureRecipeCostMap() : null;
+      const dayIngMap = ownerView ? await ensureIngredientCostMap() : null;
+      const dayPlatMap = ownerView ? await ensurePlatformCommissionMap() : null;
 
       const dayStats = document.getElementById('dayStats');
       if (dayStats) {
@@ -4580,7 +4629,7 @@
           return;
         }
 
-        dayList.innerHTML = `<table class="tbl"><tr><th>#</th><th>الوقت</th><th>⏱️</th><th>النوع</th>${(adm||cc)?'<th>الفرع</th>':''}<th>العميل</th><th>الكاشير</th><th>الأصناف</th><th>الإجمالي</th>${adm?'<th>الربح</th>':''}<th>الحالة</th><th></th></tr>
+        dayList.innerHTML = `<table class="tbl"><tr><th>#</th><th>الوقت</th><th>⏱️</th><th>النوع</th>${(adm||cc)?'<th>الفرع</th>':''}<th>العميل</th><th>الكاشير</th><th>الأصناف</th><th>الإجمالي</th>${ownerView?'<th>أجور التوصيل</th><th>الربح</th>':''}<th>الحالة</th><th></th></tr>
           ${DAY.map(o=>{
             const mins = Math.floor((Date.now()-new Date(o.created_at))/60000);
             const readyMins = o.status==='ready' ? Math.floor((Date.now()-new Date(o.updated_at||o.created_at))/60000) : 0;
@@ -4601,7 +4650,7 @@
             <td>${esc(o.created_by_name||'—')}</td>
             <td>${(o.order_items||[]).map(l=>l.quantity+'× '+esc(l.item_name)).join('، ')}</td>
             <td><b>${fmt(o.total)}</b></td>
-            ${adm?`<td>${o.status==='cancelled'?'—':orderProfitBadge(o, dayCostMap, dayIngMap, dayPlatMap)}</td>`:''}
+            ${ownerView?`<td>${+o.delivery_fee>0?fmt(o.delivery_fee):'—'}</td><td>${o.status==='cancelled'?'—':orderProfitBadge(o, dayCostMap, dayIngMap, dayPlatMap)}</td>`:''}
             <td>${o.status==='new' ? '🆕 جديد' : o.status==='preparing' ? '🔥 قيد التحضير' : o.status==='ready' ? '📦 جاهز' : (o.status==='delivered' ? '✅ منجز' : '❌ ملغي')}</td>
             <td style="white-space:nowrap" onclick="event.stopPropagation()">
               ${o.status==='new'?`<button class="mini ok" onclick="startPreparing('${o.id}')">🔥 بلشت التحضير</button>`:''}
