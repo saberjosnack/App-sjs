@@ -4296,6 +4296,8 @@
       DAY = orders;
       if(!orders.length){ L.innerHTML = '<div class="empty-note">ما في نتائج لـ"'+esc(q)+'"</div>'; return; }
       const invCostMap = isAdmin() ? await ensureRecipeCostMap() : null;
+      const invIngMap = isAdmin() ? await ensureIngredientCostMap() : null;
+      const invPlatMap = isAdmin() ? await ensurePlatformCommissionMap() : null;
       L.innerHTML = `<div style="font-weight:800;color:var(--muted);margin-bottom:8px">نتائج البحث: ${orders.length} فاتورة — اضغط على أي سطر للتفاصيل</div>
         <table class="tbl"><tr><th>#</th><th>التاريخ</th><th>الفرع</th><th>العميل</th><th>الهاتف</th><th>النوع</th><th>الإجمالي</th>${isAdmin()?'<th>الربح</th>':''}<th>الحالة</th><th></th></tr>
         ${orders.map(o=>`<tr class="${o.status==='cancelled'?'off':''}" style="cursor:pointer" onclick="showInvoice('${o.id}')">
@@ -4306,7 +4308,7 @@
           <td dir="ltr" style="text-align:right">${esc(o.customers?.phone||'—')}</td>
           <td>${TYPE_AR[o.order_type]||''}</td>
           <td><b>${fmt(o.total)}</b></td>
-          ${isAdmin()?`<td>${o.status==='cancelled'?'—':orderProfitBadge(o, invCostMap)}</td>`:''}
+          ${isAdmin()?`<td>${o.status==='cancelled'?'—':orderProfitBadge(o, invCostMap, invIngMap, invPlatMap)}</td>`:''}
           <td>${o.status==='cancelled'?'❌':'✅'}</td>
           <td style="white-space:nowrap">
             <button class="mini tog" onclick="event.stopPropagation();reprintDay('${o.id}')">🖨️</button>
@@ -4345,9 +4347,12 @@
     let profitRow = '';
     if(isAdmin() && o.status!=='cancelled'){
       const costMap = await ensureRecipeCostMap();
-      const { cost, profit, missing } = calcOrderProfit(o, costMap);
+      const ingMap = await ensureIngredientCostMap();
+      const platMap = await ensurePlatformCommissionMap();
+      const { cost, commission, profit, missing } = calcOrderProfit(o, costMap, ingMap, platMap);
       profitRow = `<div class="trow" style="color:var(--muted)"><span>تكلفة الأصناف (Food Cost)</span><span>${fmt(cost)}</span></div>
-      <div class="trow"><span>الربح${missing?' <span title="في صنف بالطلب ما إله وصفة معرّفة — الرقم ناقص" style="cursor:help">⚠️</span>':''}</span><span style="color:${profit>0?'var(--ok)':(profit<0?'var(--red)':'var(--muted)')}"><b>${fmt(profit)}</b></span></div>`;
+      ${commission>0?`<div class="trow" style="color:var(--muted)"><span>عمولة المنصة</span><span>− ${fmt(commission)}</span></div>`:''}
+      <div class="trow"><span>الربح${missing?' <span title="جزء من الحساب مجهول (تكلفة صنف أو عمولة منصة) — الرقم ناقص" style="cursor:help">⚠️</span>':''}</span><span style="color:${profit>0?'var(--ok)':(profit<0?'var(--red)':'var(--muted)')}"><b>${fmt(profit)}</b></span></div>`;
     }
     modal(`<h3>🧾 فاتورة #${o.order_number}</h3>
       <table class="tbl" style="margin-bottom:12px">
@@ -4526,6 +4531,8 @@
       console.log('عدد الطلبات:', DAY.length);
       // 💰 ربح كل طلب — للمالك بس (مش الكول سنتر ولا الموظف)، عشان أرقام التكلفة/الربح حساسة
       const dayCostMap = adm ? await ensureRecipeCostMap() : null;
+      const dayIngMap = adm ? await ensureIngredientCostMap() : null;
+      const dayPlatMap = adm ? await ensurePlatformCommissionMap() : null;
 
       const dayStats = document.getElementById('dayStats');
       if (dayStats) {
@@ -4594,7 +4601,7 @@
             <td>${esc(o.created_by_name||'—')}</td>
             <td>${(o.order_items||[]).map(l=>l.quantity+'× '+esc(l.item_name)).join('، ')}</td>
             <td><b>${fmt(o.total)}</b></td>
-            ${adm?`<td>${o.status==='cancelled'?'—':orderProfitBadge(o, dayCostMap)}</td>`:''}
+            ${adm?`<td>${o.status==='cancelled'?'—':orderProfitBadge(o, dayCostMap, dayIngMap, dayPlatMap)}</td>`:''}
             <td>${o.status==='new' ? '🆕 جديد' : o.status==='preparing' ? '🔥 قيد التحضير' : o.status==='ready' ? '📦 جاهز' : (o.status==='delivered' ? '✅ منجز' : '❌ ملغي')}</td>
             <td style="white-space:nowrap" onclick="event.stopPropagation()">
               ${o.status==='new'?`<button class="mini ok" onclick="startPreparing('${o.id}')">🔥 بلشت التحضير</button>`:''}
@@ -7100,26 +7107,77 @@
     RECIPE_COST_MAP = map;
     return map;
   }
-  // بيحسب ربح طلب واحد: الإيراد = مجموع (كمية × سعر بيع) لكل سطر، التكلفة = مجموع (كمية × تكلفة الوصفة) لكل سطر.
-  // missing=true لو في صنف بالطلب ما إله وصفة معرّفة (تكلفته مجهولة) — عشان ما نوهم المدير برقم ربح غلط.
-  function calcOrderProfit(o, costMap){
-    let revenue=0, cost=0, missing=false;
-    (o.order_items||[]).forEach(li=>{
-      const qty = parseFloat(li.quantity||0);
-      revenue += qty*parseFloat(li.unit_price||0);
-      const uc = li.menu_item_id!=null ? costMap[li.menu_item_id] : undefined;
-      if(uc===undefined){ missing=true; return; }
-      cost += qty*uc;
-    });
-    return { revenue, cost, profit: revenue-cost, missing };
+  // كاش تاني: ingredient_id -> سعر الوحدة الحالي. لازم لتسعير لقطة consumed_ingredients (تحت).
+  let INGREDIENT_COST_MAP = null;
+  async function ensureIngredientCostMap(force){
+    if(INGREDIENT_COST_MAP && !force) return INGREDIENT_COST_MAP;
+    const { data, error } = await db.from('ingredients').select('id, unit_cost');
+    if(error){ console.error('ensureIngredientCostMap failed:', error); return INGREDIENT_COST_MAP||{}; }
+    const map = {};
+    (data||[]).forEach(i=>{ map[i.id] = parseFloat(i.unit_cost||0); });
+    INGREDIENT_COST_MAP = map;
+    return map;
+  }
+  // كاش تالت: platform_id -> نسبة عمولة المنصة (%). طلبات المنصات (طلباتي، تلاباتي...) الفلوس
+  // يلي بترجع فعليًا للمطعم أقل من o.total بسبب عمولة المنصة — لازم تُطرح من الربح متل أي تكلفة.
+  let PLATFORM_COMMISSION_MAP = null;
+  async function ensurePlatformCommissionMap(force){
+    if(PLATFORM_COMMISSION_MAP && !force) return PLATFORM_COMMISSION_MAP;
+    const { data, error } = await db.from('delivery_platforms').select('id, commission_percent');
+    if(error){ console.error('ensurePlatformCommissionMap failed:', error); return PLATFORM_COMMISSION_MAP||{}; }
+    const map = {};
+    (data||[]).forEach(p=>{ map[p.id] = parseFloat(p.commission_percent||0); });
+    PLATFORM_COMMISSION_MAP = map;
+    return map;
+  }
+  // بيحسب ربح طلب واحد:
+  // - الإيراد = subtotal الطلب (مجموع كمية×سعر قبل الخصم) ناقص الخصم الفعلي المُطبّق — التوصيل مستبعد
+  //   دايمًا لأنه بيروح مباشرة للسائق ومش دخل حقيقي للمطعم (نفس تعريف "المبيعات" المستخدم ببقية النظام).
+  // - التكلفة: بالأول منحاول نستخدم consumed_ingredients — لقطة فعلية محفوظة على الطلب لشو بالضبط
+  //   اتخصم من المخزون وقت البيع (بتشمل تفكيك الوجبات المركّبة/العائلية لمكوناتها الحقيقية). هاي أدق
+  //   بكثير من إعادة اشتقاق التكلفة من "وصفة الصنف" مباشرة، لأنه الأصناف المركّبة أصلًا ما إلها وصفة
+  //   مباشرة على id تبعها (وكانت قبل هيك تطلع ⚠️ "تكلفة مجهولة" فتضيع تكلفتها من الحساب كليًا، فيظهر
+  //   ربح الوجبات العائلية أعلى من الحقيقي بكتير). لو ما في لقطة (طلبات قديمة قبل هالميزة، أو ما في
+  //   ولا صنف بالطلب إله وصفة أصلًا) منرجع نحسبها من وصفة كل صنف لحاله كحل احتياطي.
+  // missing=true يعني في جزء من التكلفة ناقص/مجهول — عشان ما نوهم المدير برقم دقيق 100%.
+  function calcOrderProfit(o, recipeCostMap, ingredientCostMap, platformCommissionMap){
+    const subtotal = o.subtotal!=null ? parseFloat(o.subtotal||0)
+      : (o.order_items||[]).reduce((a,li)=>a+parseFloat(li.quantity||0)*parseFloat(li.unit_price||0),0);
+    let revenue = subtotal - parseFloat(o.discount||0);
+    let missing=false;
+    let commission = 0;
+    if(o.platform_id){
+      const pct = platformCommissionMap ? platformCommissionMap[o.platform_id] : undefined;
+      if(pct===undefined){ missing=true; } // نسبة العمولة مش معروفة — ما منطرح شي، بس منعلّم إنه الرقم ناقص
+      else { commission = parseFloat(o.total||0)*pct/100; revenue -= commission; }
+    }
+    let cost=0, costSource='recipe';
+    const snap = o.consumed_ingredients;
+    if(snap && typeof snap==='object' && Object.keys(snap).length){
+      costSource='snapshot';
+      Object.entries(snap).forEach(([ingId, qty])=>{
+        const uc = ingredientCostMap ? ingredientCostMap[ingId] : undefined;
+        if(uc===undefined){ missing=true; return; }
+        cost += parseFloat(qty||0)*uc;
+      });
+    } else {
+      (o.order_items||[]).forEach(li=>{
+        const qty = parseFloat(li.quantity||0);
+        const uc = (li.menu_item_id!=null && recipeCostMap) ? recipeCostMap[li.menu_item_id] : undefined;
+        if(uc===undefined){ missing=true; return; }
+        cost += qty*uc;
+      });
+    }
+    return { revenue, cost, commission, profit: revenue-cost, missing, costSource };
   }
   // شارة HTML صغيرة تلخّص ربح الطلب — تُستخدم بجدول سجل اليوم، نتائج البحث، وتفاصيل الفاتورة
-  function orderProfitBadge(o, costMap){
-    const { profit, missing } = calcOrderProfit(o, costMap);
+  function orderProfitBadge(o, recipeCostMap, ingredientCostMap, platformCommissionMap){
+    const { profit, missing } = calcOrderProfit(o, recipeCostMap, ingredientCostMap, platformCommissionMap);
     const color = profit>0 ? 'var(--ok)' : (profit<0 ? 'var(--red)' : 'var(--muted)');
-    return `<b style="color:${color}">${fmt(profit)}</b>${missing?' <span title="في صنف بالطلب ما إله وصفة معرّفة — الرقم ناقص" style="cursor:help">⚠️</span>':''}`;
+    return `<b style="color:${color}">${fmt(profit)}</b>${missing?' <span title="جزء من الحساب مجهول (تكلفة صنف أو عمولة منصة) — الرقم ناقص" style="cursor:help">⚠️</span>':''}`;
   }
   const UNITS=['غ','كغ','مل','لتر','قطعة','علبة','كيس'];
+
 
   async function loadIngredients(){
     const {data}=await db.from('ingredients').select('*').order('name');
@@ -7269,6 +7327,7 @@
     const r=id?await db.from('ingredients').update(rec).eq('id',id):await db.from('ingredients').insert(rec);
     if(r.error){toast('✗ '+r.error.message);return;}
     RECIPE_COST_MAP = null; // 🔧 سعر المكوّن تغيّر — لازم تكلفة الوصفات تتحسب من جديد
+    INGREDIENT_COST_MAP = null;
     closeModal();toast('✓ انحفظ');renderIngredients();
   }
 
@@ -14920,6 +14979,7 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
     const rec = { name, commission_percent: commission };
     const r = id ? await db.from('delivery_platforms').update(rec).eq('id',id) : await db.from('delivery_platforms').insert(rec);
     if(r.error){ toast('✗ '+r.error.message); console.error(r.error); return; }
+    PLATFORM_COMMISSION_MAP = null; // 🔧 نسبة العمولة تغيّرت — لازم ربح طلبات المنصة يتحسب من جديد
     if(typeof logActivity==='function') await logActivity('platform_save', 'منصة توصيل: '+name);
     closeModal(); toast('✓ انحفظت المنصة'); renderPlatforms(); loadPlatformsList();
   }
