@@ -1670,6 +1670,14 @@
     // ساعات)، بيضل شغّال بصلاحياته القديمة كأنه مافي شي صار. هلق منتحقق بشكل دوري (كل 90 ثانية)
     // من قاعدة البيانات مباشرة، ولو تعطّل فعليًا، منسجّل خروجه تلقائيًا بدون ما ينتظر يعمل تحديث.
     setInterval(checkStillActiveAndSynced, 90000);
+    // 🔄 السستم كله يضل لايف — تحديث خلفي صامت كل دقيقة ونص للأصناف/الأسعار/التوفر/التصنيفات/
+    // الفروع/الإعدادات/الصلاحيات، بدون ما حدا يحتاج يعمل تحديث صفحة أو أي إجراء يدوي إطلاقًا.
+    setInterval(silentDataRefresh, 90000);
+    // 🕐 هابي أور / خصومات مجدولة — تفحص الوقت محليًا كل 20 ثانية (بدون طلب شبكة) وتحدّث الشاشة
+    // تلقائيًا لحظة ما يبلش أو يخلص وقت الخصم، وتعيد الجلب من القاعدة كل دقيقتين عشان تلتقط أي
+    // خصم جديد أو معدّل من جهاز/شاشة تانية — بدون ما يحتاج الكاشير يعمل أي تحديث صفحة يدوي.
+    setInterval(recomputeActiveScheduledDiscount, 20000);
+    setInterval(loadScheduledDiscountsList, 120000);
   }
   async function checkStillActiveAndSynced(){
     if(!ME || !ME.id) return;
@@ -1822,6 +1830,32 @@
   }
 
   /* ================= تحميل البيانات ================= */
+  // 🔄 تحديث تلقائي بالخلفية — نسخة "آمنة" من bootData بتشتغل بصمت كل شوي بدون أي إجراء من حدا،
+  // عشان الأصناف/الأسعار/التصنيفات/الفروع/الإعدادات تضل محدّثة لحالها على كل الأجهزة دايمًا.
+  // 🔒 فرق مهم عن bootData: هاي ما بتلمس عناصر UI حساسة زي اختيار الفرع (branchSel) أو فلاتر
+  // تاريخ التقارير (salesFrom/salesTo) — لأنه لو حدا فاتحهم فعليًا هلق (كول سنتر عم يختار فرع،
+  // أو مدير فاتح تقرير بفترة معينة)، ما بدنا نمسحلهم اختيارهم من تحتهم كل دقيقة بصمت.
+  async function silentDataRefresh(){
+    try{
+      const [b, c, i, s] = await Promise.all([
+        db.from('branches').select('*').eq('is_active', true).order('created_at'),
+        db.from('categories').select('*').eq('is_active', true).order('sort_order'),
+        db.from('menu_items').select('*').order('sort_order'),
+        db.from('settings').select('*'),
+      ]);
+      if(b.error || c.error || i.error || s.error) return; // صامت — نت ضعيف مؤقت، بترجع تحاول المرة الجاية
+      BRANCHES = b.data||[]; CATS = c.data||[]; ITEMS = i.data||[];
+      SETTINGS = {}; (s.data||[]).forEach(x=>SETTINGS[x.key]=x.value);
+      applyLocalPrinterSettings();
+      FIN_START_H = parseInt(SETTINGS.fin_start_hour) ?? 10; if(isNaN(FIN_START_H)) FIN_START_H = 10;
+      FIN_END_H = parseInt(SETTINGS.fin_end_hour) ?? 3; if(isNaN(FIN_END_H)) FIN_END_H = 3;
+      LATE_MIN = parseInt(SETTINGS.late_min); if(isNaN(LATE_MIN)||LATE_MIN<=0) LATE_MIN = 20;
+      READY_WAIT_MIN = parseInt(SETTINGS.ready_wait_min); if(isNaN(READY_WAIT_MIN)||READY_WAIT_MIN<=0) READY_WAIT_MIN = 7;
+      applyTheme();
+      if(ME){ await loadCustomRoles(); applyRoles(); } // صلاحيات محدّثة بدون ما يحتاج يعمل تسجيل خروج/دخول
+      renderCats(); renderItems(); // بيحافظ على التصنيف/البحث المختار حاليًا — بيعيد الرسم بس بالبيانات الجديدة
+    }catch(e){ console.error('silentDataRefresh failed:', e); }
+  }
   async function bootData(){
     try {
       const [b, c, i, s] = await Promise.all([
@@ -3065,74 +3099,147 @@
     } catch(e) { console.error(e); }
   }
 
-  // 🏷️ خصم مجدول تلقائي — المالك بيضيف فترات بأيام يختارها بنفسه، وبتطبّق تلقائيًا على كل الفواتير بدون أي تدخل من الكاشير
-  let ACTIVE_SCHEDULED_DISCOUNT = null;
-  async function loadActiveScheduledDiscount(){
-    try{
-      const { data, error } = await db.from('scheduled_discounts').select('*').eq('active', true).order('percent',{ascending:false}).limit(1);
-      if(error){ ACTIVE_SCHEDULED_DISCOUNT = null; return; }
-      ACTIVE_SCHEDULED_DISCOUNT = (data && data[0]) || null;
-    }catch(e){ console.error('loadActiveScheduledDiscount failed:', e); ACTIVE_SCHEDULED_DISCOUNT = null; }
+  // 🕐 وقت عمّان الحالي (ساعة:دقيقة + يوم الأسبوع) — باستخدام Intl (أدق من +3 ثابتة، بيحترم أي تغيير
+  // مستقبلي بالتوقيت الرسمي بدل ما يتكسر بصمت)
+  function getAmmanTimeParts(){
+    const parts = new Intl.DateTimeFormat('en-US', { timeZone:'Asia/Amman', hour12:false, hour:'2-digit', minute:'2-digit', weekday:'short' }).formatToParts(new Date());
+    const map = {}; parts.forEach(p=>map[p.type]=p.value);
+    let hhmm = map.hour+':'+map.minute;
+    if(hhmm==='24:00') hhmm='00:00'; // بعض المتصفحات بترجع 24:00 لمنتصف الليل بدل 00:00
+    const dowMap = {Sun:0,Mon:1,Tue:2,Wed:3,Thu:4,Fri:5,Sat:6};
+    return { hhmm, dow: dowMap[map.weekday] };
   }
+  // فاحص واحد بيقرر هل هاد الخصم المجدول (هابي أور مثلًا) لازم يكون فعّال هلأ بالضبط، حسب يوم
+  // الأسبوع (لو محدد) ونافذة الوقت (لو محددة). start_time/end_time و days فاضيين = ينطبق طول الوقت
+  // (نفس السلوك القديم قبل ميزة الوقت التلقائي — أي خصم قديم محفوظ بيضل شغّال متل ما كان).
+  function isScheduleActiveNow(d, tp){
+    if(!d.active) return false; // مفتاح إيقاف يدوي عام — المالك بيقدر يوقفه بالكامل أي وقت بغض النظر عن الجدولة
+    if(d.days && d.days.length && !d.days.includes(tp.dow)) return false;
+    if(d.start_time && d.end_time){
+      if(d.start_time <= d.end_time){
+        // نافذة عادية بنفس اليوم (مثلًا 15:00 → 18:00)
+        if(tp.hhmm < d.start_time || tp.hhmm >= d.end_time) return false;
+      } else {
+        // نافذة عابرة لمنتصف الليل (مثلًا 22:00 → 02:00)
+        if(tp.hhmm < d.start_time && tp.hhmm >= d.end_time) return false;
+      }
+    }
+    return true;
+  }
+  const DOW_AR = ['أحد','اثنين','ثلاثاء','أربعاء','خميس','جمعة','سبت'];
+  // 🏷️ خصم مجدول تلقائي (هابي أور وغيره) — المالك بيحدد نافذة وقت وأيام، وبيتفعّل/يتوقف تلقائيًا بالضبط
+  // بوقته بدون أي تدخل يدوي، وبدون ما يحتاج الجهاز يعمل تحديث صفحة. آلية اللايف:
+  // 1) SCHEDULED_DISCOUNTS_LIST: قائمة كل الخصومات "المفعّلة" (active=true) — بتنجلب من القاعدة كل
+  //    دقيقتين (تلتقط أي خصم جديد ضافه المالك أو عدّله من جهاز تاني).
+  // 2) recomputeActiveScheduledDiscount: بتفحص الوقت الحالي مقابل هاي القائمة كل 20 ثانية (بدون أي
+  //    طلب شبكة — حساب محلي بس)، وأول ما توقيت الهابي أور يوصل أو يخلص، بتحدّث الشاشة تلقائيًا فورًا.
+  let SCHEDULED_DISCOUNTS_LIST = [];
+  let ACTIVE_SCHEDULED_DISCOUNT = null;
+  async function loadScheduledDiscountsList(){
+    try{
+      const { data, error } = await db.from('scheduled_discounts').select('*').eq('active', true);
+      if(error){ return; } // صامت — لو الأعمدة الجديدة لسا ما انضافت بقاعدة البيانات، ما لازم يكسر التطبيق
+      SCHEDULED_DISCOUNTS_LIST = data||[];
+      recomputeActiveScheduledDiscount();
+    }catch(e){ console.error('loadScheduledDiscountsList failed:', e); }
+  }
+  function recomputeActiveScheduledDiscount(){
+    const tp = getAmmanTimeParts();
+    const matches = SCHEDULED_DISCOUNTS_LIST.filter(d=>isScheduleActiveNow(d, tp)).sort((a,b)=>b.percent-a.percent);
+    const next = matches[0] || null;
+    const prevKey = ACTIVE_SCHEDULED_DISCOUNT ? ACTIVE_SCHEDULED_DISCOUNT.id+'|'+ACTIVE_SCHEDULED_DISCOUNT.percent : null;
+    const nextKey = next ? next.id+'|'+next.percent : null;
+    if(prevKey !== nextKey){
+      const wasActive = !!ACTIVE_SCHEDULED_DISCOUNT;
+      ACTIVE_SCHEDULED_DISCOUNT = next;
+      if(typeof renderCart==='function' && document.getElementById('cartBody')) renderCart(); // يحدّث السلة فورًا لو فيها شي حاليًا
+      if(next && !wasActive) toast('🎉 بلش "'+(next.name||'خصم')+'" ('+next.percent+'%) تلقائيًا هلأ');
+      else if(!next && wasActive) toast('⏰ خلص وقت الخصم المجدول');
+    }
+  }
+  // اسم قديم — إبقاء توافق مع أي استدعاء ما زال يستخدمه بمكان تاني بالكود
+  async function loadActiveScheduledDiscount(){ await loadScheduledDiscountsList(); }
   async function renderScheduledDiscounts(){
     const C = document.getElementById('admContent');
     C.innerHTML = '<div class="empty-note">... جاري التحميل</div>';
     try{
-      const { data, error } = await db.from('scheduled_discounts').select('*').order('date_from',{ascending:false});
+      const { data, error } = await db.from('scheduled_discounts').select('*').order('created_at',{ascending:false});
       if(error){ C.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message||'الجدول scheduled_discounts غير موجود — نفّذ SQL أولاً')}</div>`; return; }
       const list = data||[];
+      const tp = getAmmanTimeParts();
       C.innerHTML = `
-        <button class="add-btn" onclick="scheduledDiscountForm()">＋ خصم جديد</button>
-        <div style="font-size:.85rem;color:var(--muted);font-weight:700;margin:8px 0 14px">بيتطبّق تلقائيًا على كل الفواتير طول ما زر "تفعيل" شغّال — إنتي بتتحكمي فيه براحتك، تفعّليه وتوقفيه أي وقت. لو في أكتر من خصم مفعّل بنفس الوقت، بينطبّق الأعلى نسبة بس.</div>
+        <button class="add-btn" onclick="scheduledDiscountForm()">＋ خصم جديد (هابي أور مثلًا)</button>
+        <div style="font-size:.85rem;color:var(--muted);font-weight:700;margin:8px 0 14px">حددي نافذة وقت وأيام لكل خصم، وبيتفعّل/يتوقف تلقائيًا بالظبط بوقته على كل الأجهزة — بدون أي تحديث صفحة يدوي. زر "تفعيل/إيقاف" هو مفتاح عام: لو موقّف، الخصم ما بينطبّق أبدًا حتى لو بوقته. لو ما حددتي وقت أو أيام، بينطبّق طول الوقت طالما مفعّل. لو في أكتر من خصم فعّال بنفس اللحظة، بينطبّق الأعلى نسبة بس.</div>
         <div class="tbl-wrap"><table class="tbl">
-          <tr><th>الاسم</th><th>النسبة</th><th>الحالة</th><th></th></tr>
-          ${list.map(d=>`<tr>
+          <tr><th>الاسم</th><th>النسبة</th><th>الأيام</th><th>الوقت</th><th>الحالة الآن</th><th></th></tr>
+          ${list.map(d=>{
+            const liveOn = isScheduleActiveNow(d, tp);
+            const daysLbl = (d.days && d.days.length) ? d.days.slice().sort().map(x=>DOW_AR[x]).join('، ') : 'كل الأيام';
+            const timeLbl = (d.start_time && d.end_time) ? (d.start_time+' → '+d.end_time) : 'طول اليوم';
+            return `<tr>
               <td><b>${esc(d.name||'—')}</b></td>
               <td><b style="color:var(--red)">${d.percent}%</b></td>
-              <td>${d.active?'🟢 فعّال هلأ':'⏸️ متوقف'}</td>
+              <td style="font-size:.8rem">${esc(daysLbl)}</td>
+              <td style="font-size:.8rem" dir="ltr">${esc(timeLbl)}</td>
+              <td>${!d.active?'⏸️ موقّف يدويًا':(liveOn?'🟢 فعّال هلأ':'⏳ برّه وقته')}</td>
               <td style="white-space:nowrap">
-                <button class="mini tog" style="${d.active?'background:var(--red);color:#fff':'background:var(--ok);color:#fff'}" onclick="toggleScheduledDiscount('${d.id}',${!d.active})">${d.active?'⏸️ إيقاف':'▶️ تفعيل'}</button>
+                <button class="mini tog" style="${d.active?'background:var(--red);color:#fff':'background:var(--ok);color:#fff'}" onclick="toggleScheduledDiscount('${d.id}',${!d.active})">${d.active?'⏸️ إيقاف عام':'▶️ تفعيل عام'}</button>
                 <button class="mini edit" onclick="scheduledDiscountForm('${d.id}')">تعديل</button>
                 <button class="mini del" onclick="deleteScheduledDiscount('${d.id}')">حذف</button>
               </td>
-            </tr>`).join('')||'<tr><td colspan="4" class="empty-note">ما في خصومات محفوظة بعد</td></tr>'}
+            </tr>`;
+          }).join('')||'<tr><td colspan="6" class="empty-note">ما في خصومات محفوظة بعد</td></tr>'}
         </table></div>`;
     }catch(e){ C.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
   }
   function scheduledDiscountForm(id){
     db.from('scheduled_discounts').select('*').eq('id', id||'').maybeSingle().then(({data:d})=>{
       d = d || {};
-      modal(`<h3>${id?'تعديل خصم':'خصم جديد'}</h3>
-        <div class="fld"><label>اسم الخصم (بيبيّن للعميل بالفاتورة)</label><input id="sd_name" value="${esc(d.name||'')}" placeholder="مثال: عرض اليوم"></div>
+      const selDays = (d.days && d.days.length) ? d.days : []; // فاضي = كل الأيام (افتراضي لخصم جديد)
+      modal(`<h3>${id?'تعديل خصم':'خصم جديد (هابي أور مثلًا)'}</h3>
+        <div class="fld"><label>اسم الخصم (بيبيّن للعميل بالفاتورة)</label><input id="sd_name" value="${esc(d.name||'')}" placeholder="مثال: هابي أور"></div>
         <div class="fld"><label>النسبة %</label><input id="sd_pct" type="number" step="1" min="1" max="100" value="${d.percent||''}"></div>
+        <div class="two">
+          <div class="fld"><label>من الساعة (فاضي = طول اليوم)</label><input id="sd_start" type="time" value="${esc(d.start_time||'')}"></div>
+          <div class="fld"><label>لحد الساعة</label><input id="sd_end" type="time" value="${esc(d.end_time||'')}"></div>
+        </div>
+        <div class="fld"><label>الأيام (بدون تحديد = كل الأيام)</label>
+          <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">
+            ${DOW_AR.map((n,i)=>`<label style="display:flex;align-items:center;gap:4px;background:#f5f0e8;border-radius:8px;padding:4px 8px;font-weight:700;font-size:.85rem"><input type="checkbox" class="sd_day" value="${i}" ${selDays.includes(i)?'checked':''}> ${n}</label>`).join('')}
+          </div>
+        </div>
         <div class="m-act"><button class="save" onclick="saveScheduledDiscount('${id||''}')">حفظ ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
     });
   }
   async function saveScheduledDiscount(id){
     const name = document.getElementById('sd_name')?.value.trim();
     const percent = parseFloat(document.getElementById('sd_pct')?.value);
+    const start_time = document.getElementById('sd_start')?.value || null;
+    const end_time = document.getElementById('sd_end')?.value || null;
+    const days = [...document.querySelectorAll('.sd_day:checked')].map(c=>parseInt(c.value));
     if(!name){ toast('⚠️ اكتبي اسم الخصم'); return; }
     if(!percent || percent<=0 || percent>100){ toast('⚠️ نسبة الخصم لازم تكون بين 1 و100'); return; }
+    if((start_time && !end_time) || (!start_time && end_time)){ toast('⚠️ حددي الساعتين مع بعض (من ولحد)، أو سيبيهم فاضيين كلهم'); return; }
     try{
       // 🔧 نحفظ خصم جديد بدون تفعيل تلقائي (تفعّليه إنتي يدويًا بعدين)، إلا لو عم تعدّلي وحدة كانت مفعّلة أصلًا
       const existingActive = id ? (await db.from('scheduled_discounts').select('active').eq('id', id).maybeSingle()).data?.active : false;
-      const rec = { name, percent, active: !!existingActive };
+      const rec = { name, percent, active: !!existingActive, start_time, end_time, days: days.length?days:null };
       const { error } = id
         ? await db.from('scheduled_discounts').update(rec).eq('id', id)
         : await db.from('scheduled_discounts').insert(rec);
       if(error){ toast('✗ '+error.message); return; }
       await logActivity('scheduled_discount_save', name+' — '+percent+'%');
-      closeModal(); toast('✓ انحفظ'); renderScheduledDiscounts(); loadActiveScheduledDiscount();
+      closeModal(); toast('✓ انحفظ'); renderScheduledDiscounts(); loadScheduledDiscountsList();
     }catch(e){ toast('✗ '+e.message); }
   }
   async function toggleScheduledDiscount(id, active){
     await db.from('scheduled_discounts').update({ active }).eq('id', id);
-    toast(active?'✓ اتفعّل':'✓ اتوقّف'); renderScheduledDiscounts(); loadActiveScheduledDiscount();
+    toast(active?'✓ اتفعّل':'✓ اتوقّف'); renderScheduledDiscounts(); loadScheduledDiscountsList();
   }
   async function deleteScheduledDiscount(id){
     if(!confirm('⚠️ حذف هاد الخصم المجدول نهائيًا؟')) return;
     await db.from('scheduled_discounts').delete().eq('id', id);
-    toast('✓ انحذف'); renderScheduledDiscounts(); loadActiveScheduledDiscount();
+    toast('✓ انحذف'); renderScheduledDiscounts(); loadScheduledDiscountsList();
   }
   function totals(){
     const sub = cart.reduce((s,l)=>s + l.item.price*l.qty, 0);
