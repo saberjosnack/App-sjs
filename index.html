@@ -10797,6 +10797,9 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
     }catch(e){ console.error('duplicate audit pre-check failed:', e); }
     const qtys=[...document.querySelectorAll('.inv_qty')];
     const results = [];
+    const failedItems = []; // 🔧 مهم: كانت التحديثات هون بدون أي فحص خطأ إطلاقًا — لو فشل تحديث مادة معينة
+    // (انقطاع نت لحظي، تعارض شبكة...) كان يكمل عادي وبيطلع "✅ الجرد اترسل" بنجاح رغم إنه فعليًا
+    // بعض المواد ما تصحح رصيدها أبدًا بقاعدة البيانات — وهاد بالضبط سبب "جردتها بس ما تصحح الجرد تاعها".
     let updated=0;
     for(const inp of qtys){
       const id = inp.dataset.id;
@@ -10807,12 +10810,25 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
       const expected = parseFloat(expSpan.dataset.expected)||0;
       const ingId = expSpan.dataset.ingid;
       const diff = actual - expected;
+      const { error: updErr } = await db.from('branch_inventory').update({stock: actual}).eq('id', id);
+      if(updErr){
+        console.error('audit stock update failed for', ingId, updErr);
+        failedItems.push(INGR.find(i=>i.id===ingId)?.name || ingId);
+        continue; // ما نسجّل حركة ولا نعتبرها "اتحدثت" لو فعليًا فشل التحديث بقاعدة البيانات
+      }
       results.push({ ingredient_id: ingId, expected, actual, variance: diff });
-      await db.from('branch_inventory').update({stock: actual}).eq('id', id);
       if(Math.abs(diff)>0.001) logMovement(branchId, ingId, diff, 'audit', 'تصحيح جرد (المتوقع '+expected+' ← الفعلي '+actual+')');
       updated++;
     }
-    if(!updated){ toast('⚠️ عدّ مادة واحدة على الأقل'); unlockSubmit('saveInventoryAudit'); return; }
+    if(!updated){
+      toast(failedItems.length ? '✗ فشل حفظ الجرد كليًا — تأكدي من الإنترنت وحاولي تاني' : '⚠️ عدّي مادة واحدة على الأقل');
+      unlockSubmit('saveInventoryAudit');
+      return;
+    }
+    if(failedItems.length){
+      // ⚠️ فشل جزئي — لازم يوصل للمستخدم بوضوح، مش يختفي وسط توست "نجح" عام
+      alert('⚠️ تنبيه مهم: الجرد اتحفظ لمعظم المواد، بس فشل تحديث '+failedItems.length+' مادة بسبب مشكلة شبكة لحظية:\n\n'+failedItems.join('، ')+'\n\nهاي المواد لسا برصيدها القديم — لازم تعيدي جردهم من جديد (مادة مادة لو حبيتي) للتأكد إنهم انصلحوا.');
+    }
     // تسجيل الجرد بسجل دائم
     const totalVarianceItems = results.filter(r=>Math.abs(r.variance)>0.001).length;
     try{
