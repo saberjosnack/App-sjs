@@ -8514,6 +8514,8 @@
     const C = document.getElementById('admContent');
     window.__repFrom = window.__repFrom || localTodayStr();
     window.__repTo = window.__repTo || localTodayStr();
+    window.__repFromTime = window.__repFromTime || '00:00';
+    window.__repToTime = window.__repToTime || '23:59';
     window.__repType = window.__repType || 'summary';
     window.__repBranch = window.__repBranch || '';
     C.innerHTML = `
@@ -8528,7 +8530,9 @@
         </div>
         <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:end">
           <div class="fld" style="margin:0;min-width:150px"><label>من تاريخ</label><input type="date" id="rep_from" value="${window.__repFrom}"></div>
+          <div class="fld" style="margin:0;min-width:110px"><label>من ساعة</label><input type="time" id="rep_from_time" value="${window.__repFromTime}"></div>
           <div class="fld" style="margin:0;min-width:150px"><label>إلى تاريخ</label><input type="date" id="rep_to" value="${window.__repTo}"></div>
+          <div class="fld" style="margin:0;min-width:110px"><label>إلى ساعة</label><input type="time" id="rep_to_time" value="${window.__repToTime}"></div>
           <div class="fld" style="margin:0;min-width:220px"><label>نوع التقرير</label>
             <select id="rep_type" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:9px 12px;font-weight:700">
               <option value="summary" ${window.__repType==='summary'?'selected':''}>📈 ملخص عام (مبيعات)</option>
@@ -8551,6 +8555,7 @@
           <button class="mini ok" onclick="generateReport()" style="height:41px">📊 توليد التقرير</button>
           <button class="mini ok" style="background:#1D6F42;height:41px" onclick="exportOrdersExcel()">📥 تصدير الطلبات (Excel)</button>
         </div>
+        <div style="font-size:.78rem;color:var(--muted);font-weight:700;margin-top:8px">💡 "من ساعة"/"إلى ساعة" اختياريان — بيسمحولك تحدّدي جزء من اليوم بس (مثلًا هابي أور من 3 لـ6 العصر)، مش بس يوم كامل. الافتراضي (00:00 → 23:59) بيغطّي اليوم كامل زي ما كانت الشاشة قبل هيك.</div>
       </div>
       <div id="reportResult"></div>
     `;
@@ -8564,8 +8569,13 @@
     else if(kind==='week'){ const dow = now.getUTCDay(); const start = new Date(Date.UTC(y,m,d-dow)); window.__repFrom = f(start); window.__repTo = localTodayStr(); }
     else if(kind==='month'){ window.__repFrom = localMonthStartStr(); window.__repTo = localTodayStr(); }
     else if(kind==='lastmonth'){ const lmStart = new Date(Date.UTC(y,m-1,1)); const lmEnd = new Date(Date.UTC(y,m,0)); window.__repFrom = f(lmStart); window.__repTo = f(lmEnd); }
+    // أزرار الفترات الجاهزة (اليوم/أمس/الأسبوع...) دايمًا بتغطي اليوم كامل — نصفّر الساعات المخصصة
+    window.__repFromTime = '00:00'; window.__repToTime = '23:59';
     renderReports();
   }
+  // بتبني وقت ISO دقيق بتوقيت عمّان (UTC+3) من تاريخ + ساعة:دقيقة، بدل منتصف الليل الثابت دايمًا —
+  // هيك تقدر تحددي جزء من اليوم بس (هابي أور، شيفت معيّن...) مش يوم كامل إجباريًا.
+  function localDateTime(dateStr, timeStr){ return dateStr+'T'+(timeStr||'00:00')+':00+03:00'; }
   function addDaysStr(dateStr, n){
     // 🔧 مصلّحة: كانت هاي الدالة بترجع نفس التاريخ بالضبط بدون أي إضافة فعلية! السبب: كانت
     // تبني التاريخ بمنتصف ليل عمّان (+03:00)، ويلي بتوقيت UTC هو فعليًا اليوم يلي قبله بـ3
@@ -8581,6 +8591,8 @@
   async function exportOrdersExcel(){
     const from = document.getElementById('rep_from')?.value;
     const to = document.getElementById('rep_to')?.value;
+    const fromTime = document.getElementById('rep_from_time')?.value || '00:00';
+    const toTime = document.getElementById('rep_to_time')?.value || '23:59';
     const branchId = document.getElementById('rep_branch')?.value || '';
     if(!from || !to){ toast('⚠️ حددي الفترة أول (من تاريخ - لغاية تاريخ) فوق'); return; }
     try{
@@ -8592,7 +8604,7 @@
         let rf = 0; const rp = 1000;
         while(true){
           let q = db.from('orders').select('order_number, total, subtotal, discount, delivery_fee, payment_method, order_type, status, employee_tab_name, platform_id, created_at, branches(name_ar), order_items(item_name, quantity, unit_price)')
-            .gte('created_at', localDayStart(from)).lt('created_at', localDayStart(addDaysStr(to,1))).range(rf, rf+rp-1);
+            .gte('created_at', localDateTime(from,fromTime)).lte('created_at', localDateTime(to,toTime)).range(rf, rf+rp-1);
           if(branchId) q = q.eq('branch_id', branchId);
           const { data: rd, error: re } = await q;
           if(re){ toast('✗ '+re.message); console.error(re); return; }
@@ -8637,10 +8649,12 @@
   async function generateReport(){
     const from = document.getElementById('rep_from')?.value;
     const to = document.getElementById('rep_to')?.value;
+    const fromTime = document.getElementById('rep_from_time')?.value || '00:00';
+    const toTime = document.getElementById('rep_to_time')?.value || '23:59';
     const type = document.getElementById('rep_type')?.value || 'summary';
     const branchId = document.getElementById('rep_branch')?.value || '';
     if(!from || !to){ toast('⚠️ حددي الفترة'); return; }
-    window.__repFrom=from; window.__repTo=to; window.__repType=type; window.__repBranch=branchId;
+    window.__repFrom=from; window.__repTo=to; window.__repFromTime=fromTime; window.__repToTime=toTime; window.__repType=type; window.__repBranch=branchId;
     const box = document.getElementById('reportResult');
     box.innerHTML = '<div class="empty-note">⏳ جاري توليد التقرير...</div>';
     document.getElementById('aiInsightsBox')?.remove();
@@ -8660,7 +8674,7 @@
           let rf = 0; const rp = 1000;
           while(true){
             let q = db.from('orders').select('status, created_at, branch_id, order_items(menu_item_id, item_name, quantity, unit_price)')
-              .gte('created_at', localDayStart(from)).lt('created_at', localDayStart(addDaysStr(to,1))).neq('status','cancelled').range(rf, rf+rp-1);
+              .gte('created_at', localDateTime(from,fromTime)).lte('created_at', localDateTime(to,toTime)).neq('status','cancelled').range(rf, rf+rp-1);
             if(branchId) q = q.eq('branch_id', branchId);
             const { data: rd, error: re } = await q;
             if(re){ box.innerHTML = `<div class="alert-red">⚠️ ${esc(re.message||'خطأ')}</div>`; console.error(re); return; }
@@ -8699,10 +8713,10 @@
       }
       if(type==='daily_manager'){
         let ordQ = db.from('orders').select('total, subtotal, discount, status, order_items(item_name, quantity, unit_price)')
-          .gte('created_at', localDayStart(from)).lt('created_at', localDayStart(addDaysStr(to,1)));
+          .gte('created_at', localDateTime(from,fromTime)).lte('created_at', localDateTime(to,toTime));
         let expQ = db.from('expenses').select('amount').neq('category','سحب من الدرج').gte('expense_date', from).lte('expense_date', to);
-        let wasteQ = db.from('waste_log').select('quantity, ingredients(unit_cost)').gte('created_at', localDayStart(from)).lt('created_at', localDayStart(addDaysStr(to,1)));
-        let laborQ = db.from('hr_time_logs').select('clock_in, clock_out, employee_id').gte('clock_in', localDayStart(from)).lt('clock_in', localDayStart(addDaysStr(to,1))).not('clock_out','is',null);
+        let wasteQ = db.from('waste_log').select('quantity, ingredients(unit_cost)').gte('created_at', localDateTime(from,fromTime)).lte('created_at', localDateTime(to,toTime));
+        let laborQ = db.from('hr_time_logs').select('clock_in, clock_out, employee_id').gte('clock_in', localDateTime(from,fromTime)).lte('clock_in', localDateTime(to,toTime)).not('clock_out','is',null);
         if(branchId){ ordQ=ordQ.eq('branch_id',branchId); expQ=expQ.eq('branch_id',branchId); wasteQ=wasteQ.eq('branch_id',branchId); }
         const [ordRes, expRes, wasteRes, laborRes] = await Promise.all([ordQ, expQ, wasteQ, laborQ]);
         if(ordRes.error){ box.innerHTML = `<div class="alert-red">⚠️ ${esc(ordRes.error.message)}</div>`; return; }
@@ -8757,7 +8771,7 @@
         let rf = 0; const rp = 1000;
         while(true){
           let q = db.from('orders').select('id, order_number, total, subtotal, discount, delivery_fee, payment_method, order_type, status, split_details, employee_tab_name, platform_id, branch_id, created_at, order_items(item_name, quantity, unit_price), branches(name_ar)')
-            .gte('created_at', localDayStart(from)).lt('created_at', localDayStart(addDaysStr(to,1))).range(rf, rf+rp-1);
+            .gte('created_at', localDateTime(from,fromTime)).lte('created_at', localDateTime(to,toTime)).range(rf, rf+rp-1);
           if(branchId) q = q.eq('branch_id', branchId);
           const { data: rd, error: re } = await q;
           if(re){ box.innerHTML = `<div class="alert-red">⚠️ ${esc(re.message||'خطأ')}</div>`; console.error(re); return; }
@@ -8784,10 +8798,12 @@
     </div>`;
   }
   function reportHeader(title){
+    const timeSuffix = (window.__repFromTime && window.__repFromTime!=='00:00') || (window.__repToTime && window.__repToTime!=='23:59')
+      ? ` (${window.__repFromTime||'00:00'} → ${window.__repToTime||'23:59'})` : '';
     return `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
       <h3 style="margin:0">${title}</h3>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-        <span style="font-size:.82rem;color:var(--muted);font-weight:700">📅 ${window.__repFrom} → ${window.__repTo}</span>
+        <span style="font-size:.82rem;color:var(--muted);font-weight:700">📅 ${window.__repFrom} → ${window.__repTo}${timeSuffix}</span>
         <button class="mini ok" onclick="printReport()">🖨️ طباعة التقرير</button>
         <button class="mini" style="background:#0d6efd;color:#fff" onclick="downloadReportPDF()">⬇️ تحميل PDF</button>
         <button class="mini" style="background:#7b2cbf;color:#fff" onclick="generateAIInsights()">🤖 تحليل ذكي (AI)</button>
