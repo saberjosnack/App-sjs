@@ -8539,6 +8539,7 @@
               <option value="items" ${window.__repType==='items'?'selected':''}>🍔 الأصناف الأكثر مبيعًا</option>
               <option value="branches" ${window.__repType==='branches'?'selected':''}>🏪 المبيعات حسب الفرع</option>
               <option value="daily" ${window.__repType==='daily'?'selected':''}>📅 المبيعات حسب اليوم</option>
+              <option value="hourly" ${window.__repType==='hourly'?'selected':''}>⏰ المبيعات حسب الساعة</option>
               <option value="payment" ${window.__repType==='payment'?'selected':''}>💳 المبيعات حسب طريقة الدفع</option>
               <option value="expenses" ${window.__repType==='expenses'?'selected':''}>💵 المصاريف</option>
               <option value="withdrawals" ${window.__repType==='withdrawals'?'selected':''}>🔓 سحوبات الدرج</option>
@@ -8788,6 +8789,7 @@
       else if(type==='items') renderItemsReportResult(ok);
       else if(type==='branches') renderBranchesReportResult(ok);
       else if(type==='daily') renderDailyReportResult(ok);
+      else if(type==='hourly') renderHourlyReportResult(ok);
       else if(type==='payment') renderPaymentReportResult(ok);
     }catch(e){ box.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
   }
@@ -8872,6 +8874,29 @@
       <div class="tbl-wrap"><table class="tbl"><tr><th>التاريخ</th><th>عدد الطلبيات</th><th>إجمالي المبيعات</th><th></th></tr>
       ${rows.map(r=>`<tr><td>${r[0]}</td><td>${r[1].count}</td><td>${fmt(r[1].total)} ${CURRENCY}</td>
         <td style="width:40%"><div style="background:var(--line);border-radius:6px;overflow:hidden;height:14px"><div style="width:${(r[1].total/maxTotal*100).toFixed(0)}%;background:var(--ok);height:100%"></div></div></td></tr>`).join('')||'<tr><td colspan="4" class="empty-note">ما في بيانات</td></tr>'}
+      </table></div>`;
+  }
+  function renderHourlyReportResult(ok){
+    const box = document.getElementById('reportResult'); if(!box) return;
+    // 🕐 بنجمّع كل الطلبات حسب "ساعة اليوم" (٠٠ لـ٢٣) بتوقيت عمّان، بغض النظر عن كم يوم بالفترة —
+    // يعني لو الفترة أسبوع، ساعة "٦ المغرب" بتجمع كل طلبات الساعة ٦ عبر كل أيام الأسبوع مع بعض.
+    // هيك بتعرفي أكتر ساعة مزدحمة بالمبيعات عندك، مش بس مبيعات يوم واحد بالساعة.
+    const tally = Array.from({length:24}, ()=>({count:0, total:0}));
+    ok.forEach(o=>{
+      const ammanDt = new Date(new Date(o.created_at).getTime()+3*3600000);
+      const h = ammanDt.getUTCHours();
+      tally[h].count++; tally[h].total += parseFloat(o.total||0);
+    });
+    const grand = tally.reduce((a,r)=>a+r.total,0);
+    const maxTotal = Math.max(1, ...tally.map(r=>r.total));
+    const peakIdx = tally.reduce((best,r,i)=>r.total>tally[best].total?i:best, 0);
+    const hourLabel = h => (h%12===0?12:h%12)+':00 '+(h<12?'ص':'م');
+    box.innerHTML = reportHeader('⏰ المبيعات حسب الساعة') + `
+      ${grand>0 ? `<div style="font-weight:800;color:var(--maroon);margin-bottom:12px">🏆 أكتر ساعة مبيعًا: <b>${hourLabel(peakIdx)} → ${hourLabel((peakIdx+1)%24)}</b> (${fmt(tally[peakIdx].total)} ${CURRENCY}، ${tally[peakIdx].count} طلبية)</div>` : ''}
+      <div class="tbl-wrap"><table class="tbl"><tr><th>الساعة</th><th>عدد الطلبيات</th><th>إجمالي المبيعات</th><th>النسبة</th><th></th></tr>
+      ${tally.map((r,h)=>r.count?`<tr style="${h===peakIdx?'background:#fff3cd':''}"><td><b>${hourLabel(h)} → ${hourLabel((h+1)%24)}</b>${h===peakIdx?' 🏆':''}</td><td>${r.count}</td><td>${fmt(r.total)} ${CURRENCY}</td><td>${grand?(r.total/grand*100).toFixed(1):0}%</td>
+        <td style="width:30%"><div style="background:var(--line);border-radius:6px;overflow:hidden;height:14px"><div style="width:${(r.total/maxTotal*100).toFixed(0)}%;background:var(--ok);height:100%"></div></div></td></tr>`:'').join('')||''}
+      ${!grand ? '<tr><td colspan="5" class="empty-note">ما في بيانات</td></tr>' : ''}
       </table></div>`;
   }
   function renderPaymentReportResult(ok){
@@ -8994,7 +9019,7 @@
   }
   function buildReportHtml(){
     const d = window.__repData; if(!d){ toast('⚠️ ولّدي التقرير أول'); return ''; }
-    const TYPE_AR = {summary:'ملخص عام للمبيعات', items:'الأصناف الأكثر مبيعًا', branches:'المبيعات حسب الفرع', daily:'المبيعات حسب اليوم', payment:'المبيعات حسب طريقة الدفع', expenses:'تقرير المصاريف', withdrawals:'سحوبات الدرج', foodcost:'تكلفة الأصناف (Food Cost)', daily_manager:'التقرير اليومي للمدير'};
+    const TYPE_AR = {summary:'ملخص عام للمبيعات', items:'الأصناف الأكثر مبيعًا', branches:'المبيعات حسب الفرع', daily:'المبيعات حسب اليوم', hourly:'المبيعات حسب الساعة', payment:'المبيعات حسب طريقة الدفع', expenses:'تقرير المصاريف', withdrawals:'سحوبات الدرج', foodcost:'تكلفة الأصناف (Food Cost)', daily_manager:'التقرير اليومي للمدير'};
     const branchName = d.branchId ? (BRANCHES.find(b=>b.id===d.branchId)?.name_ar||'') : 'كل الفروع';
     let bodyHtml = '';
     if(d.type==='expenses'){
@@ -9064,6 +9089,13 @@
       bodyHtml = `<table><tr><th>طريقة الدفع</th><th>المبلغ</th></tr>
         ${rows.map(r=>`<tr><td>${PAY_AR[r[0]]||esc(r[0])}</td><td>${fmt(r[1])}</td></tr>`).join('')}
         </table>`;
+    } else if(d.type==='hourly'){
+      const tally = Array.from({length:24}, ()=>({count:0, total:0}));
+      d.rows.forEach(o=>{ const h=new Date(new Date(o.created_at).getTime()+3*3600000).getUTCHours(); tally[h].count++; tally[h].total+=parseFloat(o.total||0); });
+      const hourLabel = h => (h%12===0?12:h%12)+':00 '+(h<12?'ص':'م');
+      bodyHtml = `<table><tr><th>الساعة</th><th>عدد الطلبيات</th><th>الإجمالي</th></tr>
+        ${tally.map((r,h)=>r.count?`<tr><td>${hourLabel(h)} → ${hourLabel((h+1)%24)}</td><td>${r.count}</td><td>${fmt(r.total)}</td></tr>`:'').join('')}
+        </table>`;
     } else { // summary
       const totalSales = d.rows.reduce((a,o)=>a+parseFloat(o.total||0),0);
       const totalDiscount = d.rows.reduce((a,o)=>a+parseFloat(o.discount||0),0);
@@ -9098,7 +9130,7 @@
   function downloadReportPDF(){
     const d = window.__repData; if(!d){ toast('⚠️ ولّدي التقرير أول'); return; }
     const html = buildReportHtml(); if(!html) return;
-    const TYPE_AR = {summary:'ملخص_عام', items:'الأصناف_الأكثر_مبيعا', branches:'المبيعات_حسب_الفرع', daily:'المبيعات_حسب_اليوم', payment:'المبيعات_حسب_طريقة_الدفع', expenses:'تقرير_المصاريف', withdrawals:'سحوبات_الدرج', foodcost:'تكلفة_الأصناف', daily_manager:'التقرير_اليومي'};
+    const TYPE_AR = {summary:'ملخص_عام', items:'الأصناف_الأكثر_مبيعا', branches:'المبيعات_حسب_الفرع', daily:'المبيعات_حسب_اليوم', hourly:'المبيعات_حسب_الساعة', payment:'المبيعات_حسب_طريقة_الدفع', expenses:'تقرير_المصاريف', withdrawals:'سحوبات_الدرج', foodcost:'تكلفة_الأصناف', daily_manager:'التقرير_اليومي'};
     exportHtmlToPDF(html, (TYPE_AR[d.type]||'تقرير')+'_'+d.from+'_'+d.to);
   }
 
