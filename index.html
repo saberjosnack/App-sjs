@@ -17082,6 +17082,7 @@ try {
       const { error } = await db.from('violations').update({ employee_note: note, employee_note_at: new Date().toISOString() }).eq('id', violationId);
       if(error){ toast('✗ '+error.message); return; }
       toast('✓ انحفظت ملاحظتك');
+      loadEmpPortal(); // 🔧 مصلّحة: كانت الشاشة تضل واقفة على حالتها القديمة بعد الحفظ — هلق بترجع تتحمّل وتتحدّث فورًا
     }catch(e){ toast('✗ '+e.message); }
   }
   function empPortalLogout(){
@@ -17249,6 +17250,7 @@ try {
                 <span style="font-weight:800;color:${v.status==='resolved'?'var(--ok)':'var(--warn)'}">${v.status==='resolved'?'✅ متسوّاة':'⏳ قيد المراجعة'}</span>
               </div>
               <div style="margin-bottom:6px"><b>السبب:</b> ${esc(v.note||'—')}</div>
+              ${(v.images&&v.images.length)?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0">${renderImgThumbs(v.images)}</div>`:''}
               ${v.deduction_id?`<div style="font-size:.82rem;color:var(--red);font-weight:700;margin-bottom:6px">➖ اتعمل عليها خصم</div>`:''}
               <label style="font-size:.8rem;color:var(--muted);font-weight:700;display:block;margin-bottom:4px">✍️ ملاحظتك / ردّك على هاي المخالفة (اختياري):</label>
               <textarea id="epvNote_${v.id}" rows="2" style="width:100%;border:1.5px solid var(--line);border-radius:8px;padding:8px;font-family:inherit" placeholder="اكتب وجهة نظرك أو أي توضيح هون...">${esc(v.employee_note||'')}</textarea>
