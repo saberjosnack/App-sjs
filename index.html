@@ -7999,7 +7999,7 @@
           obFrom += pageSize;
         }
         let lastAuditIdx = -1;
-        for(let k=allPre.length-1; k>=0; k--){ if(allPre[k].type==='audit'){ lastAuditIdx = k; break; } }
+        for(let k=allPre.length-1; k>=0; k--){ if(auditActualFromNote(allPre[k].note)!==null){ lastAuditIdx = k; break; } }
         const anchorActual = lastAuditIdx>=0 ? auditActualFromNote(allPre[lastAuditIdx].note) : null;
         if(anchorActual!==null){
           openingStock = anchorActual;
@@ -8034,7 +8034,7 @@
       // لازم يرتكز على آخر رقم فعلي اتعدّ بإيد حدا، مش يضل يجمع رياضيًا فوق رقم ممكن يكون منزاح من قبل.
       let balanceAtPeriodEnd = openingStock;
       moves.forEach(m=>{
-        const a = m.type==='audit' ? auditActualFromNote(m.note) : null;
+        const a = auditActualFromNote(m.note);
         balanceAtPeriodEnd = a!==null ? a : (balanceAtPeriodEnd + parseFloat(m.qty||0));
       });
       const totalCostMoved = moves.reduce((a,m)=>a+parseFloat(m.total_cost||0),0);
@@ -8046,7 +8046,7 @@
       // 📥 نخزّن نسخة فيها الرصيد المتراكم لكل صف، جاهزة للتصدير لـExcel
       let runningForExport = openingStock;
       window.__PT_EXPORT_ROWS = moves.map(m=>{
-        const auditActual = m.type==='audit' ? auditActualFromNote(m.note) : null;
+        const auditActual = auditActualFromNote(m.note);
         runningForExport = auditActual!==null ? auditActual : (runningForExport + parseFloat(m.qty||0));
         return {
           'التاريخ والوقت': new Date(m.created_at).toLocaleString('ar-JO'),
@@ -8089,7 +8089,7 @@
         <div class="tbl-wrap"><table class="tbl">
           <tr><th>التاريخ والوقت</th><th>النوع</th><th>الفرع</th><th>الكمية</th><th>الرصيد بعدها</th><th>سعر الوحدة</th><th>التكلفة</th><th>ملاحظة</th><th>بواسطة</th></tr>
           ${moves.map(m=>{
-            const auditActual = m.type==='audit' ? auditActualFromNote(m.note) : null;
+            const auditActual = auditActualFromNote(m.note);
             running = auditActual!==null ? auditActual : (running + parseFloat(m.qty||0));
             const positive = parseFloat(m.qty||0) >= 0;
             return `<tr>
@@ -11501,9 +11501,14 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
     const stock = parseFloat(document.getElementById('adj_cur').value)||0;
     const min_stock = parseFloat(document.getElementById('adj_min').value)||0;
     const reason = document.getElementById('adj_reason')?.value||'تصحيح خطأ';
-    await db.from('branch_inventory').update({stock, min_stock}).eq('id',invId);
+    const { error: updErr } = await db.from('branch_inventory').update({stock, min_stock}).eq('id',invId);
+    if(updErr){ toast('✗ فشل الحفظ: '+updErr.message); console.error(updErr); unlockSubmit('saveAdjust'); return; }
     const diff = stock - (parseFloat(oldStock)||0);
-    if(Math.abs(diff)>0.001) logMovement(branchId, ingId, diff, 'manual', 'تعديل يدوي — '+reason);
+    // 🔧 مصلّحة: هلق منسجّل "الفعلي" بنفس صيغة تصحيح الجرد (المتوقع ← الفعلي) بدل بس رقم الفرق —
+    // هيك أي شاشة ملخّص/خط سير بتقدر "ترتكز" على هالرقم مباشرة بدل ما تجمع فوقه وممكن ينتقل معها
+    // انحراف قديم. قبل هيك كان هاد التعديل يسجّل نوعه "manual" برقم فرق بس، وأي خطأ بالـ"oldStock"
+    // (لو فيه حركة تانية صارت بينها وبين فتح الفورمة) كان يضل عالق للأبد بدون ما يتصحح لحاله.
+    if(Math.abs(diff)>0.001) logMovement(branchId, ingId, diff, 'manual', 'تعديل يدوي (المتوقع '+(parseFloat(oldStock)||0)+' ← الفعلي '+stock+') — '+reason);
     toast('✓ اتحدث المخزون'); renderInventory();
     const branchName = BRANCHES.find(b=>b.id===branchId)?.name_ar||'—';
     await checkAndNotifyShortageForOne(branchId, branchName, ingId, stock, min_stock);
