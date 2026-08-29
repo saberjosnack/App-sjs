@@ -6022,6 +6022,7 @@
           <label class="chk"><input type="checkbox" id="f_hrShowAdvances" ${settingOn('hr_portal_show_advances')?'checked':''}> السلف القائمة</label>
           <label class="chk"><input type="checkbox" id="f_hrShowMeals" ${settingOn('hr_portal_show_meals')?'checked':''}> الوجبات</label>
           <label class="chk"><input type="checkbox" id="f_hrShowBalance" ${settingOn('hr_portal_show_balance')?'checked':''}> الرصيد السابق</label>
+          <label class="chk"><input type="checkbox" id="f_hrShowViolations" ${settingOn('hr_portal_show_violations')?'checked':''}> المخالفات المسجّلة عليه</label>
         </div>
         <div class="fld" style="margin-top:10px"><label>☕ مدة البريك المسموحة يوميًا (دقيقة)</label>
           <input type="number" id="f_breakLimit" min="1" step="5" value="${SETTINGS.break_limit_minutes||60}" style="width:150px">
@@ -6301,6 +6302,7 @@
               ${renderImgThumbs(v.images)}
             </div>`:''}
             ${v.employee_name?`<div style="background:#fff8e1;border-radius:8px;padding:8px 12px;margin:8px 0"><b>المخالف المحدد:</b> ${esc(v.employee_name)}${v.deduction_id?' — <span style="color:var(--red)">✓ اتعمل خصم</span>':''}</div>`:''}
+            ${v.employee_note?`<div style="background:#e8f4ff;border-radius:8px;padding:8px 12px;margin:8px 0"><b>✍️ ملاحظة الموظف:</b> ${esc(v.employee_note)}</div>`:''}
             <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
               <select id="vioEmpSel_${v.id}" style="flex:1;min-width:160px">
                 <option value="">حدد المخالف...</option>
@@ -15583,6 +15585,7 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
       drawer_pin_threshold: parseFloat(document.getElementById('f_drawerPinThreshold')?.value) ?? 10,
       hr_portal_show_meals: document.getElementById('f_hrShowMeals')?.checked ?? true,
       hr_portal_show_balance: document.getElementById('f_hrShowBalance')?.checked ?? true,
+      hr_portal_show_violations: document.getElementById('f_hrShowViolations')?.checked ?? true,
       delivery_whatsapp: f_wanum ? f_wanum.value.trim() : '',
       feedback_msg_template: document.getElementById('f_feedbackMsg')?.value.trim() || '',
       procurement_whatsapp: document.getElementById('f_procWa')?.value.trim() || '',
@@ -17040,6 +17043,15 @@ try {
       }
     }catch(e){ console.error(e); errEl.textContent = '⚠️ صار خطأ، جرب تاني'; }
   }
+  async function saveEmpViolationNote(violationId){
+    const ta = document.getElementById('epvNote_'+violationId);
+    const note = ta?.value.trim() || '';
+    try{
+      const { error } = await db.from('violations').update({ employee_note: note, employee_note_at: new Date().toISOString() }).eq('id', violationId);
+      if(error){ toast('✗ '+error.message); return; }
+      toast('✓ انحفظت ملاحظتك');
+    }catch(e){ toast('✗ '+e.message); }
+  }
   function empPortalLogout(){
     stopGeofenceWatch();
     if(window.__empHeartbeatInterval){ clearInterval(window.__empHeartbeatInterval); window.__empHeartbeatInterval = null; }
@@ -17142,6 +17154,13 @@ try {
       const { data: myTasks } = await db.from('daily_tasks').select('*').eq('staff_id', EMP.id).eq('task_date', localTodayStr()).order('created_at');
       const tasksToday = myTasks||[];
 
+      // 🚩 المخالفات المسجّلة على هاد الموظف بالذات — يشوفها ويقدر يكتب ملاحظته/رده عليها
+      let myViolations = [];
+      if(settingOn('hr_portal_show_violations')){
+        const { data: vData } = await db.from('violations').select('*').eq('employee_id', EMP.id).order('created_at',{ascending:false});
+        myViolations = vData||[];
+      }
+
       body.innerHTML = `
         ${(EMP.shift_window_from && EMP.shift_window_to) ? `<div style="background:#fff8e1;border-radius:12px;padding:10px 14px;text-align:center;margin-bottom:10px;font-weight:800;color:#8a6d00">🕐 دوامك المحدد: من ${EMP.shift_window_from} لغاية ${EMP.shift_window_to}</div>` : ''}
         ${linkedCcIds.length ? `<div style="background:linear-gradient(135deg,#e0f0ff,#fff8e1);border:1.5px solid #0d6efd;border-radius:14px;padding:14px;text-align:center;margin-bottom:10px">
@@ -17187,6 +17206,22 @@ try {
               <input type="checkbox" ${t.is_done?'checked':''} onchange="empToggleTask('${t.id}',this.checked)" style="width:20px;height:20px">
               <span style="flex:1;${t.is_done?'text-decoration:line-through;color:var(--muted)':''}">${esc(t.task_text)}</span>
             </label>`).join('')}
+        </div>` : ''}
+
+        ${myViolations.length ? `<div style="background:#fff;border-radius:16px;padding:16px;margin-bottom:14px;box-shadow:var(--shadow);border:1.5px solid var(--red)">
+          <div style="font-weight:900;color:var(--red);margin-bottom:10px">🚩 مخالفاتك المسجّلة (${myViolations.length})</div>
+          ${myViolations.map(v=>`
+            <div style="border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:10px;${v.status==='resolved'?'opacity:.75':''}">
+              <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:6px">
+                <span style="font-size:.78rem;color:var(--muted);font-weight:700">${new Date(v.created_at).toLocaleString('ar-JO')}</span>
+                <span style="font-weight:800;color:${v.status==='resolved'?'var(--ok)':'var(--warn)'}">${v.status==='resolved'?'✅ متسوّاة':'⏳ قيد المراجعة'}</span>
+              </div>
+              <div style="margin-bottom:6px"><b>السبب:</b> ${esc(v.note||'—')}</div>
+              ${v.deduction_id?`<div style="font-size:.82rem;color:var(--red);font-weight:700;margin-bottom:6px">➖ اتعمل عليها خصم</div>`:''}
+              <label style="font-size:.8rem;color:var(--muted);font-weight:700;display:block;margin-bottom:4px">✍️ ملاحظتك / ردّك على هاي المخالفة (اختياري):</label>
+              <textarea id="epvNote_${v.id}" rows="2" style="width:100%;border:1.5px solid var(--line);border-radius:8px;padding:8px;font-family:inherit" placeholder="اكتب وجهة نظرك أو أي توضيح هون...">${esc(v.employee_note||'')}</textarea>
+              <button class="mini ok" style="margin-top:6px" onclick="saveEmpViolationNote('${v.id}')">💾 حفظ ملاحظتي</button>
+            </div>`).join('')}
         </div>` : ''}
 
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
