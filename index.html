@@ -15874,7 +15874,29 @@ try {
     if(!confirm('⚠️ حذف "'+name+'" نهائيًا؟\nإذا الصنف له طلبات سابقة، الأفضل تستخدم "إخفاء (أرشفة)" بدل الحذف عشان التقارير القديمة تضل سليمة.\nمتابعة الحذف النهائي؟')) return;
     try{
       const { error } = await db.from('menu_items').delete().eq('id', id);
-      if(error){ toast('✗ '+error.message+' — جرب "إخفاء (أرشفة)" بدلًا من الحذف'); console.error(error); return; }
+      if(error){
+        // 🔧 مصلّحة: أشيع سبب فشل حذف صنف نهائيًا هو وجود وصفة مرتبطة فيه بشاشة "الوصفات" —
+        // قاعدة البيانات بترفض الحذف عشان ما تضيع الوصفة يتيمة. بدل ما نوقف برسالة تقنية غامضة،
+        // منسأل المستخدم صراحة إذا بدها نحذف الوصفة المرتبطة كمان، وبعدين نعيد محاولة حذف الصنف.
+        const isRecipeFk = /recipes.*fkey|violates foreign key.*recipes/i.test(error.message||'');
+        if(isRecipeFk){
+          const { data: linkedRecipe } = await db.from('recipes').select('id').eq('menu_item_id', id).maybeSingle();
+          if(linkedRecipe && confirm('⚠️ الصنف "'+name+'" مرتبط بوصفة بشاشة "الوصفات"، وما بينحذف وهي مرتبطة فيه.\nبدك نحذف الوصفة المرتبطة كمان ونكمل حذف الصنف نهائيًا؟')){
+            await db.from('recipe_items').delete().eq('recipe_id', linkedRecipe.id);
+            const { error: recErr } = await db.from('recipes').delete().eq('id', linkedRecipe.id);
+            if(recErr){ toast('✗ فشل حذف الوصفة المرتبطة: '+recErr.message); return; }
+            const { error: retryErr } = await db.from('menu_items').delete().eq('id', id);
+            if(retryErr){ toast('✗ '+retryErr.message+' — جرب "إخفاء (أرشفة)" بدلًا من الحذف'); console.error(retryErr); return; }
+            RECIPE_COST_MAP = null; // 🔧 وصفة انحذفت — لازم كاش تكلفة الوصفات يتحدّث
+            await logActivity('delete_item', 'حذف صنف (مع وصفته المرتبطة): '+name);
+            toast('✓ انحذف الصنف ووصفته'); renderAdmin(); bootData();
+            return;
+          }
+          toast('✗ ما انحذف — الوصفة لسا مرتبطة. جرب "إخفاء (أرشفة)" بدلًا من الحذف');
+          return;
+        }
+        toast('✗ '+error.message+' — جرب "إخفاء (أرشفة)" بدلًا من الحذف'); console.error(error); return;
+      }
       await logActivity('delete_item', 'حذف صنف: '+name);
       toast('✓ انحذف الصنف'); renderAdmin(); bootData();
     }catch(e){ toast('✗ '+e.message); console.error(e); }
