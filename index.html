@@ -430,6 +430,7 @@
               <option value="">اختر الاسم...</option>
             </select>
             <div id="empMealDiscInfo" class="hidden" style="color:var(--muted);font-weight:800;font-size:.8rem;margin-bottom:6px"></div>
+            <div id="empMealPriceWarn" class="hidden" style="color:#fff;background:var(--red);font-weight:800;font-size:.8rem;margin-bottom:6px;padding:8px 10px;border-radius:8px"></div>
             <div class="cust-box" id="custBox">
               <div class="lbl">👤 معلومات العميل <span id="custReq">(اختياري)</span></div>
               <input class="dfield" id="custPhone" placeholder="رقم الهاتف — اكتبه وبنجيب بياناته" inputmode="tel" autocomplete="off">
@@ -787,6 +788,7 @@
     const info = document.getElementById('empMealDiscInfo');
     const opt = sel?.selectedOptions[0];
     const disc = opt ? parseFloat(opt.dataset.disc||20) : 20;
+    window.__empMealPriceApprovedFor = null; // 🔧 موظف تاني = موافقة تانية لازم تتعمل من جديد
     if(info){
       if(sel?.value){ info.textContent = '💸 نسبة الخصم لهاد الشخص: '+disc+'%'; info.classList.remove('hidden'); }
       else info.classList.add('hidden');
@@ -864,6 +866,7 @@
       nameInput.classList.add('hidden');
       nameInput.value = '';
       window.__empMealAlreadyToday = false;
+      window.__empMealPriceApprovedFor = null;
       payMethod = 'cash';
       const cashBtn = document.querySelector('#payBar [data-p="cash"]');
       document.querySelectorAll('#payBar button').forEach(x=>x.classList.remove('on'));
@@ -3322,6 +3325,20 @@
     }
     const btnSave = document.getElementById('btnSave');
     if (btnSave) btnSave.disabled = !cart.length;
+    // 🚫 وجبة موظف: أصناف سعرها أكتر من الحد المسموح (إعداد قابل للتعديل، افتراضيًا 2.5) ممنوعة
+    // بدون موافقة المالك — بيبيّنها هون فورًا بالسلة (والمنع الفعلي وقت الحفظ بـsaveOrder).
+    const warnEl = document.getElementById('empMealPriceWarn');
+    if(warnEl){
+      const isEmpMealNow = document.getElementById('empMealChk')?.checked;
+      const priceLimit = parseFloat(SETTINGS.emp_meal_price_limit ?? 2.5);
+      const overItems = isEmpMealNow ? cart.filter(l=>!l.item.exclude_employee_discount && parseFloat(l.item.price||0)>priceLimit) : [];
+      if(overItems.length && window.__empMealPriceApprovedFor !== (document.getElementById('empMealName')?.value||'')){
+        warnEl.classList.remove('hidden');
+        warnEl.textContent = '⛔ ممنوع بوجبة موظف بدون موافقة المالك: '+overItems.map(l=>l.item.name_ar+' ('+fmt(l.item.price)+')').join('، ')+' — أكتر من الحد المسموح ('+fmt(priceLimit)+' '+CURRENCY+')';
+      } else {
+        warnEl.classList.add('hidden'); warnEl.textContent='';
+      }
+    }
     renderUpsell();
   }
 
@@ -4172,6 +4189,20 @@
       if(empRec && empRec.pin && window.__empMealVerified !== empMealName){
         toast('🔒 لازم تأكيد الرقم السري تبع "'+empMealName+'" أول — اختار الاسم من جديد وأدخل الرقم');
         return;
+      }
+      // 🚫 أصناف سعرها أكتر من الحد المسموح بوجبة الموظف (إعداد قابل للتعديل) — ممنوعة إلا
+      // بموافقة المالك، ولازم يوافق بإدخال رقمه السري الشخصي بلحظتها (مش صلاحية عامة، موافقة فعلية).
+      const priceLimit = parseFloat(SETTINGS.emp_meal_price_limit ?? 2.5);
+      const overItems = cart.filter(l=>!l.item.exclude_employee_discount && parseFloat(l.item.price||0)>priceLimit);
+      if(overItems.length && window.__empMealPriceApprovedFor !== empMealName){
+        const namesStr = overItems.map(l=>l.item.name_ar+' ('+fmt(l.item.price)+' '+CURRENCY+')').join('، ');
+        const pin = prompt('⛔ الأصناف التالية سعرها أكتر من الحد المسموح بوجبة موظف ('+fmt(priceLimit)+' '+CURRENCY+'):\n'+namesStr+'\n\nممنوع بدون موافقة المالك.\nأدخلي الرقم السري تبع المالك للموافقة:');
+        if(pin===null){ unlockSubmit('saveOrder'); return; }
+        const ownerMatch = STAFF.find(s=>s.role==='admin' && s.is_active!==false && String(s.pin||'')===String(pin).trim());
+        if(!ownerMatch){ toast('⛔ رقم سري غلط — ما تمّت الموافقة'); unlockSubmit('saveOrder'); return; }
+        window.__empMealPriceApprovedFor = empMealName;
+        await logActivity('emp_meal_price_approve', 'موافقة '+ownerMatch.full_name+' على أصناف فوق الحد بوجبة '+empMealName+': '+namesStr);
+        toast('✓ تمت الموافقة من '+ownerMatch.full_name);
       }
     }
 
@@ -6027,6 +6058,10 @@
         <div class="fld" style="margin-top:10px"><label>☕ مدة البريك المسموحة يوميًا (دقيقة)</label>
           <input type="number" id="f_breakLimit" min="1" step="5" value="${SETTINGS.break_limit_minutes||60}" style="width:150px">
           <div style="font-size:.76rem;color:var(--muted);font-weight:600;margin-top:4px">أي دقيقة زايدة عن هالحد باليوم الواحد تنخصم تلقائيًا من ساعات دوام الموظف (بوابة HR وشاشة البريكات).</div>
+        </div>
+        <div class="fld" style="margin-top:10px"><label>🍔 أعلى سعر صنف مسموح بوجبة موظف (بدون موافقتك)</label>
+          <input type="number" id="f_empMealPriceLimit" min="0" step="0.25" value="${SETTINGS.emp_meal_price_limit ?? 2.5}" style="width:150px">
+          <div style="font-size:.76rem;color:var(--muted);font-weight:600;margin-top:4px">أي صنف سعره أعلى من هالرقم، الكاشير ما بيقدر يضيفه لوجبة موظف إلا بموافقتك — لازم تدخلي رقمك السري (PIN) لحظتها بالكاشير للموافقة.</div>
         </div>
         <div class="fld" style="margin-top:10px"><label>🕑 أقل فاصل زمني بين بريك وبريك (دقيقة)</label>
           <input type="number" id="f_breakCooldown" min="0" step="15" value="${SETTINGS.break_cooldown_minutes ?? 120}" style="width:150px">
@@ -15586,6 +15621,7 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
       hr_portal_show_net: document.getElementById('f_hrShowNet')?.checked ?? true,
       hr_portal_show_advances: document.getElementById('f_hrShowAdvances')?.checked ?? true,
       break_limit_minutes: parseInt(document.getElementById('f_breakLimit')?.value) || 60,
+      emp_meal_price_limit: parseFloat(document.getElementById('f_empMealPriceLimit')?.value) ?? 2.5,
       break_cooldown_minutes: parseInt(document.getElementById('f_breakCooldown')?.value ?? 120),
       drawer_pin_threshold: parseFloat(document.getElementById('f_drawerPinThreshold')?.value) ?? 10,
       hr_portal_show_meals: document.getElementById('f_hrShowMeals')?.checked ?? true,
