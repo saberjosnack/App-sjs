@@ -422,6 +422,14 @@
               <option value="">بدون منصة (مباشر)</option>
             </select>
             <div id="platformNote" class="hidden" style="color:var(--warn);font-weight:900;font-size:.82rem;margin-bottom:6px">🛵 ذمم على المنصة — ما بتحاسب عليه كاش بآخر الشيفت</div>
+            <select class="branch-sel hidden" id="orderChannel" style="margin-bottom:6px;border-color:var(--red)">
+              <option value="">📞 من وين إجا الطلب؟ (إجباري)</option>
+              <option value="whatsapp">💬 واتساب</option>
+              <option value="facebook">📘 فيسبوك</option>
+              <option value="messenger">✉️ مسنجر</option>
+              <option value="phone1">☎️ مكالمة جهاز 1</option>
+              <option value="phone2">☎️ مكالمة جهاز 2</option>
+            </select>
             <label style="display:flex;align-items:center;gap:8px;background:var(--cream);border:1px dashed var(--line);border-radius:10px;padding:8px 10px;margin-bottom:6px;font-weight:800;font-size:.9rem">
               <input type="checkbox" id="empMealChk" onchange="onEmpMealToggle()" style="width:18px;height:18px">
               🍽️ وجبة موظف (خصم 20% تلقائي — ذمم بالاسم)
@@ -742,6 +750,23 @@
     }
     return out;
   }
+  // 📞 بتطبّع رقم هاتف لغرض المقارنة/البحث بس (مش للحفظ): بتحوّل الأرقام العربية لغربية، بتشيل
+  // أي رمز مش رقم (مسافات، شرطات، أقواس، +)، وبتشيل مقدمة رمز الأردن (00962/+962/962) لو موجودة.
+  function phoneDigitsOnly(str){
+    let d = normalizeDigits(str||'').replace(/\D/g,'');
+    if(d.startsWith('00962')) d = d.slice(5);
+    else if(d.startsWith('962')) d = d.slice(3);
+    return d;
+  }
+  // 🔍 بتقارن رقمين هاتف حتى لو مكتوبين بصيغ مختلفة (بصفر أول أو بدونه، برمز دولة أو بدونه،
+  // بأرقام عربية أو غربية، بمسافات/شرطات) — بتقارن آخر 8 أرقام مشتركة (كافية لتمييز رقم أردني محليًا).
+  function phoneMatches(stored, query){
+    const s = phoneDigitsOnly(stored), q = phoneDigitsOnly(query);
+    if(!q) return false;
+    if(s.includes(q)) return true; // مطابقة مباشرة (أو جزء من الرقم يبحث عنه)
+    if(q.length>=7) return s.slice(-8)===q.slice(-8) || s.endsWith(q.replace(/^0+/,'')); // آخر 8 أرقام أو تجاهل الصفر الأول
+    return false;
+  }
   document.addEventListener('input', function(e){
     const el = e.target;
     if(el && (el.tagName==='INPUT' || el.tagName==='TEXTAREA') && typeof el.value==='string'){
@@ -761,6 +786,7 @@
   const esc = s => String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   const toast = m => { const t=$('toast'); t.textContent=m; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),2400); };
   const TYPE_AR = { takeaway:'استلام', delivery:'توصيل', dine_in:'صالة' };
+  const CHANNEL_AR = { whatsapp:'💬 واتساب', facebook:'📘 فيسبوك', messenger:'✉️ مسنجر', phone1:'☎️ جهاز 1', phone2:'☎️ جهاز 2' };
   const PAY_AR = { cash:'كاش', card:'كرت', cliq:'كليك' };
   const ROLE_AR = { admin:'مدير', cashier:'كاشير', callcenter:'كول سنتر', kitchen:'مطبخ' };
   PAY_AR['platform'] = 'ذمم (تطبيق)';
@@ -1467,6 +1493,8 @@
     if (!perm('order_platform') && platformNoteEl) platformNoteEl.classList.add('hidden');
     const branchSel = document.getElementById('branchSel');
     document.getElementById('branchSelWrap')?.classList.toggle('hidden', !(adm||cc||!ME.branch_id));
+    // 📞 قناة الطلب (واتساب/فيسبوك/مسنجر/مكالمة جهاز) — إجبارية للكول سنتر بس، عشان نعرف مصدر كل طلب
+    document.getElementById('orderChannel')?.classList.toggle('hidden', !cc);
     const discInput = document.getElementById('discInput');
     if (discInput) discInput.classList.toggle('hidden', !adm);
   }
@@ -2925,6 +2953,8 @@
     });
     const platformSel = document.getElementById('orderPlatform');
     if(platformSel){ platformSel.value = ''; onPlatformChange(); }
+    const channelSel = document.getElementById('orderChannel');
+    if(channelSel) channelSel.value = '';
     const empChk = document.getElementById('empMealChk');
     if(empChk){ empChk.checked = false; onEmpMealToggle(); }
     const empNameSel = document.getElementById('empMealName');
@@ -3003,11 +3033,19 @@
       }
       phoneTimer = setTimeout(async ()=>{
         try {
+          // 🔧 مصلّحة: كان البحث يقارن الرقم المكتوب حرفيًا (0791234567 ≠ 791234567 ≠ 00962791234567
+          // ≠ رقم بأرقام عربية...) — أي اختلاف بسيط بصيغة الرقم كان يفشل يلاقي العميل الموجود أصلًا
+          // ويعمل عميل جديد مكرر له! هلق منطبّع الرقم (نشيل رمز الدولة، نحوّل الأرقام لغربية) قبل البحث.
+          const phNorm = phoneDigitsOnly(ph);
           let { data } = await db.from('customers').select('*').eq('phone', ph).limit(1);
+          if(!data || !data.length){
+            const rExact = await db.from('customers').select('*').ilike('phone', '%'+phNorm+'%').limit(1);
+            if(rExact.data && rExact.data.length) data = rExact.data;
+          }
           // بحث جزئي: إذا ما في تطابق كامل، دور على أي رقم يحتوي المدخل (آخر 4 أرقام مثلًا)
           let matches = [];
-          if((!data || !data.length) && ph.length >= 4){
-            const r2 = await db.from('customers').select('*').ilike('phone', '%'+ph+'%').limit(6);
+          if((!data || !data.length) && phNorm.length >= 4){
+            const r2 = await db.from('customers').select('*').ilike('phone', '%'+phNorm.slice(-8)+'%').limit(6);
             matches = r2.data || [];
             if(matches.length === 1){ data = matches; matches = []; }
           }
@@ -3346,17 +3384,19 @@
     const custPhone = document.getElementById('custPhone');
     const custName = document.getElementById('custName');
     const custAddr = document.getElementById('custAddr');
-    const phone = custPhone ? custPhone.value.trim() : '';
+    // 🔧 مصلّحة: منطبّع الرقم (أرقام عربية → غربية، بدون رمز دولة) قبل أي مطابقة أو حفظ — عشان
+    // نفس الزبون يترقّب دايمًا كعميل واحد بغض النظر عن الصيغة يلي كتب فيها رقمه هالمرة.
+    const phone = custPhone ? phoneDigitsOnly(custPhone.value.trim()) : '';
     const name = custName ? custName.value.trim() : '';
     const addr = custAddr ? custAddr.value.trim() : '';
     if(!phone) return null;
     // 🔒 تأكيد مباشر من قاعدة البيانات وقت الحفظ نفسه — مش نعتمد بس على matchedCustomer
     // (كان ممكن يكون لسا ما تحمّل بسبب سرعة الكاشير بالكتابة/الحفظ قبل ما يخلص البحث،
     // وهاد كان يسبب إنشاء عميل مكرر بدل تحديث الأصلي = عدد الطلبات ما يتحرك والعنوان ما يترحّل)
-    let target = (matchedCustomer && matchedCustomer.phone === phone) ? matchedCustomer : null;
+    let target = (matchedCustomer && phoneDigitsOnly(matchedCustomer.phone)===phone) ? matchedCustomer : null;
     if(!target){
       try{
-        const { data: found } = await db.from('customers').select('*').eq('phone', phone).limit(1);
+        const { data: found } = await db.from('customers').select('*').ilike('phone', '%'+phone.slice(-8)+'%').limit(1);
         if(found && found.length) target = found[0];
       }catch(e){ console.error('upsertCustomer lookup failed:', e); }
     }
@@ -4182,6 +4222,9 @@
     if(!perm(orderType==='delivery'?'order_delivery':'order_takeaway')){ toast('⛔ ما عندك صلاحية بيع '+(orderType==='delivery'?'التوصيل':'الاستلام')); return; }
     const platformValSel = document.getElementById('orderPlatform')?.value;
     if(platformValSel && !perm('order_platform')){ toast('⛔ ما عندك صلاحية البيع عبر التطبيقات/المنصات'); return; }
+    // 📞 قناة الطلب إجبارية للكول سنتر — لازم يحدد من وين إجا الطلب (واتساب/فيسبوك/مسنجر/مكالمة)
+    const orderChannel = document.getElementById('orderChannel')?.value || '';
+    if(isCallCenter() && !orderChannel){ toast('⚠️ حددي من وين إجا الطلب (واتساب/فيسبوك/مسنجر/مكالمة) — إجباري'); return; }
     const empMealName = document.getElementById('empMealChk')?.checked ? (document.getElementById('empMealName')?.value.trim()||'') : '';
     if(document.getElementById('empMealChk')?.checked && !empMealName){ toast('⚠️ اكتب اسم الموظف — إجباري لوجبة الموظف'); return; }
     if(empMealName){
@@ -4289,6 +4332,7 @@
         notes: orderNote ? orderNote.value.trim() || null : null,
         discount_code: appliedCode ? appliedCode.code : null,
         platform_id: document.getElementById('orderPlatform')?.value || null,
+        channel: orderChannel || null,
         employee_tab_name: empMealName || null,
         employee_meal_id: empMealName ? (MEAL_NAMES_DATA.find(n=>n.name===empMealName)?.id || null) : null,
         split_details: payMethod==='split' ? {
@@ -4539,6 +4583,7 @@
         <tr><td><b>الفرع</b></td><td>${esc(o.branches?.name_ar||'—')}</td></tr>
         <tr><td><b>الموظف</b></td><td>${esc(o.created_by_name||'—')}</td></tr>
         <tr><td><b>النوع / الدفع</b></td><td>${TYPE_AR[o.order_type]||''} / ${PAY_AR[o.payment_method]||''}</td></tr>
+        ${o.channel?`<tr><td><b>قناة الطلب</b></td><td>${CHANNEL_AR[o.channel]||esc(o.channel)}</td></tr>`:''}
         <tr><td><b>العميل</b></td><td>${esc(o.customers?.name||'—')}${o.customers?.phone?` — <span dir="ltr">${esc(o.customers.phone)}</span>`:''}</td></tr>
         ${o.customers?.address?`<tr><td><b>العنوان</b></td><td>${esc(o.customers.address)}</td></tr>`:''}
         ${o.notes?`<tr><td><b>ملاحظة</b></td><td>${esc(o.notes)}</td></tr>`:''}
@@ -4767,7 +4812,7 @@
           return;
         }
 
-        dayList.innerHTML = `<table class="tbl"><tr><th>#</th><th>الوقت</th><th>⏱️</th><th>النوع</th>${(adm||cc)?'<th>الفرع</th>':''}<th>العميل</th><th>الكاشير</th><th>الأصناف</th><th>الإجمالي</th>${ownerView?'<th>أجور التوصيل</th><th>الربح</th>':''}<th>الحالة</th><th></th></tr>
+        dayList.innerHTML = `<table class="tbl"><tr><th>#</th><th>الوقت</th><th>⏱️</th><th>النوع</th>${(adm||cc)?'<th>الفرع</th><th>القناة</th>':''}<th>العميل</th><th>الكاشير</th><th>الأصناف</th><th>الإجمالي</th>${ownerView?'<th>أجور التوصيل</th><th>الربح</th>':''}<th>الحالة</th><th></th></tr>
           ${DAY.map(o=>{
             const mins = Math.floor((Date.now()-new Date(o.created_at))/60000);
             const readyMins = o.status==='ready' ? Math.floor((Date.now()-new Date(o.updated_at||o.created_at))/60000) : 0;
@@ -4783,7 +4828,7 @@
             <td>${new Date(o.created_at).toLocaleTimeString('ar-JO',{hour:'2-digit',minute:'2-digit'})}</td>
             <td>${timer}</td>
             <td>${TYPE_AR[o.order_type]||''}</td>
-            ${(adm||cc)?`<td>${esc(o.branches?.name_ar||'—')}</td>`:''}
+            ${(adm||cc)?`<td>${esc(o.branches?.name_ar||'—')}</td><td style="white-space:nowrap">${CHANNEL_AR[o.channel]||'—'}</td>`:''}
             <td>${esc(o.customers?.name||'—')}</td>
             <td>${esc(o.created_by_name||'—')}</td>
             <td>${(o.order_items||[]).map(l=>l.quantity+'× '+esc(l.item_name)).join('، ')}</td>
@@ -5278,7 +5323,7 @@
     const q = custSearch ? (custSearch.value||'').trim() : '';
     const minOrdersEl = document.getElementById('custMinOrders');
     const minOrders = minOrdersEl ? (parseInt(minOrdersEl.value)||0) : 0;
-    let list = q ? CUSTOMERS.filter(c=>(c.name||'').includes(q) || (c.phone||'').includes(q)) : CUSTOMERS.slice();
+    let list = q ? CUSTOMERS.filter(c=>(c.name||'').includes(q) || phoneMatches(c.phone, q)) : CUSTOMERS.slice();
     if(minOrders>0) list = list.filter(c=>(c.real_orders_count||0) >= minOrders);
     if(CUST_ORDER_SORT==='desc') list.sort((a,b)=>(b.real_orders_count||0)-(a.real_orders_count||0));
     else if(CUST_ORDER_SORT==='asc') list.sort((a,b)=>(a.real_orders_count||0)-(b.real_orders_count||0));
@@ -14339,7 +14384,7 @@ window.__lastEmpMealsData = null;
     // 🔍 البحث بيدوّر بكل العملاء المحمّلين (مش بس أفضل 100 المعروضين)
     const results = (TOP_CUST_ALL||[]).filter(c=>
       (c.name||'').toLowerCase().includes(q) ||
-      (c.phone||'').toLowerCase().includes(q) ||
+      phoneMatches(c.phone, q) ||
       (c.address||'').toLowerCase().includes(q)
     ).slice(0,200);
     wrap.innerHTML = renderTopCustRows(results);
