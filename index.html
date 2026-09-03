@@ -4237,16 +4237,21 @@
       // بموافقة المالك، ولازم يوافق بإدخال رقمه السري الشخصي بلحظتها (مش صلاحية عامة، موافقة فعلية).
       const priceLimit = parseFloat(SETTINGS.emp_meal_price_limit ?? 2.5);
       const overItems = cart.filter(l=>!l.item.exclude_employee_discount && parseFloat(l.item.price||0)>priceLimit);
-      if(overItems.length && window.__empMealPriceApprovedFor !== empMealName){
-        const namesStr = overItems.map(l=>l.item.name_ar+' ('+fmt(l.item.price)+' '+CURRENCY+')').join('، ');
-        const pin = prompt('⛔ الأصناف التالية سعرها أكتر من الحد المسموح بوجبة موظف ('+fmt(priceLimit)+' '+CURRENCY+'):\n'+namesStr+'\n\nممنوع بدون موافقة المالك.\nأدخلي الرقم السري تبع المالك للموافقة:');
-        if(pin===null){ unlockSubmit('saveOrder'); return; }
-        const ownerMatch = STAFF.find(s=>s.role==='admin' && s.is_active!==false && String(s.pin||'')===String(pin).trim());
-        if(!ownerMatch){ toast('⛔ رقم سري غلط — ما تمّت الموافقة'); unlockSubmit('saveOrder'); return; }
-        window.__empMealPriceApprovedFor = empMealName;
-        await logActivity('emp_meal_price_approve', 'موافقة '+ownerMatch.full_name+' على أصناف فوق الحد بوجبة '+empMealName+': '+namesStr);
-        toast('✓ تمت الموافقة من '+ownerMatch.full_name);
-      }
+   if(overItems.length && window.__empMealPriceApprovedFor !== empMealName){
+  const namesStr = overItems.map(l=>l.item.name_ar+' ('+fmt(l.item.price)+' '+CURRENCY+')').join('، ');
+  const pin = prompt('⛔ الأصناف التالية سعرها أكتر من الحد المسموح بوجبة موظف ('+fmt(priceLimit)+' '+CURRENCY+'):\n'+namesStr+'\n\nممنوع بدون موافقة المالك.\nأدخلي الرقم السري تبع المالك للموافقة:');
+  if(pin===null){ unlockSubmit('saveOrder'); return; }
+  try{
+    const { data: pinData, error: pinErr } = await db.functions.invoke('rapid-handler', { body: { pin: normalizeDigits(pin).trim() } });
+    if(pinErr || !pinData || pinData.error || !pinData.staff || pinData.staff.role !== 'admin'){
+      toast('⛔ رقم سري غلط — ما تمّت الموافقة'); unlockSubmit('saveOrder'); return;
+    }
+    window.__empMealPriceApprovedFor = empMealName;
+    await logActivity('emp_meal_price_approve', 'موافقة '+pinData.staff.full_name+' على أصناف فوق الحد بوجبة '+empMealName+': '+namesStr);
+    toast('✓ تمت الموافقة من '+pinData.staff.full_name);
+  }catch(e){
+    toast('✗ فشل التحقق من الرقم السري: '+e.message); unlockSubmit('saveOrder'); return;
+  }
     }
 
     const t = totals();
