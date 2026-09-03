@@ -9,7 +9,7 @@
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <title>Saber ERP — نظام نقاط البيع</title>
+  <title>SJS POS — صابر جو سناك</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&display=swap" rel="stylesheet">
   <link rel="manifest" href="manifest.json">
@@ -296,7 +296,7 @@
 <!-- ============ اختيار فرع الجهاز (مرة وحدة لهاد الجهاز) ============ -->
 <div id="deviceBranchScreen" class="hidden">
   <div class="login-card">
-    <div class="login-logo">Saber<span>ERP</span></div>
+    <div class="login-logo">S<span>J</span>S</div>
     <div class="login-sub">🖥️ هاد الجهاز — أي فرع يتبع؟</div>
     <div style="color:var(--muted);font-size:.82rem;font-weight:700;margin-bottom:16px">اختره مرة وحدة بس — بيتحدد فيه الطباعة تلقائيًا لهاد الجهاز بغض النظر مين بيسجل دخول</div>
     <select id="deviceBranchSelect" style="width:100%;padding:14px;border:2px solid var(--maroon);border-radius:12px;font-size:1.05rem;font-weight:800;margin-bottom:16px">
@@ -307,43 +307,11 @@
   </div>
 </div>
 
-<!-- ============ لوحة المنصة (مالكة Saber ERP فقط — ما إلها علاقة بأي مطعم) ============ -->
-<div id="platformAdminScreen" class="hidden" style="position:fixed;inset:0;z-index:9999;background:var(--cream,#FFF8EE);overflow:auto;padding:20px">
-  <div id="paLoginBox" style="max-width:340px;margin:80px auto;text-align:center">
-    <div style="font-weight:900;font-size:1.6rem;color:var(--maroon,#4a1010);margin-bottom:6px">Saber<span style="color:var(--red,#F60100)">ERP</span></div>
-    <div style="font-weight:700;color:#8B7A6B;margin-bottom:20px">لوحة المنصة — دخول</div>
-    <input id="paUserInput" type="text" placeholder="اسم المستخدم (فاضي = مالكة)" onkeydown="if(event.key==='Enter')document.getElementById('paPinInput').focus()"
-      style="width:100%;text-align:center;font-size:1rem;font-weight:800;padding:12px;border:2px solid #ccc;border-radius:12px;margin-bottom:10px">
-    <input id="paPinInput" type="password" inputmode="numeric" maxlength="8" placeholder="الرمز السري" onkeydown="if(event.key==='Enter')platformAdminLogin()"
-      style="width:100%;text-align:center;letter-spacing:8px;font-size:1.4rem;font-weight:900;padding:16px;border:2px solid var(--maroon,#4a1010);border-radius:14px;margin-bottom:14px">
-    <button onclick="platformAdminLogin()" style="width:100%;background:var(--maroon,#4a1010);color:#fff;padding:14px;border-radius:12px;font-weight:900;font-size:1.05rem">دخول</button>
-    <div id="paLoginErr" style="color:var(--red,#F60100);font-weight:800;margin-top:10px;min-height:20px"></div>
-  </div>
-  <div id="paDashboard" class="hidden" style="max-width:1400px;margin:0 auto;padding:0 10px">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
-      <div style="font-weight:900;font-size:1.3rem;color:var(--maroon,#4a1010)">🏢 لوحة المنصة</div>
-      <div style="display:flex;gap:8px">
-        <button id="paNavTenants" onclick="paShowTab('tenants')" style="background:var(--maroon,#4a1010);color:#fff;padding:9px 16px;border-radius:10px;font-weight:900">🏪 المطاعم</button>
-        <button id="paNavFinance" onclick="paShowTab('finance')" style="background:#eee;padding:9px 16px;border-radius:10px;font-weight:900">💰 أرباحي ومصاريفي</button>
-        <button id="paNavTeam" onclick="paShowTab('team')" style="background:#eee;padding:9px 16px;border-radius:10px;font-weight:900">👥 الفريق الإداري</button>
-      </div>
-    </div>
-    <div id="paTabTenants">
-      <div style="display:flex;justify-content:flex-end;margin-bottom:14px">
-        <button onclick="paTenantForm()" style="background:var(--ok,#2e7d32);color:#fff;padding:10px 18px;border-radius:10px;font-weight:900">＋ إضافة مطعم جديد</button>
-      </div>
-      <div id="paTenantsList"></div>
-    </div>
-    <div id="paTabFinance" class="hidden"></div>
-    <div id="paTabTeam" class="hidden"></div>
-  </div>
-</div>
-
 <!-- ============ الدخول ============ -->
 <div id="loginScreen" class="hidden">
   <div class="login-card">
-    <div class="login-logo" id="loginLogoText">Saber<span>ERP</span></div>
-    <div class="login-sub" id="loginSubText">نظام نقاط البيع</div>
+    <div class="login-logo">S<span>J</span>S</div>
+    <div class="login-sub">صابر جو سناك — نظام نقاط البيع</div>
     <div class="pin-boxes">
       <div class="pin-box" id="pin1" onclick="focusPinInput()"></div>
       <div class="pin-box" id="pin2" onclick="focusPinInput()"></div>
@@ -402,10 +370,10 @@
 </div>
 
 <!-- ============ التطبيق ============ -->
-<div id="loadingOverlay" style="position:fixed;inset:0;background:var(--cream);z-index:150;display:flex;align-items:center;justify-content:center;font-weight:900;color:var(--maroon);font-size:1.2rem">Saber<span style="color:var(--red)">ERP</span>...</div>
+<div id="loadingOverlay" style="position:fixed;inset:0;background:var(--cream);z-index:150;display:flex;align-items:center;justify-content:center;font-weight:900;color:var(--maroon);font-size:1.2rem">S<span style="color:var(--red)">J</span>S...</div>
 <div id="app" class="hidden">
   <header>
-    <div class="brand" id="topBrand">Saber<em>ERP</em></div>
+    <div class="brand">S<em>J</em>S <span style="font-weight:600;font-size:.85rem">POS</span></div>
     <div id="shiftBadge" class="hidden" onclick="if(!currentShift)startShift()">🔴 لا يوجد شيفت مفتوح - اضغط لفتح</div>
     <button id="drawerBtn" class="hidden" onclick="openDrawerRequest()" style="background:var(--yellow);color:var(--maroon);border-radius:999px;padding:4px 12px;font-weight:900;font-size:.85rem">🔓 فتح الدرج</button>
     <div id="overdueBadge" class="hidden">⏰ طلبات متأخرة!</div>
@@ -454,14 +422,6 @@
               <option value="">بدون منصة (مباشر)</option>
             </select>
             <div id="platformNote" class="hidden" style="color:var(--warn);font-weight:900;font-size:.82rem;margin-bottom:6px">🛵 ذمم على المنصة — ما بتحاسب عليه كاش بآخر الشيفت</div>
-            <select class="branch-sel hidden" id="orderChannel" style="margin-bottom:6px;border-color:var(--red)">
-              <option value="">📞 من وين إجا الطلب؟ (إجباري)</option>
-              <option value="whatsapp">💬 واتساب</option>
-              <option value="facebook">📘 فيسبوك</option>
-              <option value="messenger">✉️ مسنجر</option>
-              <option value="phone1">☎️ مكالمة جهاز 1</option>
-              <option value="phone2">☎️ مكالمة جهاز 2</option>
-            </select>
             <label style="display:flex;align-items:center;gap:8px;background:var(--cream);border:1px dashed var(--line);border-radius:10px;padding:8px 10px;margin-bottom:6px;font-weight:800;font-size:.9rem">
               <input type="checkbox" id="empMealChk" onchange="onEmpMealToggle()" style="width:18px;height:18px">
               🍽️ وجبة موظف (خصم 20% تلقائي — ذمم بالاسم)
@@ -701,8 +661,8 @@
 
 <script>
   /* ================= الإعداد ================= */
-  const SB_URL = "https://btevhnfelgvupwluljfl.supabase.co";
-  const SB_KEY = "sb_publishable_DEmy8N-36Yxm94nO6c10Mg_5DDXhn5H";
+  const SB_URL = "https://hwucmlixvqouvwvqeshh.supabase.co";
+  const SB_KEY = "sb_publishable_jkJOc57GfQXVN1HHwI_2cA_lziCOInd";
   const CURRENCY = "د.أ";
   let LATE_MIN = 20;       // قابلة للتعديل من الإعدادات
   let READY_WAIT_MIN = 7;  // قابلة للتعديل من الإعدادات
@@ -722,691 +682,6 @@
     throw new Error('supabase-js failed to load — aborting app init');
   }
   const db = supabase.createClient(SB_URL, SB_KEY);
-
-  // ================= 🏢 المرحلة ١: التعرف على المطعم من كود الرابط (multi-tenant) =================
-  // كل مطعم بيفتح النظام برابط فيه كوده الخاص، مثلاً: saber-erp.com/?r=almadina
-  // هون منتحقق: الكود موجود بجدول tenants، الحساب مفعّل، والاشتراك لسا ساري — قبل ما نسمح
-  // بظهور شاشة تسجيل الدخول إطلاقًا. لو أي شرط فشل، شاشة التحميل بتتحول لرسالة واضحة وتضل
-  // واقفة فوق كل شي (بتمنع الوصول فعليًا، مش بس تحذير).
-  // ⚠️ مهم تعرفيه: هاي المرحلة الأولى بس — بتحمي "مين يقدر يفتح النظام أصلاً". فلترة بيانات كل
-  // مطعم لحاله (الطلبات، العملاء...) جوا الشاشات نفسها هي المرحلة الجاية، وبنبنيها تدريجيًا.
-  let TENANT = null, TENANT_ID = null;
-  // 🏷️ اسم المطعم يستخدم بكل الفواتير/التقارير/الرسائل بدل ما يكون ثابت مكتوب بالكود — بياخده
-  // من بيانات المطعم (TENANT.name، بنظام تعدد المطاعم) أو من إعداد "اسم النشاط" العام كبديل،
-  // وإلا كلمة عامة "مطعمك" كحل أخير (عشان ما تطلع الفاتورة فاضية لو النسختين مش موجودين).
-  function bizName(){
-    return (TENANT && TENANT.name) || SETTINGS.business_name || 'مطعمك';
-  }
-  function tenantBlockScreen(emoji, title, msg){
-    const ov = document.getElementById('loadingOverlay');
-    if(!ov) return;
-    ov.innerHTML = `<div style="text-align:center;padding:24px;max-width:380px;font-family:inherit">
-      <div style="font-size:2.6rem;margin-bottom:12px">${emoji}</div>
-      <div style="font-weight:900;font-size:1.15rem;color:var(--maroon,#5E1420);margin-bottom:8px">${title}</div>
-      <div style="color:#8B7A6B;font-weight:700;font-size:.9rem;line-height:1.6">${msg}</div>
-    </div>`;
-  }
-  async function resolveTenantGate(){
-    const code = (new URLSearchParams(location.search).get('r')||'').trim().toLowerCase();
-    if(!code){
-      tenantBlockScreen('⚠️', 'رابط غير صحيح', 'الرابط ناقص كود المطعم. تأكدي إنك فاتحة الرابط الصحيح يلي انبعتلك من Saber ERP.');
-      throw new Error('tenant code missing');
-    }
-    let data, error;
-    try{ ({ data, error } = await db.from('tenants').select('*').eq('code', code).maybeSingle()); }
-    catch(e){ error = e; }
-    if(error){
-      tenantBlockScreen('📡', 'تعذّر التحقق من الحساب', 'صار خطأ بالاتصال بالإنترنت. تأكدي من النت وحدّثي الصفحة.');
-      throw new Error('tenant lookup failed');
-    }
-    if(!data){
-      tenantBlockScreen('❓', 'مطعم غير موجود', 'الكود يلي بالرابط مش مسجّل عندنا. تواصلوا مع Saber ERP للتأكد من الرابط.');
-      throw new Error('tenant not found');
-    }
-    if(data.is_active===false){
-      tenantBlockScreen('⛔', 'الحساب موقّف مؤقتًا', 'تواصلوا مع Saber ERP لمعرفة السبب ومتابعة الاشتراك.');
-      throw new Error('tenant inactive');
-    }
-    const today = new Date().toISOString().split('T')[0];
-    if(data.subscription_expiry && data.subscription_expiry < today){
-      tenantBlockScreen('⏰', 'انتهى الاشتراك', 'اشتراككم انتهى بتاريخ '+data.subscription_expiry+'. تواصلوا معنا للتجديد وتفعيل الوصول من جديد.');
-      throw new Error('tenant subscription expired');
-    }
-    TENANT = data; TENANT_ID = data.id;
-    if(data.name){
-      document.title = data.name + ' — Saber ERP';
-      const subEl = document.getElementById('loginSubText');
-      if(subEl) subEl.textContent = data.name + ' — نظام نقاط البيع';
-    }
-    // 🖼️ شعار المطعم بأعلى شاشة الكاشير — صورة لو حاطة رابط شعار من لوحة المنصة، وإلا اسم المطعم نصيًا
-    const brandEl = document.getElementById('topBrand');
-    if(brandEl){
-      if(data.logo_url){
-        brandEl.innerHTML = `<img src="${data.logo_url}" style="height:32px;max-width:120px;object-fit:contain;vertical-align:middle;border-radius:6px" onerror="this.remove()">`;
-      } else if(data.name){
-        brandEl.textContent = data.name;
-      }
-    }
-    // 🔑 دخول سريع للمالكة من لوحة المنصة (زر "ادخل") — بدون ما تحتاج تشوف رقم المطعم السري.
-    // الرابط بيجيلها فيه رمزها الشخصي (paEnter) يلي أدخلته أصلًا بلوحة المنصة، فمنتحقق منه من
-    // نفس السيرفر (Edge Function)، ولو صح منسجّلها فورًا كـ"دعم Saber ERP" بصلاحيات كاملة بهاد
-    // المطعم تحديدًا بس — بدون لمس أو معرفة حساب صاحب المطعم الحقيقي إطلاقًا.
-    const paEnter = new URLSearchParams(location.search).get('paEnter');
-    if(paEnter){
-      try{
-        const { data: authData } = await db.functions.invoke('platform-auth', { body: { pin: paEnter } });
-        if(authData && authData.ok){
-          window.__PA_IMPERSONATING = true;
-          ME = { id:'platform-support', full_name:'🔑 دعم Saber ERP', role:'admin', tenant_id:TENANT.id, is_active:true, permissions:null };
-          sessionStorage.setItem('sjs_me', JSON.stringify(ME));
-        }
-      }catch(e){ console.error('paEnter verify failed:', e); }
-    }
-    return data;
-  }
-  // ================= 🏢 لوحة المنصة (مالكة Saber ERP) =================
-  // 📋 قائمة كل شاشات النظام (46) — نفس المفاتيح المستخدمة فعليًا بـ canAccessAdminTab، مقسّمة
-  // لفئات لعرضها بشكل مريح بلوحة المنصة. أي مفتاح هون هو بالضبط يلي بيتفحص بـ TENANT.enabled_features.
-  const PLATFORM_FEATURE_GROUPS = [
-    { g:'المبيعات والكاشير', keys:[['items','🍔 الأصناف'],['reports','📊 التقارير'],['cats','📂 التصنيفات'],['codes','🎟️ أكواد الخصم'],['schedDisc','🏷️ خصومات مجدولة'],['ordersScreen','📋 الطلبيات']] },
-    { g:'المخزون والوصفات', keys:[['inventory','📋 جرد المخزون'],['warehouse','🏬 المستودع'],['dailyAudits','📋 جرد الفرع اليومي'],['spotCheck','🎯 جرد عشوائي (فجائي)'],['ingredients','🥩 المكونات'],['recipes','📋 الوصفات'],['manufacturing','🏭 التصنيع'],['transfers','🔄 نقل بضاعة'],['waste','🗑️ الإتلاف'],['productTimeline','📜 خط سير المنتج']] },
-    { g:'المشتريات والموردين', keys:[['purchases','🛒 المشتريات'],['suppliers','🚚 الموردين'],['supplierPayments','💳 دفعات الموردين'],['expenses','💸 المصاريف']] },
-    { g:'الموظفين والموارد البشرية', keys:[['staff','👥 الموظفين'],['roles','🛡️ الأدوار'],['dailyTasks','📝 مهام يومية'],['hr','🧑‍💼 HR'],['hrLocations','📍 مواقع الدخول'],['geoExcursions','🚨 خروج من النطاق'],['dutyHours','⏰ ساعات الدوام'],['shiftSchedule','🕐 جدول الدوام المحدد'],['hrClosures','📜 كشوفات الأشهر'],['breaksScreen','☕ البريكات'],['violations','🚩 المخالفات'],['deductions','➖ جدول الخصومات'],['rewards','🎁 جدول المكافآت'],['empmeals','🍽️ وجبات الموظفين']] },
-    { g:'الفروع والأجهزة', keys:[['branches','🏪 الفروع'],['devices','🖥️ الأجهزة'],['shifts','🔄 شيفتات']] },
-    { g:'العملاء', keys:[['topcust','🏆 أفضل العملاء'],['satisfaction','⭐ نقاط رضا العملاء'],['complaints','😠 شكاوي العملاء']] },
-    { g:'الكول سنتر والمنصات', keys:[['platforms','🛵 منصات التوصيل'],['ccPoints','📞 نقاط الكول سنتر']] },
-    { g:'المالية والتحكم', keys:[['treasury','💰 المصاري'],['activityLog','📜 سجل الأحداث'],['sett','🔧 إعدادات'],['chats','💬 المحادثات']] },
-  ];
-  const ALL_FEATURE_KEYS = PLATFORM_FEATURE_GROUPS.flatMap(g=>g.keys.map(k=>k[0]));
-
-  function paShowTab(tab){
-    document.getElementById('paTabTenants')?.classList.toggle('hidden', tab!=='tenants');
-    document.getElementById('paTabFinance')?.classList.toggle('hidden', tab!=='finance');
-    document.getElementById('paTabTeam')?.classList.toggle('hidden', tab!=='team');
-    ['paNavTenants','paNavFinance','paNavTeam'].forEach(id=>{
-      const el = document.getElementById(id);
-      const active = (id==='paNavTenants'&&tab==='tenants')||(id==='paNavFinance'&&tab==='finance')||(id==='paNavTeam'&&tab==='team');
-      if(el){ el.style.background = active ? 'var(--maroon,#4a1010)' : '#eee'; el.style.color = active ? '#fff' : '#000'; }
-    });
-    if(tab==='finance') paLoadFinance();
-    if(tab==='team') paLoadTeam();
-  }
-  let PA_SESSION_PIN = null; // 🔑 نخزّنه بالذاكرة بس (مش localStorage) — يُستخدم بزر "ادخل" لأي مطعم بدون ما تشوفي رقمه
-  let PA_SESSION = null; // بيانات عضو الفريق الحالي (لو دخلت بيوزر لا بالرمز الرئيسي)
-  async function platformAdminLogin(){
-    const username = document.getElementById('paUserInput')?.value.trim();
-    const val = document.getElementById('paPinInput')?.value.trim();
-    const err = document.getElementById('paLoginErr');
-    if(!val){ if(err) err.textContent = '⚠️ اكتبي الرمز'; return; }
-    if(err) err.textContent = '⏳ ...جاري التحقق';
-    // 1) لو ما في يوزر مكتوب: هاد دخول المالكة الرئيسي — بيتفحص من طرف السيرفر (Edge Function)
-    //    عشان رمزها الحقيقي ما يضل ظاهر بالكود إطلاقًا (لا حد له، صلاحياته كاملة دايمًا)
-    if(!username){
-      try{
-        const { data, error } = await db.functions.invoke('platform-auth', { body: { pin: val } });
-        if(error || !data || !data.ok){ if(err) err.textContent = '⛔ رمز غلط'; return; }
-        PA_SESSION_PIN = val;
-        PA_SESSION = { username:'المالكة', full_name:'المالكة', permissions:{ all:true } };
-        if(err) err.textContent = '';
-        document.getElementById('paLoginBox')?.classList.add('hidden');
-        document.getElementById('paDashboard')?.classList.remove('hidden');
-        paApplyPermVisibility();
-        paLoadTenants();
-      }catch(e){ if(err) err.textContent = '⛔ فشل التحقق: '+e.message; }
-      return;
-    }
-    // 2) في يوزر مكتوب: هاد عضو فريق إداري — بيتفحص من جدول platform_admins مباشرة
-    try{
-      const { data, error } = await db.from('platform_admins').select('*').eq('username', username).eq('pin', val).eq('is_active', true).maybeSingle();
-      if(error || !data){ if(err) err.textContent = '⛔ اسم مستخدم أو رمز غلط'; return; }
-      PA_SESSION_PIN = null; // أعضاء الفريق ما يقدروا يستخدموا زر "ادخل لأي مطعم" إلا لو معهم صلاحية enter_tenants صراحة
-      PA_SESSION = data;
-      if(err) err.textContent = '';
-      document.getElementById('paLoginBox')?.classList.add('hidden');
-      document.getElementById('paDashboard')?.classList.remove('hidden');
-      paApplyPermVisibility();
-      paLoadTenants();
-    }catch(e){ if(err) err.textContent = '⛔ فشل التحقق: '+e.message; }
-  }
-  // 🔒 نطبّق صلاحيات عضو الفريق الحالي على واجهة اللوحة — المالكة تشوف كل شي دايمًا
-  function paApplyPermVisibility(){
-    const isOwner = !!(PA_SESSION && PA_SESSION.permissions && PA_SESSION.permissions.all);
-    document.getElementById('paNavFinance')?.classList.toggle('hidden', !isOwner && !(PA_SESSION?.permissions?.view_finance));
-    document.getElementById('paNavTeam')?.classList.toggle('hidden', !isOwner);
-  }
-  const BILLING_LABELS = {
-    per_order: { label:'💳 بالطلب', color:'#0d6efd' },
-    monthly: { label:'📅 اشتراك شهري', color:'#2e7d32' },
-    annual: { label:'🏆 اشتراك سنوي', color:'#7b2cbf' },
-    trial: { label:'🎁 تجريبي', color:'#e8890c' },
-  };
-  async function paLoadTenants(){
-    const box = document.getElementById('paTenantsList');
-    if(box) box.innerHTML = '<div style="text-align:center;padding:20px;color:#8B7A6B">⏳ جاري التحميل...</div>';
-    try{
-      const [{ data, error }, { data: topupsData }] = await Promise.all([
-        db.from('tenants').select('*').order('created_at',{ascending:false}),
-        db.from('platform_credit_topups').select('tenant_id, orders_added'),
-      ]);
-      if(error){ if(box) box.innerHTML = '<div style="color:red">⚠️ '+error.message+'</div>'; return; }
-      window.__PA_TENANTS = data||[];
-      const addedByTenant = {};
-      (topupsData||[]).forEach(t=>{ addedByTenant[t.tenant_id] = (addedByTenant[t.tenant_id]||0) + parseFloat(t.orders_added||0); });
-      const today = new Date().toISOString().split('T')[0];
-      if(box) box.innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:18px">
-        ${(data||[]).map(t=>{
-          const expired = t.subscription_expiry && t.subscription_expiry < today;
-          const daysLeft = t.subscription_expiry ? Math.ceil((new Date(t.subscription_expiry)-new Date(today))/86400000) : null;
-          const featCount = Array.isArray(t.enabled_features) ? t.enabled_features.length : ALL_FEATURE_KEYS.length;
-          const featTotal = ALL_FEATURE_KEYS.length;
-          const allOn = !Array.isArray(t.enabled_features);
-          const totalAdded = addedByTenant[t.id]||0;
-          const consumed = Math.max(0, totalAdded - parseFloat(t.order_credits_balance||0));
-          const billing = BILLING_LABELS[t.billing_type] || BILLING_LABELS.per_order;
-          const statusColor = t.is_active===false ? '#c0392b' : (expired ? '#e8890c' : '#2e7d32');
-          const statusLabel = t.is_active===false ? '⛔ موقّف' : (expired ? '⏰ منتهي' : '✅ فعّال');
-          return `<div style="background:#fff;border-radius:18px;overflow:hidden;box-shadow:0 6px 22px rgba(0,0,0,.09);border-top:5px solid ${statusColor}">
-            <div style="padding:18px 18px 14px;display:flex;align-items:center;gap:12px;border-bottom:1px solid #f2ede3">
-              ${t.logo_url?`<img src="${esc2(t.logo_url)}" style="width:52px;height:52px;border-radius:12px;object-fit:cover;border:1.5px solid #eee">`:`<div style="width:52px;height:52px;border-radius:12px;background:linear-gradient(135deg,#4a1010,#7a2020);display:flex;align-items:center;justify-content:center;color:#D9A93C;font-weight:900;font-size:1.3rem">${(t.name||'؟').charAt(0)}</div>`}
-              <div style="flex:1;min-width:0">
-                <div style="font-weight:900;font-size:1.1rem;color:var(--maroon,#4a1010);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${(t.name||'—').replace(/</g,'&lt;')}</div>
-                <div style="font-family:monospace;font-size:.78rem;color:#8B7A6B" dir="ltr">${(t.code||'').replace(/</g,'&lt;')}</div>
-              </div>
-              <div style="font-weight:800;font-size:.8rem;padding:5px 10px;border-radius:20px;background:${statusColor}18;color:${statusColor}">${statusLabel}</div>
-            </div>
-            <div style="padding:16px 18px">
-              <div style="display:flex;gap:8px;margin-bottom:12px">
-                <span style="background:${billing.color}18;color:${billing.color};font-weight:800;font-size:.8rem;padding:5px 12px;border-radius:20px">${billing.label}</span>
-                ${t.subscription_expiry?`<span style="background:#f2ede3;color:#8B7A6B;font-weight:800;font-size:.8rem;padding:5px 12px;border-radius:20px">${expired?'منتهي منذ '+Math.abs(daysLeft)+' يوم':daysLeft+' يوم متبقي'}</span>`:''}
-              </div>
-              <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
-                ${t.billing_type && t.billing_type!=='per_order' ? `
-                  <div style="background:#f7f2e9;border-radius:10px;padding:10px;text-align:center">
-                    <div style="font-size:.75rem;color:#8B7A6B;font-weight:700">نوع الاشتراك</div>
-                    <div style="font-weight:900;color:var(--maroon,#4a1010)">بلا حد طلبات ♾️</div>
-                  </div>
-                  <div style="background:#f7f2e9;border-radius:10px;padding:10px;text-align:center">
-                    <div style="font-size:.75rem;color:#8B7A6B;font-weight:700">الانتهاء</div>
-                    <div style="font-weight:900;color:var(--maroon,#4a1010)">${t.subscription_expiry||'—'}</div>
-                  </div>
-                ` : `
-                  <div style="background:#f7f2e9;border-radius:10px;padding:10px;text-align:center">
-                    <div style="font-size:.75rem;color:#8B7A6B;font-weight:700">رصيد متبقي</div>
-                    <div style="font-weight:900;color:var(--maroon,#4a1010)">${parseFloat(t.order_credits_balance||0).toFixed(0)}</div>
-                  </div>
-                  <div style="background:#f7f2e9;border-radius:10px;padding:10px;text-align:center">
-                    <div style="font-size:.75rem;color:#8B7A6B;font-weight:700">مستهلك من البداية</div>
-                    <div style="font-weight:900;color:var(--maroon,#4a1010)">${consumed.toFixed(0)}</div>
-                  </div>
-                `}
-              </div>
-              <div style="font-size:.8rem;color:#8B7A6B;font-weight:700;margin-bottom:14px">
-                🧩 ${allOn?'كل الميزات ('+featTotal+')':featCount+' / '+featTotal+' ميزة'} &nbsp;·&nbsp; 🏪${t.max_branches??'∞'} فرع &nbsp;·&nbsp; 👥${t.max_staff??'∞'} موظف
-              </div>
-              <div style="display:flex;flex-wrap:wrap;gap:6px">
-                ${PA_SESSION_PIN?`<button onclick="paEnterTenant('${esc2(t.code||'')}')" style="flex:1;background:var(--maroon,#4a1010);color:#fff;padding:9px 10px;border-radius:8px;font-weight:800;font-size:.85rem">🔑 ادخل</button>`:''}
-                <button onclick="paTenantForm('${t.id}')" style="flex:1;background:#e8d9a0;padding:9px 10px;border-radius:8px;font-weight:800;font-size:.85rem">✏️ تعديل</button>
-                <button onclick="paAddCredits('${t.id}')" style="flex:1;background:#c8e6c9;padding:9px 10px;border-radius:8px;font-weight:800;font-size:.85rem">＋ رصيد</button>
-                <button onclick="paToggleActive('${t.id}',${t.is_active===false})" style="flex:1;background:${t.is_active===false?'#c8e6c9':'#ffcdd2'};padding:9px 10px;border-radius:8px;font-weight:800;font-size:.85rem">${t.is_active===false?'▶️ تفعيل':'⏸️ إيقاف'}</button>
-              </div>
-            </div>
-          </div>`;
-        }).join('') || '<div style="grid-column:1/-1;padding:40px;text-align:center;color:#8B7A6B;font-size:1.05rem;background:#fff;border-radius:16px">ما في مطاعم مضافة بعد</div>'}
-      </div>`;
-    }catch(e){ if(box) box.innerHTML = '<div style="color:red">⚠️ '+e.message+'</div>'; }
-  }
-  function paEnterTenant(code){
-    if(!code || !PA_SESSION_PIN){ alert('⚠️ ما فيه كود مطعم أو جلسة مش صالحة'); return; }
-    const url = location.origin+location.pathname+'?r='+encodeURIComponent(code)+'&paEnter='+encodeURIComponent(PA_SESSION_PIN);
-    window.open(url, '_blank');
-  }
-  async function paUploadLogo(input){
-    const file = input.files?.[0];
-    if(!file) return;
-    const status = document.getElementById('pa_logoUploadStatus');
-    if(status) status.textContent = '⏳ جاري الرفع...';
-    try{
-      const path = 'logos/' + Date.now() + '_' + file.name.replace(/[^a-zA-Z0-9._-]/g,'');
-      const { error } = await db.storage.from('tenant-logos').upload(path, file, { upsert:true });
-      if(error){ if(status) status.textContent = '✗ '+error.message; return; }
-      const { data: pub } = db.storage.from('tenant-logos').getPublicUrl(path);
-      const url = pub?.publicUrl;
-      const logoInput = document.getElementById('pa_logo');
-      const preview = document.getElementById('pa_logo_preview');
-      if(logoInput) logoInput.value = url;
-      if(preview){ preview.src = url; preview.style.display = 'block'; }
-      if(status) status.textContent = '✓ اترفعت';
-    }catch(e){ if(status) status.textContent = '✗ '+e.message; }
-  }
-  function paTenantForm(id){
-    const t = id ? (window.__PA_TENANTS||[]).find(x=>x.id===id) : null;
-    const box = document.getElementById('paTenantsList');
-    const enabled = t && Array.isArray(t.enabled_features) ? t.enabled_features : null; // null = كل الميزات مفعّلة (افتراضي)
-    const isChecked = key => enabled ? enabled.includes(key) : true;
-    const formHtml = `<div style="background:#fff;border-radius:16px;padding:26px;margin-bottom:20px;max-width:900px;box-shadow:0 6px 24px rgba(0,0,0,.1)">
-      <div style="font-weight:900;font-size:1.25rem;margin-bottom:18px;color:var(--maroon,#4a1010)">${id?'✏️ تعديل مطعم':'＋ مطعم جديد'}</div>
-      <div style="display:flex;align-items:center;gap:14px;margin-bottom:18px">
-        <img id="pa_logo_preview" src="${t&&t.logo_url?esc2(t.logo_url):''}" style="width:64px;height:64px;border-radius:14px;object-fit:cover;border:1.5px solid #ccc;${t&&t.logo_url?'':'display:none'}">
-        <div style="flex:1">
-          <label style="font-weight:700;display:block;margin-bottom:4px">🖼️ شعار المطعم</label>
-          <input id="pa_logo" value="${t?(t.logo_url||'').replace(/"/g,'&quot;'):''}" placeholder="https://... (أو ارفعي صورة تحت)" dir="ltr" oninput="const p=document.getElementById('pa_logo_preview');p.src=this.value;p.style.display=this.value?'block':'none'" style="width:100%;padding:9px;border:1.5px solid #ccc;border-radius:8px;margin-bottom:8px">
-          <input type="file" id="pa_logoFile" accept="image/*" onchange="paUploadLogo(this)" style="font-size:.85rem">
-          <span id="pa_logoUploadStatus" style="font-size:.8rem;color:#8B7A6B;margin-right:8px"></span>
-        </div>
-      </div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-bottom:18px">
-        <div><label style="font-weight:700;display:block;margin-bottom:4px">اسم المطعم</label>
-          <input id="pa_name" value="${t?(t.name||'').replace(/"/g,'&quot;'):''}" style="width:100%;padding:11px;border:1.5px solid #ccc;border-radius:8px"></div>
-        <div><label style="font-weight:700;display:block;margin-bottom:4px">الكود بالرابط (إنجليزي)</label>
-          <input id="pa_code" ${id?'disabled':''} value="${t?(t.code||''):''}" dir="ltr" placeholder="almadina" style="width:100%;padding:11px;border:1.5px solid #ccc;border-radius:8px;font-family:monospace"></div>
-        <div><label style="font-weight:700;display:block;margin-bottom:4px">💼 نوع الاشتراك</label>
-          <select id="pa_billing" onchange="document.getElementById('pa_creditsWrap').style.display=this.value==='per_order'?'block':'none'" style="width:100%;padding:11px;border:1.5px solid #ccc;border-radius:8px">
-            <option value="per_order" ${(!t||!t.billing_type||t.billing_type==='per_order')?'selected':''}>💳 بالطلب (رصيد مسبق الدفع)</option>
-            <option value="monthly" ${t&&t.billing_type==='monthly'?'selected':''}>📅 اشتراك شهري (بلا حد طلبات)</option>
-            <option value="annual" ${t&&t.billing_type==='annual'?'selected':''}>🏆 اشتراك سنوي (بلا حد طلبات)</option>
-            <option value="trial" ${t&&t.billing_type==='trial'?'selected':''}>🎁 تجريبي (بلا حد طلبات، فترة قصيرة)</option>
-          </select></div>
-        <div><label style="font-weight:700;display:block;margin-bottom:4px">تاريخ انتهاء الاشتراك</label>
-          <input id="pa_expiry" type="date" value="${t?(t.subscription_expiry||''):''}" style="width:100%;padding:11px;border:1.5px solid #ccc;border-radius:8px"></div>
-        <div id="pa_creditsWrap" style="${t&&t.billing_type&&t.billing_type!=='per_order'?'display:none':''}"><label style="font-weight:700;display:block;margin-bottom:4px">رصيد الطلبات ${id?'':'الابتدائي'}</label>
-          <input id="pa_credits" type="number" value="${t?parseFloat(t.order_credits_balance||0):20}" ${id?'disabled title="استخدمي زر + رصيد لتعديله"':''} style="width:100%;padding:11px;border:1.5px solid #ccc;border-radius:8px;${id?'background:#f5f5f5':''}"></div>
-        <div><label style="font-weight:700;display:block;margin-bottom:4px">🏪 أقصى عدد فروع (فاضي = بلا حد)</label>
-          <input id="pa_maxbranches" type="number" min="0" value="${t&&t.max_branches!=null?t.max_branches:''}" placeholder="بلا حد" style="width:100%;padding:11px;border:1.5px solid #ccc;border-radius:8px"></div>
-        <div><label style="font-weight:700;display:block;margin-bottom:4px">👥 أقصى عدد موظفين (فاضي = بلا حد)</label>
-          <input id="pa_maxstaff" type="number" min="0" value="${t&&t.max_staff!=null?t.max_staff:''}" placeholder="بلا حد" style="width:100%;padding:11px;border:1.5px solid #ccc;border-radius:8px"></div>
-      </div>
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-        <div style="font-weight:900;color:var(--maroon,#4a1010)">🧩 الشاشات المسموحة لهاد المطعم (${ALL_FEATURE_KEYS.length} شاشة)</div>
-        <div>
-          <button type="button" onclick="document.querySelectorAll('.pa-feat-chk').forEach(c=>c.checked=true)" style="background:#c8e6c9;padding:6px 12px;border-radius:8px;font-weight:800;font-size:.85rem;margin-left:6px">تحديد الكل</button>
-          <button type="button" onclick="document.querySelectorAll('.pa-feat-chk').forEach(c=>c.checked=false)" style="background:#ffcdd2;padding:6px 12px;border-radius:8px;font-weight:800;font-size:.85rem">إلغاء الكل</button>
-        </div>
-      </div>
-      <div style="border:1.5px solid #eee;border-radius:12px;padding:16px;max-height:340px;overflow-y:auto;margin-bottom:20px">
-        ${PLATFORM_FEATURE_GROUPS.map(grp=>`
-          <div style="margin-bottom:14px">
-            <div style="font-weight:800;color:#8B7A6B;font-size:.85rem;margin-bottom:6px">${grp.g}</div>
-            <div style="display:flex;flex-wrap:wrap;gap:8px">
-              ${grp.keys.map(([key,label])=>`<label style="display:flex;align-items:center;gap:6px;background:#f7f2e9;border-radius:8px;padding:7px 12px;font-weight:700;font-size:.88rem;cursor:pointer">
-                <input type="checkbox" class="pa-feat-chk" data-key="${key}" ${isChecked(key)?'checked':''}> ${label}
-              </label>`).join('')}
-            </div>
-          </div>`).join('')}
-      </div>
-      ${id ? `<div style="border:1.5px solid #d9c400;background:#fffbe8;border-radius:12px;padding:16px;margin-bottom:20px">
-        <div style="font-weight:900;color:var(--maroon,#4a1010);margin-bottom:8px">👤 حساب صاحب المطعم</div>
-        <div style="font-size:.85rem;color:#8B7A6B;font-weight:700;margin-bottom:10px">رابط متجره: <span style="font-family:monospace;background:#fff;padding:2px 8px;border-radius:6px" dir="ltr">${location.origin}${location.pathname}?r=${esc2(t?.code||'')}</span>
-          <button type="button" onclick="navigator.clipboard.writeText('${location.origin}${location.pathname}?r=${esc2(t?.code||'')}');toast('✓ انسخ الرابط')" style="background:#e0d4f7;padding:4px 10px;border-radius:6px;font-weight:800;font-size:.78rem;margin-right:6px">نسخ</button>
-        </div>
-        <button type="button" onclick="paCreateOwnerAccount('${id}','${esc2(t?.name||'')}','${esc2(t?.code||'')}')" style="background:var(--maroon,#4a1010);color:#fff;padding:9px 18px;border-radius:8px;font-weight:900;font-size:.9rem">＋ إنشاء حساب مالك جديد له</button>
-        <div id="paOwnerAccResult" style="margin-top:10px"></div>
-      </div>` : ''}
-      <button onclick="paSaveTenant('${id||''}')" style="background:var(--maroon,#4a1010);color:#fff;padding:12px 26px;border-radius:10px;font-weight:900;margin-left:10px;font-size:1rem">💾 حفظ</button>
-      <button onclick="paLoadTenants()" style="background:#eee;padding:12px 26px;border-radius:10px;font-weight:900;font-size:1rem">إلغاء</button>
-    </div>`;
-    if(box) box.innerHTML = formHtml + (box.innerHTML||'');
-  }
-  async function paCreateOwnerAccount(tenantId, tenantName, tenantCode){
-    const box = document.getElementById('paOwnerAccResult');
-    const username = (tenantCode||'owner') + '_' + Math.floor(1000+Math.random()*9000);
-    const pin = String(Math.floor(1000+Math.random()*9000));
-    try{
-      const { error } = await db.from('staff').insert({
-        username, pin, full_name: (tenantName||'صاحب المطعم')+' — مالك',
-        role: 'admin', is_active: true, tenant_id: tenantId,
-      });
-      if(error){ if(box) box.innerHTML = '<div style="color:red;font-weight:800">✗ '+error.message+'</div>'; return; }
-      const link = location.origin+location.pathname+'?r='+encodeURIComponent(tenantCode||'');
-      if(box) box.innerHTML = `<div style="background:#eafbea;border:1.5px solid var(--ok,#2e7d32);border-radius:10px;padding:14px;margin-top:10px">
-        <div style="font-weight:900;color:var(--ok,#2e7d32);margin-bottom:8px">✅ اتعمل الحساب! ابعتيلهم هاي التفاصيل:</div>
-        <div style="font-family:monospace;background:#fff;border-radius:8px;padding:10px;font-size:.9rem;line-height:2">
-          🔗 الرابط: <span dir="ltr">${link}</span><br>
-          👤 اسم المستخدم: <b>${username}</b><br>
-          🔑 الرقم السري: <b>${pin}</b>
-        </div>
-        <button type="button" onclick="navigator.clipboard.writeText('الرابط: ${link}\\nاسم المستخدم: ${username}\\nالرقم السري: ${pin}');toast('✓ انسخ كل التفاصيل')" style="background:var(--ok,#2e7d32);color:#fff;padding:7px 16px;border-radius:8px;font-weight:800;margin-top:8px;font-size:.85rem">📋 نسخ كل التفاصيل</button>
-      </div>`;
-    }catch(e){ if(box) box.innerHTML = '<div style="color:red;font-weight:800">✗ '+e.message+'</div>'; }
-  }
-  async function paSaveTenant(id){
-    const name = document.getElementById('pa_name')?.value.trim();
-    const code = document.getElementById('pa_code')?.value.trim().toLowerCase();
-    const expiry = document.getElementById('pa_expiry')?.value || null;
-    const credits = parseFloat(document.getElementById('pa_credits')?.value) || 0;
-    const billing_type = document.getElementById('pa_billing')?.value || 'per_order';
-    const logo_url = document.getElementById('pa_logo')?.value.trim() || null;
-    const maxBranchesRaw = document.getElementById('pa_maxbranches')?.value.trim();
-    const maxStaffRaw = document.getElementById('pa_maxstaff')?.value.trim();
-    const max_branches = maxBranchesRaw==='' ? null : parseInt(maxBranchesRaw);
-    const max_staff = maxStaffRaw==='' ? null : parseInt(maxStaffRaw);
-    // 🧩 لو كل الشاشات محدّدة (تحديد الكل)، منحفظ null بدل مصفوفة كاملة — يعني "كل شي مفعّل
-    // افتراضيًا" حتى لو ضفنا شاشة 47 بالمستقبل ما بيحتاج المالكة ترجع تفعّلها يدويًا لكل مطعم قديم.
-    const checked = [...document.querySelectorAll('.pa-feat-chk:checked')].map(c=>c.dataset.key);
-    const enabled_features = checked.length === ALL_FEATURE_KEYS.length ? null : checked;
-    if(!name || !code){ alert('⚠️ اكتبي الاسم والكود'); return; }
-    const rec = { name, subscription_expiry: expiry, max_branches, max_staff, enabled_features, billing_type, logo_url };
-    if(!id){ rec.code = code; rec.order_credits_balance = credits; rec.is_active = true; }
-    try{
-      const { data, error } = id
-        ? await db.from('tenants').update(rec).eq('id', id).select().maybeSingle()
-        : await db.from('tenants').insert(rec).select().maybeSingle();
-      if(error){ alert('✗ '+error.message); return; }
-      // 💰 نسجّل شحنة الرصيد الابتدائية بسجل الدفعات — عشان تنحسب بشاشة "أرباحي" كإيراد حقيقي
-      if(!id && data && credits>0){
-        try{ await db.from('platform_credit_topups').insert({ tenant_id: data.id, tenant_name: name, orders_added: credits, amount_jod: null, note: 'رصيد ابتدائي عند إنشاء المطعم' }); }
-        catch(e){ console.error('log initial topup failed:', e); }
-      }
-      paLoadTenants();
-    }catch(e){ alert('✗ '+e.message); }
-  }
-  async function paToggleActive(id, makeActive){
-    try{
-      const { error } = await db.from('tenants').update({ is_active: makeActive }).eq('id', id);
-      if(error){ alert('✗ '+error.message); return; }
-      paLoadTenants();
-    }catch(e){ alert('✗ '+e.message); }
-  }
-  async function paAddCredits(id){
-    const t = (window.__PA_TENANTS||[]).find(x=>x.id===id);
-    const addAmount = prompt('كم طلب بدك تضيفي لـ"'+(t?.name||'')+'"؟\n(الرصيد الحالي: '+parseFloat(t?.order_credits_balance||0).toFixed(0)+')');
-    if(addAmount===null) return;
-    const n = parseFloat(addAmount);
-    if(isNaN(n) || n<=0){ alert('⚠️ رقم غير صحيح'); return; }
-    const paidAmount = prompt('كم دينار دفعولك مقابل هالشحنة؟ (اتركيه فاضي لو ما بدك تسجّلي مبلغ — بس الطلبات رح تنضاف برضه)');
-    if(paidAmount===null) return; // ألغت — ما نضيف شي
-    const paidNum = paidAmount.trim()==='' ? null : parseFloat(paidAmount);
-    const newBal = parseFloat(t?.order_credits_balance||0) + n;
-    try{
-      const { error } = await db.from('tenants').update({ order_credits_balance: newBal }).eq('id', id);
-      if(error){ alert('✗ '+error.message); return; }
-      // 💰 نسجّل الشحنة بسجل الدفعات (حتى لو ما حطّت مبلغ — منعرف على الأقل كم طلب انضاف ومتى)
-      try{ await db.from('platform_credit_topups').insert({ tenant_id: id, tenant_name: t?.name||'', orders_added: n, amount_jod: paidNum }); }
-      catch(e){ console.error('log topup failed:', e); }
-      paLoadTenants();
-    }catch(e){ alert('✗ '+e.message); }
-  }
-  // ================= 💰 شاشة أرباحي ومصاريفي (Saber ERP نفسها، مش أي مطعم) =================
-  async function paLoadFinance(){
-    const box = document.getElementById('paTabFinance');
-    if(box) box.innerHTML = '<div style="text-align:center;padding:20px;color:#8B7A6B">⏳ جاري التحميل...</div>';
-    try{
-      const [{ data: topups, error: e1 }, { data: expenses, error: e2 }] = await Promise.all([
-        db.from('platform_credit_topups').select('*').order('created_at',{ascending:false}),
-        db.from('platform_expenses').select('*').order('expense_date',{ascending:false}),
-      ]);
-      if(e1||e2){ if(box) box.innerHTML = '<div style="color:red">⚠️ '+((e1||e2).message)+'</div>'; return; }
-      window.__PA_TOPUPS = topups||[]; window.__PA_EXPENSES = expenses||[];
-      const totalRevenue = (topups||[]).reduce((a,t)=>a+parseFloat(t.amount_jod||0),0);
-      const totalExpenses = (expenses||[]).reduce((a,e)=>a+parseFloat(e.amount||0),0);
-      const net = totalRevenue - totalExpenses;
-      if(box) box.innerHTML = `
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;margin-bottom:20px">
-          <div style="background:#fff;border-radius:14px;padding:18px;box-shadow:0 4px 16px rgba(0,0,0,.06)">
-            <div style="color:#8B7A6B;font-weight:700;font-size:.85rem">💵 إجمالي الإيرادات</div>
-            <div style="font-weight:900;font-size:1.5rem;color:var(--ok,#2e7d32)">${totalRevenue.toFixed(2)} د.أ</div>
-          </div>
-          <div style="background:#fff;border-radius:14px;padding:18px;box-shadow:0 4px 16px rgba(0,0,0,.06)">
-            <div style="color:#8B7A6B;font-weight:700;font-size:.85rem">💸 إجمالي المصاريف</div>
-            <div style="font-weight:900;font-size:1.5rem;color:var(--red,#c0392b)">${totalExpenses.toFixed(2)} د.أ</div>
-          </div>
-          <div style="background:#fff;border-radius:14px;padding:18px;box-shadow:0 4px 16px rgba(0,0,0,.06);border:2px solid ${net>=0?'#2e7d32':'#c0392b'}">
-            <div style="color:#8B7A6B;font-weight:700;font-size:.85rem">📊 صافي الربح</div>
-            <div style="font-weight:900;font-size:1.5rem;color:${net>=0?'var(--ok,#2e7d32)':'var(--red,#c0392b)'}">${net.toFixed(2)} د.أ</div>
-          </div>
-        </div>
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(400px,1fr));gap:20px">
-          <div>
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-              <div style="font-weight:900;color:var(--maroon,#4a1010)">💵 سجل الدفعات (من المطاعم)</div>
-            </div>
-            <div style="background:#fff;border-radius:12px;max-height:400px;overflow-y:auto;box-shadow:0 4px 16px rgba(0,0,0,.06)">
-              <table style="width:100%;border-collapse:collapse;font-size:.88rem">
-                <tr style="background:#f7f2e9"><th style="padding:8px">المطعم</th><th style="padding:8px">طلبات</th><th style="padding:8px">المبلغ</th><th style="padding:8px">التاريخ</th><th style="padding:8px"></th></tr>
-                ${(topups||[]).map((t,i)=>`<tr style="border-bottom:1px solid #eee">
-                  <td style="padding:8px">${(t.tenant_name||'').replace(/</g,'&lt;')}</td>
-                  <td style="padding:8px">${parseFloat(t.orders_added||0).toFixed(0)}</td>
-                  <td style="padding:8px;font-weight:800">${t.amount_jod!=null?parseFloat(t.amount_jod).toFixed(2)+' د.أ':'—'}</td>
-                  <td style="padding:8px;font-size:.8rem;color:#8B7A6B">${new Date(t.created_at).toLocaleDateString('ar-JO')}</td>
-                  <td style="padding:8px">${t.amount_jod!=null?`<button onclick="paPrintInvoice(${i})" style="background:#e0d4f7;padding:5px 10px;border-radius:6px;font-weight:800;font-size:.78rem">🧾 فاتورة</button>`:''}</td>
-                </tr>`).join('') || '<tr><td colspan="5" style="padding:16px;text-align:center;color:#8B7A6B">ما في دفعات مسجّلة بعد</td></tr>'}
-              </table>
-            </div>
-          </div>
-          <div>
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-              <div style="font-weight:900;color:var(--maroon,#4a1010)">💸 المصاريف</div>
-              <button onclick="paExpenseForm()" style="background:var(--red,#c0392b);color:#fff;padding:7px 14px;border-radius:8px;font-weight:800;font-size:.85rem">＋ إضافة مصروف</button>
-            </div>
-            <div id="paExpenseFormBox"></div>
-            <div style="background:#fff;border-radius:12px;max-height:400px;overflow-y:auto;box-shadow:0 4px 16px rgba(0,0,0,.06)">
-              <table style="width:100%;border-collapse:collapse;font-size:.88rem">
-                <tr style="background:#f7f2e9"><th style="padding:8px">الفئة</th><th style="padding:8px">المبلغ</th><th style="padding:8px">ملاحظة</th><th style="padding:8px">التاريخ</th></tr>
-                ${(expenses||[]).map(e=>`<tr style="border-bottom:1px solid #eee">
-                  <td style="padding:8px">${esc2(e.category)}</td>
-                  <td style="padding:8px;font-weight:800;color:var(--red,#c0392b)">${parseFloat(e.amount||0).toFixed(2)} د.أ</td>
-                  <td style="padding:8px;font-size:.82rem;color:#8B7A6B">${esc2(e.note||'—')}</td>
-                  <td style="padding:8px;font-size:.8rem;color:#8B7A6B">${e.expense_date||'—'}</td>
-                </tr>`).join('') || '<tr><td colspan="4" style="padding:16px;text-align:center;color:#8B7A6B">ما في مصاريف مسجّلة بعد</td></tr>'}
-              </table>
-            </div>
-          </div>
-        </div>`;
-    }catch(e){ if(box) box.innerHTML = '<div style="color:red">⚠️ '+e.message+'</div>'; }
-  }
-  function esc2(s){ return (s||'').toString().replace(/</g,'&lt;'); }
-  function paExpenseForm(){
-    const box = document.getElementById('paExpenseFormBox');
-    if(!box) return;
-    box.innerHTML = `<div style="background:#fff;border:1.5px solid #eee;border-radius:12px;padding:16px;margin-bottom:12px">
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
-        <div><label style="font-weight:700;display:block;margin-bottom:4px;font-size:.85rem">الفئة</label>
-          <select id="pe_cat" style="width:100%;padding:9px;border:1.5px solid #ccc;border-radius:8px">
-            <option value="استضافة/تقنية">استضافة/تقنية (Supabase، GitHub...)</option>
-            <option value="تسويق وحملات">تسويق وحملات</option>
-            <option value="أدوات/اشتراكات">أدوات/اشتراكات</option>
-            <option value="أخرى">أخرى</option>
-          </select></div>
-        <div><label style="font-weight:700;display:block;margin-bottom:4px;font-size:.85rem">المبلغ (د.أ)</label>
-          <input id="pe_amount" type="number" step="0.01" style="width:100%;padding:9px;border:1.5px solid #ccc;border-radius:8px"></div>
-      </div>
-      <div style="margin-bottom:10px"><label style="font-weight:700;display:block;margin-bottom:4px;font-size:.85rem">ملاحظة (اختياري)</label>
-        <input id="pe_note" style="width:100%;padding:9px;border:1.5px solid #ccc;border-radius:8px"></div>
-      <div style="margin-bottom:12px"><label style="font-weight:700;display:block;margin-bottom:4px;font-size:.85rem">التاريخ</label>
-        <input id="pe_date" type="date" value="${new Date().toISOString().split('T')[0]}" style="width:100%;padding:9px;border:1.5px solid #ccc;border-radius:8px"></div>
-      <button onclick="paSaveExpense()" style="background:var(--maroon,#4a1010);color:#fff;padding:9px 18px;border-radius:8px;font-weight:900">حفظ</button>
-      <button onclick="document.getElementById('paExpenseFormBox').innerHTML=''" style="background:#eee;padding:9px 18px;border-radius:8px;font-weight:900">إلغاء</button>
-    </div>`;
-  }
-  function paPrintInvoice(idx){
-    const t = (window.__PA_TOPUPS||[])[idx];
-    if(!t) return;
-    const invNum = 'SB-'+new Date(t.created_at).getFullYear()+'-'+String(idx+1).padStart(4,'0');
-    const html = `<html dir="rtl"><head><meta charset="UTF-8"><title>فاتورة ${invNum}</title><style>
-      body{font-family:Arial,sans-serif;padding:40px;color:#241310}
-      .head{display:flex;justify-content:space-between;align-items:center;border-bottom:4px solid #5E1420;padding-bottom:20px;margin-bottom:30px}
-      .logo{font-size:1.8rem;font-weight:900;color:#5E1420} .logo span{color:#D9A93C}
-      .inv-meta{text-align:left;font-size:.9rem;color:#8B7A6B}
-      table{width:100%;border-collapse:collapse;margin:20px 0}
-      th{background:#5E1420;color:#fff;padding:12px;text-align:right}
-      td{padding:12px;border-bottom:1px solid #eee}
-      .total{font-size:1.3rem;font-weight:900;color:#5E1420;text-align:left;margin-top:20px}
-      .footer{margin-top:50px;text-align:center;color:#8B7A6B;font-size:.85rem}
-      </style></head><body>
-      <div class="head">
-        <div class="logo">Saber<span>ERP</span></div>
-        <div class="inv-meta">فاتورة رقم: <b>${invNum}</b><br>التاريخ: ${new Date(t.created_at).toLocaleDateString('ar-JO')}</div>
-      </div>
-      <p><b>فاتورة إلى:</b> ${esc2(t.tenant_name)}</p>
-      <table>
-        <tr><th>البيان</th><th>الكمية</th><th>المبلغ</th></tr>
-        <tr><td>شحن رصيد طلبات — نظام Saber ERP</td><td>${parseFloat(t.orders_added||0).toFixed(0)} طلب</td><td>${parseFloat(t.amount_jod||0).toFixed(2)} د.أ</td></tr>
-      </table>
-      <div class="total">الإجمالي: ${parseFloat(t.amount_jod||0).toFixed(2)} د.أ</div>
-      <div class="footer">شكرًا لتعاملكم مع Saber ERP 💛<br>0790807761</div>
-      <script>window.print();<\/script>
-      </body></html>`;
-    const win = window.open('', '_blank');
-    win.document.write(html); win.document.close();
-  }
-  async function paSaveExpense(){
-    const category = document.getElementById('pe_cat')?.value;
-    const amount = parseFloat(document.getElementById('pe_amount')?.value);
-    const note = document.getElementById('pe_note')?.value.trim()||null;
-    const expense_date = document.getElementById('pe_date')?.value || new Date().toISOString().split('T')[0];
-    if(!amount || amount<=0){ alert('⚠️ اكتبي مبلغ صحيح'); return; }
-    try{
-      const { error } = await db.from('platform_expenses').insert({ category, amount, note, expense_date });
-      if(error){ alert('✗ '+error.message); return; }
-      paLoadFinance();
-    }catch(e){ alert('✗ '+e.message); }
-  }
-  // ================= 👥 الفريق الإداري (أعضاء عندهم دخول للوحة المنصة بصلاحيات محدودة) =================
-  async function paLoadTeam(){
-    const box = document.getElementById('paTabTeam');
-    if(box) box.innerHTML = '<div style="text-align:center;padding:20px;color:#8B7A6B">⏳ جاري التحميل...</div>';
-    try{
-      const { data, error } = await db.from('platform_admins').select('*').order('created_at',{ascending:false});
-      if(error){ if(box) box.innerHTML = '<div style="color:red">⚠️ '+error.message+'</div>'; return; }
-      window.__PA_TEAM = data||[];
-      if(box) box.innerHTML = `
-        <div style="display:flex;justify-content:flex-end;margin-bottom:14px">
-          <button onclick="paTeamForm()" style="background:var(--ok,#2e7d32);color:#fff;padding:10px 18px;border-radius:10px;font-weight:900">＋ إضافة عضو جديد</button>
-        </div>
-        <div id="paTeamFormBox"></div>
-        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px">
-          ${(data||[]).map(m=>`<div style="background:#fff;border-radius:14px;padding:16px;box-shadow:0 4px 16px rgba(0,0,0,.06)">
-            <div style="font-weight:900;color:var(--maroon,#4a1010);font-size:1.05rem">${esc2(m.full_name||m.username)}</div>
-            <div style="font-family:monospace;color:#8B7A6B;font-size:.82rem;margin-bottom:8px" dir="ltr">${esc2(m.username)}</div>
-            <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px">
-              ${m.permissions?.manage_tenants?'<span style="background:#e0f0ff;color:#0d6efd;font-weight:800;font-size:.75rem;padding:4px 10px;border-radius:20px">🏪 إدارة المطاعم</span>':''}
-              ${m.permissions?.view_finance?'<span style="background:#eafbea;color:#2e7d32;font-weight:800;font-size:.75rem;padding:4px 10px;border-radius:20px">💰 يشوف الأرباح</span>':''}
-              ${!m.is_active?'<span style="background:#ffe0e0;color:#c0392b;font-weight:800;font-size:.75rem;padding:4px 10px;border-radius:20px">⛔ موقّف</span>':''}
-            </div>
-            <div style="display:flex;gap:6px">
-              <button onclick="paToggleTeamActive('${m.id}',${m.is_active===false})" style="flex:1;background:${m.is_active===false?'#c8e6c9':'#ffcdd2'};padding:7px;border-radius:8px;font-weight:800;font-size:.82rem">${m.is_active===false?'تفعيل':'إيقاف'}</button>
-              <button onclick="paDeleteTeam('${m.id}')" style="flex:1;background:#eee;padding:7px;border-radius:8px;font-weight:800;font-size:.82rem">حذف</button>
-            </div>
-          </div>`).join('') || '<div style="grid-column:1/-1;padding:30px;text-align:center;color:#8B7A6B;background:#fff;border-radius:14px">ما في أعضاء فريق مضافين بعد</div>'}
-        </div>`;
-    }catch(e){ if(box) box.innerHTML = '<div style="color:red">⚠️ '+e.message+'</div>'; }
-  }
-  function paTeamForm(){
-    const box = document.getElementById('paTeamFormBox');
-    if(!box) return;
-    box.innerHTML = `<div style="background:#fff;border:1.5px solid #eee;border-radius:14px;padding:18px;margin-bottom:16px;max-width:420px">
-      <div style="font-weight:900;margin-bottom:12px;color:var(--maroon,#4a1010)">عضو فريق جديد</div>
-      <div style="margin-bottom:10px"><label style="font-weight:700;display:block;margin-bottom:4px">الاسم الكامل</label>
-        <input id="pt_name" style="width:100%;padding:10px;border:1.5px solid #ccc;border-radius:8px"></div>
-      <div style="margin-bottom:10px"><label style="font-weight:700;display:block;margin-bottom:4px">اسم المستخدم (إنجليزي)</label>
-        <input id="pt_username" dir="ltr" style="width:100%;padding:10px;border:1.5px solid #ccc;border-radius:8px;font-family:monospace"></div>
-      <div style="margin-bottom:14px"><label style="font-weight:700;display:block;margin-bottom:4px">رمز سري (أرقام)</label>
-        <input id="pt_pin" type="text" inputmode="numeric" style="width:100%;padding:10px;border:1.5px solid #ccc;border-radius:8px"></div>
-      <div style="margin-bottom:14px">
-        <label style="display:flex;align-items:center;gap:6px;font-weight:700;margin-bottom:6px"><input type="checkbox" id="pt_manageTenants"> 🏪 يقدر يضيف/يعدّل مطاعم</label>
-        <label style="display:flex;align-items:center;gap:6px;font-weight:700"><input type="checkbox" id="pt_viewFinance"> 💰 يشوف شاشة الأرباح والمصاريف</label>
-      </div>
-      <button onclick="paSaveTeam()" style="background:var(--maroon,#4a1010);color:#fff;padding:9px 18px;border-radius:8px;font-weight:900">حفظ</button>
-      <button onclick="document.getElementById('paTeamFormBox').innerHTML=''" style="background:#eee;padding:9px 18px;border-radius:8px;font-weight:900">إلغاء</button>
-    </div>`;
-  }
-  async function paSaveTeam(){
-    const full_name = document.getElementById('pt_name')?.value.trim();
-    const username = document.getElementById('pt_username')?.value.trim().toLowerCase();
-    const pin = document.getElementById('pt_pin')?.value.trim();
-    const permissions = {
-      manage_tenants: document.getElementById('pt_manageTenants')?.checked||false,
-      view_finance: document.getElementById('pt_viewFinance')?.checked||false,
-    };
-    if(!full_name || !username || !pin){ alert('⚠️ عبّي كل الحقول'); return; }
-    try{
-      const { error } = await db.from('platform_admins').insert({ full_name, username, pin, permissions, is_active:true });
-      if(error){ alert('✗ '+error.message); return; }
-      paLoadTeam();
-    }catch(e){ alert('✗ '+e.message); }
-  }
-  async function paToggleTeamActive(id, makeActive){
-    try{
-      const { error } = await db.from('platform_admins').update({ is_active: makeActive }).eq('id', id);
-      if(error){ alert('✗ '+error.message); return; }
-      paLoadTeam();
-    }catch(e){ alert('✗ '+e.message); }
-  }
-  async function paDeleteTeam(id){
-    if(!confirm('حذف هالعضو نهائيًا؟')) return;
-    try{
-      const { error } = await db.from('platform_admins').delete().eq('id', id);
-      if(error){ alert('✗ '+error.message); return; }
-      paLoadTeam();
-    }catch(e){ alert('✗ '+e.message); }
-  }
-
-
-  // لو نجح، بيسمح لباقي كود التطبيق (تحت) يشيلها بالوقت العادي؛ لو فشل، بتضل واقفة عالرسالة للأبد.
-  // 🏢 استثناء: لو الرابط فيه ?admin=1، هاد مش طلب مطعم — هاي بوابة المنصة الخاصة فيكِ إنتي بس
-  // (Saber ERP)، وما إلها علاقة بأي مطعم معيّن، فمنتجاوز فحص المطعم بالكامل ومنفتح لوحة تانية.
-  const IS_PLATFORM_ADMIN_MODE = new URLSearchParams(location.search).get('admin') === '1';
-  // 🔒 رمز دخول المالكة صار محفوظ فقط بالسيرفر (Supabase Edge Function "platform-auth")،
-  // مش مكتوب هون إطلاقًا — عشان محدا يقدر يشوفه بـ"View Source" زي ما كان قبل.
-  const TENANT_GATE = IS_PLATFORM_ADMIN_MODE
-    ? Promise.resolve().then(()=>{
-        document.getElementById('loadingOverlay')?.remove();
-        document.getElementById('platformAdminScreen')?.classList.remove('hidden');
-      })
-    : resolveTenantGate().catch(()=>{ window.__tenantBlocked = true; });
-
-  // ================= 🔒 حماية بيانات كل مطعم (عزل تلقائي بين المطاعم) =================
-  // طبقة واحدة مركزية بتلف حول db.from() وتفرض تلقائيًا: أي قراءة/كتابة/تعديل/حذف على أي جدول
-  // من الجداول تحت تكون محصورة بمطعم TENANT الحالي بس — بدون ما نحتاج نلمس مئات أماكن الاستدعاء
-  // بالكود. لو TENANT مش محدّد (نسخة قديمة لمطعم واحد، أو وضع لوحة المنصة نفسها)، ما بيصير أي
-  // تغيير إطلاقًا — تشتغل عادي زي ما كانت (تحمي بس لما إحنا فعليًا بسياق مطعم محدد من الرابط).
-  // ⚠️ مهم: أي صف اتسجّل قبل تفعيل هالحماية وما إله tenant_id، رح يختفي من العرض لحد ما يتحدّث
-  // يدويًا (عادي بمرحلة الاختبار الحالية، بس خبريني لو عندك بيانات حقيقية قديمة بدك ترحّليها).
-  const TENANT_SCOPED_TABLES = new Set([
-    'activity_log','audit_log','branch_inventory','branches','capital_transactions',
-    'cash_shifts','categories','composite_fixed','composite_groups','composite_options',
-    'customer_complaints','customer_ratings','customers','daily_tasks','delivery_platforms',
-    'devices','discount_codes','employee_deductions','employee_ratings','employee_rewards',
-    'expenses','fixed_costs','held_tickets','hr_advance_requests','hr_advances',
-    'hr_attendance','hr_breaks','hr_clockin_requests','hr_device_requests',
-    'hr_employee_locations','hr_geofence_excursions','hr_locations','hr_month_closures',
-    'hr_time_logs','ingredients','inventory_audits','inventory_movements',
-    'manufacturing_recipe_items','manufacturing_recipes','manufacturing_runs','meal_names',
-    'menu_items','order_items','orders','point_redemptions','print_queue','print_requests',
-    'purchase_items','purchase_orders','purchases','recipe_items','recipes','roles',
-    'scheduled_discounts','shift_adjustments','shift_breaks','shift_open_requests',
-    'spot_check_audits','staff','staff_advances','staff_messages','stock_adjustments',
-    'stock_transfers','supplier_ingredients','supplier_payments','suppliers',
-    'terms_signatures','treasury_transactions','violations','waste_log',
-  ]);
-  (function installTenantIsolation(){
-    const origFrom = db.from.bind(db);
-    db.from = function(table){
-      const qb = origFrom(table);
-      const isSettings = table==='settings';
-      if(!TENANT || !(TENANT_SCOPED_TABLES.has(table) || isSettings)) return qb;
-      const tid = TENANT.id;
-      const origSelect = qb.select.bind(qb);
-      const origInsert = qb.insert.bind(qb);
-      const origUpdate = qb.update.bind(qb);
-      const origUpsert = qb.upsert.bind(qb);
-      const origDelete = qb.delete.bind(qb);
-      qb.select = function(...args){ return origSelect(...args).eq('tenant_id', tid); };
-      qb.insert = function(records, opts){
-        const stamped = Array.isArray(records) ? records.map(r=>({...r, tenant_id: tid})) : {...records, tenant_id: tid};
-        return origInsert(stamped, opts);
-      };
-      qb.update = function(...args){ return origUpdate(...args).eq('tenant_id', tid); };
-      qb.upsert = function(records, opts){
-        // 🔧 جدول settings مفتاحه المركّب (tenant_id + key) مش عمود id عادي — لازم نحدد onConflict
-        // صراحة، وإلا Supabase بيحاول يستخدم مفتاح قديم مش موجود وبيفشل الحفظ.
-        const stamped = Array.isArray(records) ? records.map(r=>({...r, tenant_id: tid})) : {...records, tenant_id: tid};
-        const finalOpts = isSettings ? { onConflict: 'tenant_id,key', ...(opts||{}) } : opts;
-        return origUpsert(stamped, finalOpts);
-      };
-      qb.delete = function(...args){ return origDelete(...args).eq('tenant_id', tid); };
-      return qb;
-    };
-  })();
 
   // 🔒 بوابة الكتابة المحمية — لأخطر 4 جداول (مصاري، سلف). بدل ما نتواصل مباشرة مع قاعدة
   // البيانات، بنمر عبر سيرفر صغير (Edge Function) هو الوحيد يلي عنده صلاحية الكتابة الحقيقية.
@@ -1441,38 +716,6 @@
     if(v===undefined || v===null || v==='') return defaultOn!==false;
     return v!==false && v!=='false';
   }
-  // 💳 رصيد الطلبات المسبق الدفع — بس لنوع اشتراك "بالطلب" (per_order). أنواع الاشتراك التانية
-  // (شهري/سنوي/تجريبي) بلا حد طلبات إطلاقًا — بس محكومة بتاريخ انتهاء الاشتراك (اللي أصلًا
-  // متفحوص بوابة الدخول). بنسخة قديمة/مطعم وحيد (TENANT مش موجود)، بيرجع للإعداد القديم كحل احتياطي.
-  function hasOrderCredits(){
-    if(TENANT){
-      if(TENANT.billing_type && TENANT.billing_type!=='per_order') return true; // شهري/سنوي/تجريبي = بلا حد طلبات
-      const bal = parseFloat(TENANT.order_credits_balance);
-      if(isNaN(bal)) return true;
-      return bal > 0;
-    }
-    const bal = parseFloat(SETTINGS.order_credits_balance);
-    if(isNaN(bal)) return true;
-    return bal > 0;
-  }
-  async function consumeOrderCredit(){
-    if(TENANT){
-      if(TENANT.billing_type && TENANT.billing_type!=='per_order') return; // بلا خصم لأنواع الاشتراك الثابتة
-      const bal = parseFloat(TENANT.order_credits_balance);
-      if(isNaN(bal)) return;
-      const newBal = Math.max(0, bal - 1);
-      TENANT.order_credits_balance = newBal;
-      try{ await db.from('tenants').update({ order_credits_balance: newBal }).eq('id', TENANT.id); }
-      catch(e){ console.error('consumeOrderCredit (tenant) failed:', e); }
-      return;
-    }
-    const bal = parseFloat(SETTINGS.order_credits_balance);
-    if(isNaN(bal)) return; // الميزة غير مفعّلة بهالنسخة
-    const newBal = Math.max(0, bal - 1);
-    SETTINGS.order_credits_balance = newBal;
-    try{ await db.from('settings').upsert({ key:'order_credits_balance', value:newBal }); }
-    catch(e){ console.error('consumeOrderCredit failed:', e); }
-  }
   let cart = [], orderType = 'takeaway', payMethod = 'cash', activeCat = '__all__';
   let matchedCustomer = null, appliedCode = null, editingOrder = null;
   let currentShift = null;
@@ -1499,23 +742,6 @@
     }
     return out;
   }
-  // 📞 بتطبّع رقم هاتف لغرض المقارنة/البحث بس (مش للحفظ): بتحوّل الأرقام العربية لغربية، بتشيل
-  // أي رمز مش رقم (مسافات، شرطات، أقواس، +)، وبتشيل مقدمة رمز الأردن (00962/+962/962) لو موجودة.
-  function phoneDigitsOnly(str){
-    let d = normalizeDigits(str||'').replace(/\D/g,'');
-    if(d.startsWith('00962')) d = d.slice(5);
-    else if(d.startsWith('962')) d = d.slice(3);
-    return d;
-  }
-  // 🔍 بتقارن رقمين هاتف حتى لو مكتوبين بصيغ مختلفة (بصفر أول أو بدونه، برمز دولة أو بدونه،
-  // بأرقام عربية أو غربية، بمسافات/شرطات) — بتقارن آخر 8 أرقام مشتركة (كافية لتمييز رقم أردني محليًا).
-  function phoneMatches(stored, query){
-    const s = phoneDigitsOnly(stored), q = phoneDigitsOnly(query);
-    if(!q) return false;
-    if(s.includes(q)) return true; // مطابقة مباشرة (أو جزء من الرقم يبحث عنه)
-    if(q.length>=7) return s.slice(-8)===q.slice(-8) || s.endsWith(q.replace(/^0+/,'')); // آخر 8 أرقام أو تجاهل الصفر الأول
-    return false;
-  }
   document.addEventListener('input', function(e){
     const el = e.target;
     if(el && (el.tagName==='INPUT' || el.tagName==='TEXTAREA') && typeof el.value==='string'){
@@ -1535,7 +761,6 @@
   const esc = s => String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   const toast = m => { const t=$('toast'); t.textContent=m; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),2400); };
   const TYPE_AR = { takeaway:'استلام', delivery:'توصيل', dine_in:'صالة' };
-  const CHANNEL_AR = { whatsapp:'💬 واتساب', facebook:'📘 فيسبوك', messenger:'✉️ مسنجر', phone1:'☎️ جهاز 1', phone2:'☎️ جهاز 2' };
   const PAY_AR = { cash:'كاش', card:'كرت', cliq:'كليك' };
   const ROLE_AR = { admin:'مدير', cashier:'كاشير', callcenter:'كول سنتر', kitchen:'مطبخ' };
   PAY_AR['platform'] = 'ذمم (تطبيق)';
@@ -1932,15 +1157,6 @@
               return;
           }
 
-          // 🏢 تعدد المطاعم: لو إحنا بسياق مطعم معيّن (TENANT محدّد من الرابط)، لازم نتأكد إنه
-          // هاد الحساب فعليًا تابع لنفس المطعم — وإلا رقم سري صح بمطعم تاني كان رح يقدر يفتح
-          // حساب مطعمك أنتي! (بشرط إنه عمود tenant_id مرجّع فعليًا من الـEdge Function).
-          if(TENANT && data.staff.tenant_id!==undefined && data.staff.tenant_id!==null && data.staff.tenant_id!==TENANT.id){
-              if (err) err.textContent = '❌ رمز غير صحيح';
-              window.pinClear();
-              return;
-          }
-
           ME = data.staff;
           sessionStorage.setItem('sjs_me', JSON.stringify(ME));
           const proceedAfterLogin = () => {
@@ -2251,8 +1467,6 @@
     if (!perm('order_platform') && platformNoteEl) platformNoteEl.classList.add('hidden');
     const branchSel = document.getElementById('branchSel');
     document.getElementById('branchSelWrap')?.classList.toggle('hidden', !(adm||cc||!ME.branch_id));
-    // 📞 قناة الطلب (واتساب/فيسبوك/مسنجر/مكالمة جهاز) — إجبارية للكول سنتر بس، عشان نعرف مصدر كل طلب
-    document.getElementById('orderChannel')?.classList.toggle('hidden', !cc);
     const discInput = document.getElementById('discInput');
     if (discInput) discInput.classList.toggle('hidden', !adm);
   }
@@ -2283,7 +1497,7 @@
     box.appendChild(line);
   }
 
-  const APP_VERSION = '2026-09-01-11';
+  const APP_VERSION = '2026-08-13-01';
   // 🔄 فحص تلقائي للنسخة — يحل مشكلة "الصفحة ما بتاخد آخر تحديث" نهائيًا: كل شوي منقارن نسختنا
   // المحمّلة حاليًا مع ملف version.txt الحقيقي على السيرفر (بدون كاش أبدًا). لو مختلفة، معناته
   // في نسخة أحدث انرفعت، فمنعمل تحديث كامل للصفحة تلقائيًا بدون ما ننتظر حدا يسكر التبويب يدويًا.
@@ -2548,14 +1762,7 @@
 
   // ⚠️ إصلاح حرج: شاشة التحميل لازم تنشال دايمًا بسرعة بغض النظر صار تسجيل دخول تلقائي أو لأ —
   // وإلا أي حدا لسا ما سجّل دخول (معظم الحالات) بيضل عالق خلفها للأبد وما بيشوف شاشة الـPIN إطلاقًا
-  // 🔒 بس هلق: ما بنشيلها إلا بعد ما نتأكد إنه رابط المطعم صحيح ومفعّل — TENANT_GATE (فوق) هي يلي
-  // بتقرر: لو فشلت، شاشة التحميل بتضل واقفة عالرسالة (مانع فعلي، مش بس تأخير) وما منكمل هالسطر.
-  TENANT_GATE.then(()=>{
-    setTimeout(()=>{
-      document.getElementById('loadingOverlay')?.remove();
-      if(window.__PA_IMPERSONATING && ME){ enterApp(); }
-    }, 400);
-  });
+  setTimeout(()=>{ document.getElementById('loadingOverlay')?.remove(); }, 400);
 
   /* ================= إعدادات الطابعة (محلية لهاد الجهاز فقط — مو مشتركة) ================= */
   const LOCAL_PRINTER_KEYS = ['printer_method','printer_ip','printer_port','printer_bt_address','auto_print_branch','printer_width_mm'];
@@ -2677,15 +1884,6 @@
           if(whoName2) whoName2.textContent = '👤 ' + ME.full_name + ' (' + (CUSTOM_ROLES.find(r=>r.id===ME.role_id)?.name || 'دور مخصص') + ')';
         } else {
           applyRoles(); // 🔧 نفس السبب: لازم نطبّق الصلاحيات المزامنة حديثًا لدور كاشير/كول سنتر كمان
-        }
-      }
-      // 💳 تنبيه رصيد الطلبات — للمالك بس، مرة وحدة بالجلسة (مش كل تحديث خلفي) عشان ما يصير مزعج
-      if(ME && isAdmin() && !window.__creditWarnShown){
-        const bal = TENANT ? parseFloat(TENANT.order_credits_balance) : parseFloat(SETTINGS.order_credits_balance);
-        if(!isNaN(bal)){
-          window.__creditWarnShown = true;
-          if(bal<=0) toast('⛔ خلص رصيد الطلبات — تواصلوا معنا لشحن رصيد جديد فورًا');
-          else if(bal<=15) toast('⚠️ رصيد الطلبات المتبقي: '+bal.toFixed(0)+' طلب بس — قرّب يخلص، جهّزي الشحنة الجاية');
         }
       }
       const branchSel = document.getElementById('branchSel');
@@ -3046,7 +2244,7 @@
       .diffbox b{font-size:18px}
       </style></head><body>
       <h2>تقرير إغلاق شيفت</h2>
-      <div class="c">${bizName()} — ${br?esc(br.name_ar):''}</div>
+      <div class="c">Saber Jo Snack — ${br?esc(br.name_ar):''}</div>
       <hr>
       <table>
         <tr><td>الموظف</td><td class="tl">${esc(ME.full_name)}</td></tr>
@@ -3111,7 +2309,7 @@
       <hr><div class="c">توقيع الموظف: ______________</div>
       </body></html>`;
     const text = 'تقرير إغلاق شيفت\n'+
-      '— '+bizName()+' — '+(br?br.name_ar:'')+'\n'+
+      '— Saber Jo Snack — '+(br?br.name_ar:'')+'\n'+
       '════════════════\n'+
       'الموظف: '+ME.full_name+'\n'+
       'من: '+started+'\n'+
@@ -3318,7 +2516,7 @@
       .big td{font-size:16px;font-weight:900}
       </style></head><body>
       <h2>🔓 سند سحب من الدرج</h2>
-      <div class="c">${bizName()} — ${br?esc(br.name_ar):''}</div>
+      <div class="c">Saber Jo Snack — ${br?esc(br.name_ar):''}</div>
       <hr>
       <table>
         <tr><td>التاريخ والوقت</td><td class="tl">${now}</td></tr>
@@ -3334,7 +2532,7 @@
       <hr><div class="c">توقيع الموظف: ______________</div>
       </body></html>`;
     const text = '🔓 سند سحب من الدرج\n'+
-      '— '+bizName()+' — '+(br?br.name_ar:'')+'\n'+
+      '— Saber Jo Snack — '+(br?br.name_ar:'')+'\n'+
       '════════════════\n'+
       'التاريخ: '+now+'\n'+
       'الموظف: '+ME.full_name+'\n'+
@@ -3727,8 +2925,6 @@
     });
     const platformSel = document.getElementById('orderPlatform');
     if(platformSel){ platformSel.value = ''; onPlatformChange(); }
-    const channelSel = document.getElementById('orderChannel');
-    if(channelSel) channelSel.value = '';
     const empChk = document.getElementById('empMealChk');
     if(empChk){ empChk.checked = false; onEmpMealToggle(); }
     const empNameSel = document.getElementById('empMealName');
@@ -3807,19 +3003,11 @@
       }
       phoneTimer = setTimeout(async ()=>{
         try {
-          // 🔧 مصلّحة: كان البحث يقارن الرقم المكتوب حرفيًا (0791234567 ≠ 791234567 ≠ 00962791234567
-          // ≠ رقم بأرقام عربية...) — أي اختلاف بسيط بصيغة الرقم كان يفشل يلاقي العميل الموجود أصلًا
-          // ويعمل عميل جديد مكرر له! هلق منطبّع الرقم (نشيل رمز الدولة، نحوّل الأرقام لغربية) قبل البحث.
-          const phNorm = phoneDigitsOnly(ph);
           let { data } = await db.from('customers').select('*').eq('phone', ph).limit(1);
-          if(!data || !data.length){
-            const rExact = await db.from('customers').select('*').ilike('phone', '%'+phNorm+'%').limit(1);
-            if(rExact.data && rExact.data.length) data = rExact.data;
-          }
           // بحث جزئي: إذا ما في تطابق كامل، دور على أي رقم يحتوي المدخل (آخر 4 أرقام مثلًا)
           let matches = [];
-          if((!data || !data.length) && phNorm.length >= 4){
-            const r2 = await db.from('customers').select('*').ilike('phone', '%'+phNorm.slice(-8)+'%').limit(6);
+          if((!data || !data.length) && ph.length >= 4){
+            const r2 = await db.from('customers').select('*').ilike('phone', '%'+ph+'%').limit(6);
             matches = r2.data || [];
             if(matches.length === 1){ data = matches; matches = []; }
           }
@@ -4158,19 +3346,17 @@
     const custPhone = document.getElementById('custPhone');
     const custName = document.getElementById('custName');
     const custAddr = document.getElementById('custAddr');
-    // 🔧 مصلّحة: منطبّع الرقم (أرقام عربية → غربية، بدون رمز دولة) قبل أي مطابقة أو حفظ — عشان
-    // نفس الزبون يترقّب دايمًا كعميل واحد بغض النظر عن الصيغة يلي كتب فيها رقمه هالمرة.
-    const phone = custPhone ? phoneDigitsOnly(custPhone.value.trim()) : '';
+    const phone = custPhone ? custPhone.value.trim() : '';
     const name = custName ? custName.value.trim() : '';
     const addr = custAddr ? custAddr.value.trim() : '';
     if(!phone) return null;
     // 🔒 تأكيد مباشر من قاعدة البيانات وقت الحفظ نفسه — مش نعتمد بس على matchedCustomer
     // (كان ممكن يكون لسا ما تحمّل بسبب سرعة الكاشير بالكتابة/الحفظ قبل ما يخلص البحث،
     // وهاد كان يسبب إنشاء عميل مكرر بدل تحديث الأصلي = عدد الطلبات ما يتحرك والعنوان ما يترحّل)
-    let target = (matchedCustomer && phoneDigitsOnly(matchedCustomer.phone)===phone) ? matchedCustomer : null;
+    let target = (matchedCustomer && matchedCustomer.phone === phone) ? matchedCustomer : null;
     if(!target){
       try{
-        const { data: found } = await db.from('customers').select('*').ilike('phone', '%'+phone.slice(-8)+'%').limit(1);
+        const { data: found } = await db.from('customers').select('*').eq('phone', phone).limit(1);
         if(found && found.length) target = found[0];
       }catch(e){ console.error('upsertCustomer lookup failed:', e); }
     }
@@ -4194,7 +3380,7 @@
       'modern': `
         <div style="font-family:'Cairo',sans-serif;padding:12px;max-width:300px;background:linear-gradient(135deg,#fff,#f8f4f0);border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,0.1)">
           <div style="text-align:center;border-bottom:2px solid var(--red);padding-bottom:8px">
-            <h2 style="color:var(--red);margin:0">🍔 ${bizName()}</h2>
+            <h2 style="color:var(--red);margin:0">🍔 SJS Snack</h2>
             <p style="margin:4px 0;font-size:12px;color:#666">${br ? br.name_ar : ''}</p>
           </div>
           <div style="padding:8px 0">
@@ -4233,7 +3419,7 @@
       'classic': `
         <div style="font-family:'Courier New',monospace;padding:10px;max-width:300px;border:2px solid #000;background:#fff">
           <div style="text-align:center;border-bottom:1px dashed #000;padding-bottom:6px">
-            <h2 style="margin:0">${bizName().toUpperCase()}</h2>
+            <h2 style="margin:0">SJS SNACK</h2>
             <p style="margin:2px 0;font-size:11px">${br ? br.name_ar : ''}</p>
           </div>
           <table style="width:100%;font-size:12px">
@@ -4270,7 +3456,7 @@
       `,
       'minimal': `
         <div style="font-family:sans-serif;padding:8px;max-width:280px;background:#fafafa;border:1px solid #ddd">
-          <div style="text-align:center;font-size:16px;font-weight:900">${bizName()}</div>
+          <div style="text-align:center;font-size:16px;font-weight:900">SJS</div>
           <div style="text-align:center;font-size:10px;color:#666">${br ? br.name_ar : ''}</div>
           <div style="font-size:11px;padding:4px 0;border-bottom:1px solid #ddd">
             #${ord.order_number} | ${new Date(ord.created_at).toLocaleString('ar-JO')}
@@ -4390,7 +3576,7 @@
     }
     text += '═'.repeat(32) + '\n';
     text += '  شكراً لزيارتكم  \n';
-    text += '  '+bizName()+' 🍔  \n';
+    text += '  SJS 🍔  \n';
     if(ord.__isReprint){
       text += '─'.repeat(32) + '\n';
       text += `أُعيدت الطباعة بواسطة: ${ord.__reprintBy||'—'}\n`;
@@ -4516,7 +3702,7 @@
       const sep = /^[═─-]{5,}/.test(line.trim());
       if(sep){ visualLines.push({isSep:true}); return; }
       const big = /SABER|إجمالي|تقرير/.test(line);
-      const centered = /SABER|شكرًا|توقيع|طلب #/.test(line) || line.includes(bizName());
+      const centered = /SABER|شكرًا|توقيع|طلب #|SJS/.test(line);
       mctx.font = "bold " + Math.round((big?30:26)*scale) + "px 'Cairo', Arial, sans-serif";
       if(mctx.measureText(line).width <= maxW){
         visualLines.push({text:line, isBig:big, isCentered:centered});
@@ -4799,7 +3985,7 @@
     const o = DAY.find(x=>x.id===id); if(!o) return;
     const num = (SETTINGS.delivery_whatsapp||'').replace(/\D/g,'');
     const items = (o.order_items||[]).map(l=>l.quantity+'× '+l.item_name).join('\n');
-    const msg = `🛵 *طلب توصيل ${bizName()}*\nفاتورة: #${o.order_number}\nالفرع: ${o.branches?.name_ar||''}\n——————\nالعميل: ${o.customers?.name||''}\nالهاتف: ${o.customers?.phone||''}\nالعنوان: ${o.customers?.address||''}\n——————\n${items}\n——————\nالإجمالي: ${fmt(o.total)} ${CURRENCY}`;
+    const msg = `🛵 *طلب توصيل SJS*\nفاتورة: #${o.order_number}\nالفرع: ${o.branches?.name_ar||''}\n——————\nالعميل: ${o.customers?.name||''}\nالهاتف: ${o.customers?.phone||''}\nالعنوان: ${o.customers?.address||''}\n——————\n${items}\n——————\nالإجمالي: ${fmt(o.total)} ${CURRENCY}`;
     const url = num ? `https://wa.me/${num}?text=${encodeURIComponent(msg)}` : `https://wa.me/?text=${encodeURIComponent(msg)}`;
     window.open(url, '_blank');
   }
@@ -4992,21 +4178,10 @@
     if(!lockSubmit('saveOrder')) return;
     setTimeout(()=>unlockSubmit('saveOrder'), 15000);
     if(!cart.length){ toast('⚠️ السلة فاضية'); return; }
-    // 💳 رصيد الطلبات المسبق الدفع — لو خلص، ممنوع إنشاء طلب جديد إطلاقًا لحد ما ينشحن. هاي حماية
-    // مقصودة: المالك (حتى بصلاحياته الكاملة) ما بيقدر يتجاوزها من جوا التطبيق — الشحن بس من عندنا
-    // مباشرة بلوحة Supabase، عشان محدا غير إحنا يقدر يشحن نفسه ببلاش.
-    if(!hasOrderCredits()){
-      unlockSubmit('saveOrder');
-      alert('⛔ خلص رصيد الطلبات المسموح بهالاشتراك.\nتواصلوا معنا لشحن رصيد إضافي حتى تقدروا تكملوا استقبال الطلبات.');
-      return;
-    }
     if(!currentShift && !isAdmin()){ toast('⚠️ يجب فتح شيفت أولاً'); return; }
     if(!perm(orderType==='delivery'?'order_delivery':'order_takeaway')){ toast('⛔ ما عندك صلاحية بيع '+(orderType==='delivery'?'التوصيل':'الاستلام')); return; }
     const platformValSel = document.getElementById('orderPlatform')?.value;
     if(platformValSel && !perm('order_platform')){ toast('⛔ ما عندك صلاحية البيع عبر التطبيقات/المنصات'); return; }
-    // 📞 قناة الطلب إجبارية للكول سنتر — لازم يحدد من وين إجا الطلب (واتساب/فيسبوك/مسنجر/مكالمة)
-    const orderChannel = document.getElementById('orderChannel')?.value || '';
-    if(isCallCenter() && !orderChannel){ toast('⚠️ حددي من وين إجا الطلب (واتساب/فيسبوك/مسنجر/مكالمة) — إجباري'); return; }
     const empMealName = document.getElementById('empMealChk')?.checked ? (document.getElementById('empMealName')?.value.trim()||'') : '';
     if(document.getElementById('empMealChk')?.checked && !empMealName){ toast('⚠️ اكتب اسم الموظف — إجباري لوجبة الموظف'); return; }
     if(empMealName){
@@ -5114,7 +4289,6 @@
         notes: orderNote ? orderNote.value.trim() || null : null,
         discount_code: appliedCode ? appliedCode.code : null,
         platform_id: document.getElementById('orderPlatform')?.value || null,
-        channel: orderChannel || null,
         employee_tab_name: empMealName || null,
         employee_meal_id: empMealName ? (MEAL_NAMES_DATA.find(n=>n.name===empMealName)?.id || null) : null,
         split_details: payMethod==='split' ? {
@@ -5162,7 +4336,6 @@
           throw error;
         }
         ord = data;
-        consumeOrderCredit(); // 💳 نخصم رصيد طلب واحد — بس على الطلبات الجديدة الفعلية، مش تعديل طلب موجود
       }
 
       const lines = cartCopy.map(l=>({
@@ -5366,7 +4539,6 @@
         <tr><td><b>الفرع</b></td><td>${esc(o.branches?.name_ar||'—')}</td></tr>
         <tr><td><b>الموظف</b></td><td>${esc(o.created_by_name||'—')}</td></tr>
         <tr><td><b>النوع / الدفع</b></td><td>${TYPE_AR[o.order_type]||''} / ${PAY_AR[o.payment_method]||''}</td></tr>
-        ${o.channel?`<tr><td><b>قناة الطلب</b></td><td>${CHANNEL_AR[o.channel]||esc(o.channel)}</td></tr>`:''}
         <tr><td><b>العميل</b></td><td>${esc(o.customers?.name||'—')}${o.customers?.phone?` — <span dir="ltr">${esc(o.customers.phone)}</span>`:''}</td></tr>
         ${o.customers?.address?`<tr><td><b>العنوان</b></td><td>${esc(o.customers.address)}</td></tr>`:''}
         ${o.notes?`<tr><td><b>ملاحظة</b></td><td>${esc(o.notes)}</td></tr>`:''}
@@ -5595,7 +4767,7 @@
           return;
         }
 
-        dayList.innerHTML = `<table class="tbl"><tr><th>#</th><th>الوقت</th><th>⏱️</th><th>النوع</th>${(adm||cc)?'<th>الفرع</th><th>القناة</th>':''}<th>العميل</th><th>الكاشير</th><th>الأصناف</th><th>الإجمالي</th>${ownerView?'<th>أجور التوصيل</th><th>الربح</th>':''}<th>الحالة</th><th></th></tr>
+        dayList.innerHTML = `<table class="tbl"><tr><th>#</th><th>الوقت</th><th>⏱️</th><th>النوع</th>${(adm||cc)?'<th>الفرع</th>':''}<th>العميل</th><th>الكاشير</th><th>الأصناف</th><th>الإجمالي</th>${ownerView?'<th>أجور التوصيل</th><th>الربح</th>':''}<th>الحالة</th><th></th></tr>
           ${DAY.map(o=>{
             const mins = Math.floor((Date.now()-new Date(o.created_at))/60000);
             const readyMins = o.status==='ready' ? Math.floor((Date.now()-new Date(o.updated_at||o.created_at))/60000) : 0;
@@ -5611,7 +4783,7 @@
             <td>${new Date(o.created_at).toLocaleTimeString('ar-JO',{hour:'2-digit',minute:'2-digit'})}</td>
             <td>${timer}</td>
             <td>${TYPE_AR[o.order_type]||''}</td>
-            ${(adm||cc)?`<td>${esc(o.branches?.name_ar||'—')}</td><td style="white-space:nowrap">${CHANNEL_AR[o.channel]||'—'}</td>`:''}
+            ${(adm||cc)?`<td>${esc(o.branches?.name_ar||'—')}</td>`:''}
             <td>${esc(o.customers?.name||'—')}</td>
             <td>${esc(o.created_by_name||'—')}</td>
             <td>${(o.order_items||[]).map(l=>l.quantity+'× '+esc(l.item_name)).join('، ')}</td>
@@ -5704,7 +4876,7 @@
       </div>`);
   }
   function sendFeedbackRequest(custName, custPhone){
-    const template = SETTINGS.feedback_msg_template || 'مرحبا [الاسم] 🙏 شو رأيك بطلبك الأخير من '+bizName()+'؟ رأيك بهمنا كتير وبيساعدنا نتحسّن. لو عندك دقيقة، تقييمك على خرائط جوجل بفرحنا كتير 🌟 (حطي رابط خرائط مطعمك من الإعدادات) شكرًا إلك 💛';
+    const template = SETTINGS.feedback_msg_template || 'مرحبا [الاسم] 🙏 شو رأيك بطلبك الأخير من صابر جو سناك؟ رأيك بهمنا كتير وبيساعدنا نتحسّن. لو عندك دقيقة، تقييمك على خرائط جوجل بفرحنا كتير 🌟 https://www.google.com/maps/place/Saber+Jo+Snack/@32.0186841,35.8578738,15.33z/data=!4m8!3m7!1s0x151c9f2da3f2b8e9:0xe10b35d58f8bc73!8m2!3d32.0225298!4d35.8554483!9m1!1b1!16s%2Fg%2F11yww9mzpw?entry=ttu&g_ep=EgoyMDI2MDcyMi4wIKXMDSoASAFQAw%3D%3D شكرًا إلك 💛';
     const msg = template.replace(/\[الاسم\]/g, custName||'');
     let phone = (custPhone||'').replace(/\D/g,'');
     if(phone.startsWith('0')) phone = '962'+phone.slice(1);
@@ -5962,11 +5134,11 @@
   let __bulkWaQueue = [];
   function openBulkWhatsapp(){
     if(!CUST_SELECTED.size){ toast('⚠️ حدد عميل واحد على الأقل'); return; }
-    const defaultMsg = SETTINGS.feedback_msg_template || 'مرحبا [الاسم] 🙏 شو رأيك بطلبك الأخير من '+bizName()+'؟ رأيك بهمنا كتير وبيساعدنا نتحسّن. لو عندك دقيقة، تقييمك على خرائط جوجل بفرحنا كتير 🌟 (حطي رابط خرائط مطعمك من الإعدادات) شكرًا إلك 💛';
+    const defaultMsg = SETTINGS.feedback_msg_template || 'مرحبا [الاسم] 🙏 شو رأيك بطلبك الأخير من صابر جو سناك؟ رأيك بهمنا كتير وبيساعدنا نتحسّن. لو عندك دقيقة، تقييمك على خرائط جوجل بفرحنا كتير 🌟 https://www.google.com/maps/place/Saber+Jo+Snack/@32.0186841,35.8578738,15.33z/data=!4m8!3m7!1s0x151c9f2da3f2b8e9:0xe10b35d58f8bc73!8m2!3d32.0225298!4d35.8554483!9m1!1b1!16s%2Fg%2F11yww9mzpw?entry=ttu&g_ep=EgoyMDI2MDcyMi4wIKXMDSoASAFQAw%3D%3D شكرًا إلك 💛';
     modal(`<h3>📢 رسالة واتساب جماعية</h3>
       <div style="color:var(--muted);font-size:.82rem;font-weight:700;margin-bottom:10px">هيك بتحدد لكل عميل واحد لحاله (واتساب ما بيسمح إرسال جماعي تلقائي بدون تطبيق رسمي) — بس هي أسرع طريقة: رسالة جاهزة، تفتح واتساب لكل عميل، تضغط إرسال، وننتقل للتالي.</div>
       <div class="fld"><label>نص الرسالة</label>
-        <textarea id="bulk_msg" rows="5" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;font-family:inherit;font-size:1rem" placeholder="مرحبا [الاسم]، شو رأيك بطلبك الأخير من ${bizName()}؟ رأيك بهمنا 🙏">${esc(defaultMsg)}</textarea>
+        <textarea id="bulk_msg" rows="5" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;font-family:inherit;font-size:1rem" placeholder="مرحبا [الاسم]، شو رأيك بطلبك الأخير من صابر جو سناك؟ رأيك بهمنا 🙏">${esc(defaultMsg)}</textarea>
         <div style="color:var(--muted);font-size:.78rem;margin-top:4px">💡 اكتب <b>[الاسم]</b> بأي مكان بالرسالة وبينحط اسم كل عميل تلقائيًا. 💡 تقدر تغيّر النص الافتراضي بشكل دائم من ⚙️ الإعدادات.</div>
       </div>
       <div class="m-act"><button class="save" onclick="startBulkWhatsapp()">🚀 ابدأ الإرسال (${CUST_SELECTED.size})</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
@@ -6106,7 +5278,7 @@
     const q = custSearch ? (custSearch.value||'').trim() : '';
     const minOrdersEl = document.getElementById('custMinOrders');
     const minOrders = minOrdersEl ? (parseInt(minOrdersEl.value)||0) : 0;
-    let list = q ? CUSTOMERS.filter(c=>(c.name||'').includes(q) || phoneMatches(c.phone, q)) : CUSTOMERS.slice();
+    let list = q ? CUSTOMERS.filter(c=>(c.name||'').includes(q) || (c.phone||'').includes(q)) : CUSTOMERS.slice();
     if(minOrders>0) list = list.filter(c=>(c.real_orders_count||0) >= minOrders);
     if(CUST_ORDER_SORT==='desc') list.sort((a,b)=>(b.real_orders_count||0)-(a.real_orders_count||0));
     else if(CUST_ORDER_SORT==='asc') list.sort((a,b)=>(a.real_orders_count||0)-(b.real_orders_count||0));
@@ -6405,7 +5577,7 @@
     const label = document.getElementById('repDateLabel')?.textContent || '';
 
     const text = 'تقرير المبيعات\n'+
-      '— '+bizName()+' —\n'+
+      '— Saber Jo Snack —\n'+
       (label?label+'\n':'')+
       '════════════════\n'+
       'مبيعات الأصناف (قبل الخصم): '+fmt(gross)+' '+CURRENCY+'\n'+
@@ -6421,7 +5593,7 @@
 
     const htmlFallback = document.getElementById('salesKPI')?.outerHTML
       ? '<html dir="rtl"><head><meta charset="UTF-8"><style>body{font-family:Cairo,Arial;padding:20px}table{width:100%;border-collapse:collapse}td,th{padding:6px;border:1px solid #ccc;text-align:right}</style></head><body>'
-        + '<h2>تقرير المبيعات — '+bizName()+'</h2><div>'+label+'</div>'
+        + '<h2>تقرير المبيعات — Saber Jo Snack</h2><div>'+label+'</div>'
         + (document.getElementById('salesKPI').innerHTML||'')
         + '</body></html>'
       : '<html><body>ما في بيانات</body></html>';
@@ -6714,12 +5886,6 @@
     platforms:'platforms_view', empmeals:'empmeals_view', topcust:'topcust_view', waste:'waste_log', suppliers:'purchases_view',
   };
   function canAccessAdminTab(tabKey){
-    // 🏢 تعدد المطاعم: لو هاد المطعم عنده باقة ميزات محدّدة من لوحة المنصة (enabled_features)،
-    // الشاشة لازم تكون ضمن الباقة أصلًا — حتى لو مالك المطعم نفسه معه كل الصلاحيات. هاي سقف
-    // من عندنا (Saber ERP)، مش من صلاحيات الموظفين الداخلية.
-    if(TENANT && Array.isArray(TENANT.enabled_features) && !TENANT.enabled_features.includes(tabKey)){
-      return false;
-    }
     // 🔒 استثناء دائم: شاشة "الأدوار" للمالك الحقيقي بس، حتى لو الدور المخصص معاه "كل صلاحيات المالك" —
     // وإلا صار ممكن يعدّل حاله صلاحيات أكتر وأكتر بنفسه بدون حدود.
     if(tabKey==='roles' && (!ME || ME.role!=='admin')) return false;
@@ -6822,24 +5988,12 @@
     if(admView==='waste'){ renderWaste(); return; }
     if(admView==='suppliers'){ renderSuppliers(); return; }
     if(admView==='sett'){
-      const creditsVal = TENANT ? TENANT.order_credits_balance : SETTINGS.order_credits_balance;
-      const hasCreditsFeature = creditsVal!==undefined && creditsVal!==null && creditsVal!=='';
-      const SUPPORT_PHONE = '0790807761'; // 📞 رقم الدعم والشحن — Saber ERP
       C.innerHTML=`<div class="mbox" style="max-width:480px">
         <h3>🔧 إعدادات النظام</h3>
-        <div class="fld" style="background:#eef6ff;border-radius:12px;padding:14px 16px;margin-bottom:14px;text-align:center">
-          <div style="font-weight:900;color:var(--maroon);margin-bottom:6px">📞 الدعم الفني وشحن رصيد الطلبات</div>
-          <a href="https://wa.me/962${SUPPORT_PHONE.replace(/^0/,'')}" target="_blank" style="display:inline-block;background:#25D366;color:#fff;padding:10px 20px;border-radius:10px;font-weight:900;text-decoration:none">💬 تواصلي عبر واتساب — ${SUPPORT_PHONE}</a>
-        </div>
-        <div class="fld"><label>🏪 اسم النشاط (يظهر بكل الفواتير والتقارير والرسائل)</label><input id="f_bizName" value="${esc(SETTINGS.business_name||'')}" placeholder="مثال: مطعم الذوق الرفيع"></div>
-        ${hasCreditsFeature ? `<div class="fld" style="background:${hasOrderCredits()?'#eafbea':'#ffe0e0'};border-radius:12px;padding:14px 16px;margin-bottom:14px">
-          <div style="font-weight:900;color:${hasOrderCredits()?'var(--ok)':'var(--red)'}">💳 رصيد الطلبات المتبقي: ${parseFloat(creditsVal).toFixed(0)} طلب</div>
-          <div style="font-size:.8rem;color:var(--muted);font-weight:700;margin-top:4px">${hasOrderCredits()?'الرصيد بينخصم واحد تلقائيًا مع كل طلب جديد. لو قرّب يخلص، تواصلي معنا للشحن.':'خلص الرصيد — النظام موقف عن قبول طلبات جديدة لحد ما ينشحن. تواصلي معنا فورًا.'}</div>
-        </div>` : ''}
         <div class="fld"><label>📱 رقم واتساب التوصيل</label><input id="f_wanum" inputmode="tel" value="${esc(SETTINGS.delivery_whatsapp||'')}"></div>
         <div class="fld"><label>📦 رقم واتساب "توريدات" عام (احتياطي لو المورد ماله رقم محدد)</label><input id="f_procWa" inputmode="tel" value="${esc(SETTINGS.procurement_whatsapp||'')}" placeholder="مثال: 962791234567"></div>
         <div class="fld"><label>💬 نص رسالة "جربتوا الأكل؟" الافتراضي (للعملاء)</label>
-          <textarea id="f_feedbackMsg" rows="4" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;font-family:inherit;font-size:1rem" placeholder="مرحبا [الاسم]، شو رأيك بطلبك الأخير...">${esc(SETTINGS.feedback_msg_template||'مرحبا [الاسم] 🙏 شو رأيك بطلبك الأخير من '+bizName()+'؟ رأيك بهمنا كتير وبيساعدنا نتحسّن. لو عندك دقيقة، تقييمك على خرائط جوجل بفرحنا كتير 🌟 (حطي رابط خرائط مطعمك من الإعدادات) شكرًا إلك 💛')}</textarea>
+          <textarea id="f_feedbackMsg" rows="4" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;font-family:inherit;font-size:1rem" placeholder="مرحبا [الاسم]، شو رأيك بطلبك الأخير...">${esc(SETTINGS.feedback_msg_template||'مرحبا [الاسم] 🙏 شو رأيك بطلبك الأخير من صابر جو سناك؟ رأيك بهمنا كتير وبيساعدنا نتحسّن. لو عندك دقيقة، تقييمك على خرائط جوجل بفرحنا كتير 🌟 https://www.google.com/maps/place/Saber+Jo+Snack/@32.0186841,35.8578738,15.33z/data=!4m8!3m7!1s0x151c9f2da3f2b8e9:0xe10b35d58f8bc73!8m2!3d32.0225298!4d35.8554483!9m1!1b1!16s%2Fg%2F11yww9mzpw?entry=ttu&g_ep=EgoyMDI2MDcyMi4wIKXMDSoASAFQAw%3D%3D شكرًا إلك 💛')}</textarea>
           <div style="color:var(--muted);font-size:.78rem;margin-top:4px">💡 اكتب <b>[الاسم]</b> بأي مكان وبينحط اسم كل عميل تلقائيًا وقت الإرسال — هاد النص هو يلي بيطلع افتراضيًا كل مرة تفتح "رسالة واتساب جماعية"</div>
         </div>
 
@@ -8513,7 +7667,7 @@
     const r = RECIPES_DATA.find(x=>x.id===id); if(!r) return;
     const itemName = r.menu_items?.name_ar||'—';
     const prepLines = (r.prep_method||'').split('\n').map(x=>x.trim()).filter(Boolean);
-    const text = 'ورقة وصفة — '+itemName+'\n— '+bizName()+' —\n════════════════\n'+
+    const text = 'ورقة وصفة — '+itemName+'\n— Saber Jo Snack —\n════════════════\n'+
       (r.recipe_items||[]).map(ri=>ri.quantity+' '+(ri.ingredients?.unit||'')+' — '+(ri.ingredients?.name||'—')+(withPrices?(' — '+fmt((ri.quantity||0)*(ri.ingredients?.unit_cost||0))+' '+CURRENCY):'')).join('\n')+
       (prepLines.length?('\n\nطريقة التحضير:\n'+prepLines.join('\n')):'')+'\n';
     const html = `<html dir="rtl"><head><meta charset="UTF-8"><style>body{font-family:Cairo,Arial;padding:20px}table{width:100%;border-collapse:collapse}td,th{padding:8px;border:1px solid #ccc;text-align:right;font-size:1rem}h2{text-align:center}.prep{margin-top:22px}.prep h3{color:#4a1010;border-bottom:2px solid #4a1010;padding-bottom:6px}.prep ol{font-size:1.05rem;line-height:1.9;padding-right:22px}@media print{.no-print{display:none}}</style></head><body>
@@ -9384,7 +8538,7 @@
     if(filterCat) filtered = filtered.filter(e=>e.category===filterCat);
     if(filterBr) filtered = filtered.filter(e=>e.branch_id===filterBr);
     const total = filtered.reduce((a,e)=>a+parseFloat(e.amount||0),0);
-    const text = 'تقرير المصاريف\n— '+bizName()+' —\n════════════════\n'+
+    const text = 'تقرير المصاريف\n— Saber Jo Snack —\n════════════════\n'+
       filtered.map(e=>e.expense_date+' — '+(e.category||'—')+' — '+fmt(e.amount)).join('\n')+'\n════════════════\nالإجمالي: '+fmt(total)+' '+CURRENCY+'\n';
     const html = `<html dir="rtl"><head><meta charset="UTF-8"><style>body{font-family:Cairo,Arial;padding:16px}table{width:100%;border-collapse:collapse}td,th{padding:6px;border:1px solid #ccc;text-align:right}</style></head><body>
       <h2>تقرير المصاريف</h2>
@@ -10000,7 +9154,7 @@
       th{background:#fff8ee;font-weight:800}
       h3{margin-top:16px;color:#4a1010}
       </style></head><body>
-      <h1>🍔 ${bizName()} — تقرير ${TYPE_AR[d.type]||''}</h1>
+      <h1>🍔 Saber JO Snack — تقرير ${TYPE_AR[d.type]||''}</h1>
       <div class="sub">الفترة: ${d.from} → ${d.to} &nbsp;|&nbsp; الفرع: ${esc(branchName)} &nbsp;|&nbsp; تاريخ الطباعة: ${new Date().toLocaleDateString('ar-JO')}</div>
       ${bodyHtml}
       </body></html>`;
@@ -10096,7 +9250,7 @@
       const peakSummary = Object.entries(byDayHour).sort((a,b)=>b[1].total-a[1].total).slice(0,15)
         .map(([k,v])=>{ const [d,h]=k.split('-'); return DAY_AR[d]+' الساعة '+h+':00 — '+v.count+' طلب — '+v.total.toFixed(1)+' '+CURRENCY; }).join('\n');
 
-      const summary = `بيانات مطعم "${bizName()}" لتحليل جدول الدوام الأمثل، للفترة من ${from} إلى ${to}${branchId?' (فرع محدد)':' (كل الفروع)'}:
+      const summary = `بيانات مطعم "Saber JO Snack" لتحليل جدول الدوام الأمثل، للفترة من ${from} إلى ${to}${branchId?' (فرع محدد)':' (كل الفروع)'}:
 
 إجمالي عدد الطلبات بالفترة: ${orders.length}
 
@@ -10182,7 +9336,7 @@ ${peakSummary}
       wasteRows.forEach(w=>{ const k=w.ingredients?.name||'—'; wasteByItem[k]=(wasteByItem[k]||0)+parseFloat(w.quantity||0)*parseFloat(w.ingredients?.unit_cost||0); });
       const wasteSorted = Object.entries(wasteByItem).sort((a,b)=>b[1]-a[1]).slice(0,8);
 
-      const summary = `بيانات مطعم "${bizName()}" للفترة من ${from} إلى ${to}${branchId?' (فرع محدد)':' (كل الفروع)'}:
+      const summary = `بيانات مطعم "Saber JO Snack" للفترة من ${from} إلى ${to}${branchId?' (فرع محدد)':' (كل الفروع)'}:
 عدد الطلبيات: ${orders.length}
 إجمالي المبيعات: ${totalSales.toFixed(2)} د.أ
 إجمالي الخصومات: ${totalDiscount.toFixed(2)} د.أ
@@ -10256,7 +9410,7 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
     d.innerHTML = `<div style="background:#fff;border-radius:18px;padding:0;max-width:560px;width:100%;max-height:94vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.4)">
         <div style="background:linear-gradient(160deg,var(--maroon),#2b0808);color:#fff;padding:22px 24px;text-align:center;flex-shrink:0">
           ${SETTINGS.invoice_logo?`<img src="${SETTINGS.invoice_logo}" style="max-width:56px;max-height:56px;object-fit:contain;margin-bottom:6px">`:''}
-          <div style="font-size:1.25rem;font-weight:900">🍔 ${bizName()} — ${bizName()}</div>
+          <div style="font-size:1.25rem;font-weight:900">🍔 Saber JO Snack — صابر جو سناك</div>
           <div style="font-size:.82rem;opacity:.85;font-weight:700;margin-top:2px">إقرار وموافقة على شروط وأحكام العمل</div>
         </div>
         <div style="padding:20px;overflow-y:auto;flex:1">
@@ -10485,7 +9639,7 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
       .sig{text-align:center;margin-top:20px}
       .sig img{max-width:300px;border-bottom:2px solid #241414;padding-bottom:8px}
       </style></head><body>
-      <h1>🍔 ${bizName()} — إقرار وموافقة على شروط وأحكام العمل</h1>
+      <h1>🍔 Saber JO Snack — إقرار وموافقة على شروط وأحكام العمل</h1>
       <div class="sub">تاريخ الطباعة: ${new Date().toLocaleDateString('ar-JO')}</div>
       <table>
         <tr><td>الاسم الرباعي</td><td>${esc(r.full_name)}</td></tr>
@@ -10728,7 +9882,7 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
     if(filterSup) filtered = filtered.filter(p=>p.supplier===filterSup);
     if(filterIng) filtered = filtered.filter(p=>(p.purchase_items||[]).some(i=>i.ingredient_id===filterIng));
     const total = filtered.reduce((a,p)=>a+parseFloat(p.total||0),0);
-    const text = 'تقرير المشتريات\n— '+bizName()+' —\n'+(filterSup?'المورد: '+filterSup+'\n':'')+'════════════════\n'+
+    const text = 'تقرير المشتريات\n— Saber Jo Snack —\n'+(filterSup?'المورد: '+filterSup+'\n':'')+'════════════════\n'+
       filtered.map(p=>p.purchase_date+' — '+(p.supplier||'—')+' — '+fmt(p.total)).join('\n')+'\n════════════════\nالإجمالي: '+fmt(total)+' '+CURRENCY+'\n';
     const html = `<html dir="rtl"><head><meta charset="UTF-8"><style>body{font-family:Cairo,Arial;padding:16px}table{width:100%;border-collapse:collapse}td,th{padding:6px;border:1px solid #ccc;text-align:right}</style></head><body>
       <h2>تقرير المشتريات${filterSup?' — '+esc(filterSup):''}</h2>
@@ -10748,7 +9902,7 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
       <style>body{font-family:Cairo,Arial;padding:28px}h1{color:#4a1010}table{width:100%;border-collapse:collapse;margin-top:14px}td,th{padding:8px 10px;border:1px solid #eadfd4;text-align:right;font-size:.85rem}th{background:#FFF8EE}.tot{font-weight:900;color:#F60100}@media print{.no-print{display:none}}</style>
       </head><body>
       <button class="no-print" onclick="window.print()" style="margin-bottom:16px;background:#4a1010;color:#FDE507;border:none;border-radius:10px;padding:10px 20px;font-weight:800;cursor:pointer">🖨️ طباعة / حفظ PDF</button>
-      <h1>🛒 تقرير المشتريات — ${bizName()}</h1>
+      <h1>🛒 تقرير المشتريات — Saber Jo Snack</h1>
       <div>${filterSup?'المورد: '+esc(filterSup)+' — ':''}تاريخ الطباعة: ${new Date().toLocaleString('ar-JO')}</div>
       <table><tr><th>التاريخ</th><th>المورد</th><th>المواد</th><th>الإجمالي</th><th>الدفع</th></tr>
       ${filtered.map(p=>`<tr><td>${p.purchase_date}</td><td>${esc(p.supplier||'—')}</td><td>${(p.purchase_items||[]).map(i=>esc(i.ingredients?.name||'—')).join('، ')}</td><td>${fmt(p.total)}</td><td>${p.payment_status==='cash'?'كاش':p.payment_status==='bank'?'بنك/كليك':p.payment_status==='capital'?'رأس المال':'دين'}</td></tr>`).join('')}
@@ -11195,7 +10349,7 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
       </head><body>
       <button class="no-print" onclick="window.print()" style="margin-bottom:16px;background:#4a1010;color:#FDE507;border:none;border-radius:10px;padding:10px 20px;font-weight:800;cursor:pointer">🖨️ طباعة / حفظ PDF</button>
       <h1>💹 تقرير الربح والخسارة المفصل</h1>
-      <div>${bizName()} — الفترة: ${d.from} → ${d.to} (${d.daysInRange} يوم)</div>
+      <div>Saber Jo Snack — الفترة: ${d.from} → ${d.to} (${d.daysInRange} يوم)</div>
       <table>
         <tr><th>صافي المبيعات (بدون توصيل ووجبات موظفين)</th><td>${fmt(d.sales)} ${CURRENCY}</td></tr>
         <tr><th>تكلفة البضاعة المستهلكة (COGS)</th><td>${fmt(d.cogs)} ${CURRENCY}</td></tr>
@@ -11857,7 +11011,7 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
             if(!bySup[supLabel]) bySup[supLabel] = [];
             bySup[supLabel].push(it);
           });
-          let msg = `📦 تقرير نواقص — ${branchName}\n${bizName()} — بعد جرد ${new Date().toLocaleDateString('ar-JO')}\n`;
+          let msg = `📦 تقرير نواقص — ${branchName}\nصابر جو سناك — بعد جرد ${new Date().toLocaleDateString('ar-JO')}\n`;
           Object.entries(bySup).forEach(([supLabel, items])=>{
             msg += `\n📍 المورد: ${supLabel}\n`;
             items.forEach(it=> msg += `🔴 ${it.ing.name} — المتوفر ${it.actual} ${it.ing.unit} — المطلوب ${it.need} ${it.ing.unit}\n`);
@@ -12214,7 +11368,7 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
         if(!bySup[supLabel]) bySup[supLabel] = [];
         bySup[supLabel].push({ ing, need, actual: r.actual });
       });
-      let msg = `📦 تقرير نواقص — ${branchName}\n${bizName()} — جرد ${new Date(a.created_at).toLocaleDateString('ar-JO')}\n`;
+      let msg = `📦 تقرير نواقص — ${branchName}\nصابر جو سناك — جرد ${new Date(a.created_at).toLocaleDateString('ar-JO')}\n`;
       Object.entries(bySup).forEach(([supLabel, items])=>{
         msg += `\n📍 المورد: ${supLabel}\n`;
         items.forEach(it=> msg += `🔴 ${it.ing.name} — المتوفر ${it.actual} ${it.ing.unit} — المطلوب ${it.need} ${it.ing.unit}\n`);
@@ -12362,7 +11516,7 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
       const { data: supIngs } = await db.from('supplier_ingredients').select('*').eq('ingredient_id', ingId);
       const supNames = (supIngs||[]).map(si=>si.supplier);
       const supLabel = supNames.length ? supNames.join(' / ') : 'بدون مورد محدد';
-      const msg = `📦 تنبيه نقص — ${branchName}\n${bizName()} — ${new Date().toLocaleDateString('ar-JO')}\n\n`
+      const msg = `📦 تنبيه نقص — ${branchName}\nصابر جو سناك — ${new Date().toLocaleDateString('ar-JO')}\n\n`
         + `🔴 المادة: ${ing.name}\n📍 المورد: ${supLabel}\n📉 المتوفر حاليًا: ${actualStock} ${ing.unit}\n📦 الكمية المطلوب طلبها: ${need} ${ing.unit}\n\nمشكورين على التعاون 🙏`;
       const phone = (SETTINGS.procurement_whatsapp||'').replace(/\D/g,'');
       if(!phone){
@@ -12662,7 +11816,7 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
     const sup = suppliers.find(s=>s.name===supName);
     const phone = (sup?.whatsapp || sup?.phone || SETTINGS.procurement_whatsapp || '').replace(/\D/g,'');
     if(!phone){ toast('⚠️ ما في رقم واتساب — حدده بالمورد أو برقم "توريدات" العام بالإعدادات'); return; }
-    let msg = `📦 طلب توريد — ${supName}\n${bizName()}\n\n`;
+    let msg = `📦 طلب توريد — ${supName}\nصابر جو سناك\n\n`;
     items.forEach(it=>{ msg += `• ${it.name} (${it.branch}) — المتاح ${it.stock} ${it.unit}\n`; });
     msg += `\nمشكورين على التعاون 🙏`;
     window.open(`https://wa.me/${phone}?text=${encodeURIComponent(msg)}`, '_blank');
@@ -12803,7 +11957,7 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
         @media print{ .no-print{display:none} }
       </style></head><body>
       <button class="no-print" onclick="window.print()" style="margin-bottom:16px;background:#4a1010;color:#FDE507;border:none;border-radius:10px;padding:10px 20px;font-weight:800;cursor:pointer">🖨️ طباعة / حفظ PDF</button>
-      <h1>🏬 تقرير المستودع — ${bizName()}</h1>
+      <h1>🏬 تقرير المستودع — Saber Jo Snack</h1>
       <div class="sub">الفترة: ${WH_FILTER.from} → ${WH_FILTER.to} — تاريخ الطباعة: ${new Date().toLocaleString('ar-JO')}</div>
       <h2>📦 الأرصدة الحالية — الإجمالي: <span class="tot">${fmt(totalValue)} ${CURRENCY}</span></h2>
       <table><tr><th>الفرع</th><th>المادة</th><th>الرصيد</th><th>الوحدة</th><th>سعر الوحدة</th><th>القيمة</th></tr>
@@ -13475,7 +12629,7 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
     win.document.write(`<html dir="rtl"><head><meta charset="utf-8"><title>كشف دفعات الموردين</title>
       <style>body{font-family:Arial;padding:20px}table{width:100%;border-collapse:collapse;font-size:.85rem}th,td{border:1px solid #999;padding:6px 8px;text-align:center}th{background:#5a1a1a;color:#FDE507}h1{text-align:center}
       @media print{button{display:none}}</style></head><body>
-      <h1>📄 كشف دفعات الموردين — ${bizName()}</h1>
+      <h1>📄 كشف دفعات الموردين — Saber Jo Snack</h1>
       <div style="text-align:center;font-weight:700;margin-bottom:14px">${SP_FILTER.from} → ${SP_FILTER.to}${SP_FILTER.supplier?' — المورد: '+esc(SP_FILTER.supplier):' — كل الموردين'}</div>
       <div style="text-align:center;font-weight:900;font-size:1.2rem;margin-bottom:14px">إجمالي المدفوع: ${fmt(total)} ${CURRENCY} — عدد الدفعات: ${payments.length}</div>
       <table><tr><th>التاريخ</th><th>المورد</th><th>المبلغ</th><th>طريقة الدفع</th><th>من حساب</th><th>الفرع</th><th>ملاحظة</th><th>بواسطة</th></tr>
@@ -13950,7 +13104,7 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
       </head><body>
       <button class="no-print" onclick="window.print()" style="margin-bottom:16px;background:#4a1010;color:#FDE507;border:none;border-radius:10px;padding:10px 20px;font-weight:800;cursor:pointer">🖨️ طباعة / حفظ PDF</button>
       <h1>📋 كشف شهر ${esc(c.month_label)} — ${esc(c.employee_name)}</h1>
-      <div>الفترة: ${c.period_from} → ${c.period_to} — ${bizName()}</div>
+      <div>الفترة: ${c.period_from} → ${c.period_to} — Saber Jo Snack</div>
       <div>انقفل بواسطة ${esc(c.closed_by||'—')} بتاريخ ${new Date(c.closed_at).toLocaleString('ar-JO')}</div>
       <table>
         <tr><th>📒 رصيد سابق (بداية الشهر)</th><td>${fmt(c.opening_balance)} ${CURRENCY}</td></tr>
@@ -13999,7 +13153,7 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
       </style></head><body>
       <button class="no-print" onclick="window.print()" style="margin-bottom:16px;background:#4a1010;color:#FDE507;border:none;border-radius:10px;padding:10px 20px;font-weight:800;cursor:pointer">🖨️ طباعة / حفظ PDF</button>
       <h1>📋 كشف حساب موظف — ${esc(r.emp.name)}</h1>
-      <div class="sub">الفترة: ${HR_FILTER.from} → ${HR_FILTER.to} — ${bizName()} — تاريخ الطباعة: ${new Date().toLocaleString('ar-JO')}</div>
+      <div class="sub">الفترة: ${HR_FILTER.from} → ${HR_FILTER.to} — Saber Jo Snack — تاريخ الطباعة: ${new Date().toLocaleString('ar-JO')}</div>
 
       <h2>الملخص</h2>
       <table>
@@ -14050,7 +13204,7 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
       <style>body{font-family:Cairo,Arial;padding:28px}h1{color:#4a1010}table{width:100%;border-collapse:collapse;margin-top:14px}td,th{padding:8px 10px;border:1px solid #eadfd4;text-align:right;font-size:.85rem}th{background:#FFF8EE}.tot{font-weight:900;color:#F60100}@media print{.no-print{display:none}}</style>
       </head><body>
       <button class="no-print" onclick="window.print()" style="margin-bottom:16px;background:#4a1010;color:#FDE507;border:none;border-radius:10px;padding:10px 20px;font-weight:800;cursor:pointer">🖨️ طباعة / حفظ PDF</button>
-      <h1>🧑‍💼 تقرير HR — ${bizName()}</h1>
+      <h1>🧑‍💼 تقرير HR — Saber Jo Snack</h1>
       <div>الفترة: ${HR_FILTER.from} → ${HR_FILTER.to}</div>
       <table><tr><th>الموظف</th><th>سعر الساعة</th><th>ساعات العمل</th><th>أيام الحضور</th><th>الوجبات</th><th>قيمة الوجبات</th><th>السلف</th><th>خصم الشيفتات</th><th>صافي المستحق</th></tr>
       ${rows.map(r=>`<tr><td>${esc(r.emp.name)}</td><td>${fmt(r.emp.hourly_wage||0)}</td><td>${r.hours.toFixed(1)}</td><td>${r.days}</td><td>${r.mealsCount}</td><td>${fmt(r.mealsTotal)}</td><td>${fmt(r.advTotal)}</td><td>${fmt(r.shiftDeduction)}</td><td>${fmt(r.net)}</td></tr>`).join('')}
@@ -14392,7 +13546,7 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
       <style>body{font-family:Cairo,Arial;padding:28px}h1{color:#4a1010}table{width:100%;border-collapse:collapse;margin-top:14px}td,th{padding:8px 10px;border:1px solid #eadfd4;text-align:right;font-size:.85rem}th{background:#FFF8EE}@media print{.no-print{display:none}}</style>
       </head><body>
       <button class="no-print" onclick="window.print()" style="margin-bottom:16px;background:#4a1010;color:#FDE507;border:none;border-radius:10px;padding:10px 20px;font-weight:800;cursor:pointer">🖨️ طباعة / حفظ PDF</button>
-      <h1>💰 تقرير المصاري — ${bizName()}</h1>
+      <h1>💰 تقرير المصاري — Saber Jo Snack</h1>
       <div>الفترة: ${TR_FILTER.from} → ${TR_FILTER.to}</div>
       <table><tr><th>التاريخ</th><th>الحساب</th><th>النوع</th><th>المبلغ</th><th>ملاحظة</th><th>الموظف</th></tr>
       ${filtered.map(t=>`<tr><td>${new Date(t.created_at).toLocaleString('ar-JO')}</td><td>${t.account==='cash'?'كاش':'بنك/كليك'}</td><td>${esc(TR_TYPE_AR[t.type]||t.type)}</td><td>${fmt(t.amount)}</td><td>${esc(t.note||'—')}</td><td>${esc(t.created_by||'—')}</td></tr>`).join('')}
@@ -14422,7 +13576,7 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
     const filterStaff = window.__trFilterStaff||'';
     let filtered = TRANSFERS_DATA;
     if(filterStaff) filtered = filtered.filter(t=>t.created_by===filterStaff);
-    const text = 'تقرير نقل البضاعة\n— '+bizName()+' —\n════════════════\n'+
+    const text = 'تقرير نقل البضاعة\n— Saber Jo Snack —\n════════════════\n'+
       filtered.map(t=>new Date(t.created_at).toLocaleString('ar-JO')+' — '+(t.ingredients?.name||'—')+' × '+t.quantity+' — من '+t.from_branch_name+' إلى '+t.to_branch_name+' — بواسطة '+(t.created_by||'—')).join('\n')+'\n';
     const html = `<html dir="rtl"><head><meta charset="UTF-8"><style>body{font-family:Cairo,Arial;padding:16px}table{width:100%;border-collapse:collapse}td,th{padding:6px;border:1px solid #ccc;text-align:right;font-size:.85rem}</style></head><body>
       <h2>تقرير نقل البضاعة</h2>
@@ -14857,7 +14011,7 @@ window.__lastEmpMealsData = null;
   function printEmpMealsReport(){
     const d = window.__lastEmpMealsData; if(!d) return;
     const text = 'تقرير وجبات الموظفين\n'+
-      '— '+bizName()+' —\n'+
+      '— Saber Jo Snack —\n'+
       'الفترة: '+d.from+' → '+d.to+'\n'+
       '════════════════\n'+
       d.people.map(([name,p])=>name+': '+p.count+' وجبة — '+fmt(p.total)+' '+CURRENCY).join('\n')+'\n'+
@@ -15185,7 +14339,7 @@ window.__lastEmpMealsData = null;
     // 🔍 البحث بيدوّر بكل العملاء المحمّلين (مش بس أفضل 100 المعروضين)
     const results = (TOP_CUST_ALL||[]).filter(c=>
       (c.name||'').toLowerCase().includes(q) ||
-      phoneMatches(c.phone, q) ||
+      (c.phone||'').toLowerCase().includes(q) ||
       (c.address||'').toLowerCase().includes(q)
     ).slice(0,200);
     wrap.innerHTML = renderTopCustRows(results);
@@ -15214,7 +14368,7 @@ window.__lastEmpMealsData = null;
       <div class="fld"><label>نسبة الخصم % (بتنحفظ على العميل وبتظهر للسنتر بأي طلب جاي)</label>
         <input id="vip_disc_pct" type="number" min="0" max="100" value="${c.vip_discount_percent||10}" style="border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;width:100%"></div>
       <div class="fld"><label>نص الرسالة</label>
-        <textarea id="bulk_msg" rows="5" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;font-family:inherit;font-size:1rem">مرحبا [الاسم] 🎉، إنت من عملائنا المميزين! خصم خاص إلك 10% على طلبك الجاي من ${bizName()} 🍔 — بانتظارك!</textarea>
+        <textarea id="bulk_msg" rows="5" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;font-family:inherit;font-size:1rem">مرحبا [الاسم] 🎉، إنت من عملائنا المميزين! خصم خاص إلك 10% على طلبك الجاي من صابر جو سناك 🍔 — بانتظارك!</textarea>
       </div>
       <div class="m-act"><button class="save" onclick="confirmSendVip('${custId}')">📱 حفظ الخصم وإرسال</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
   }
@@ -15236,7 +14390,7 @@ window.__lastEmpMealsData = null;
   let WASTE_DATA = [];
   function printWasteReport(){
     const d = window.__lastWasteData; if(!d) return;
-    const text = 'تقرير الإتلاف\n— '+bizName()+' —\n'+d.from+' → '+d.to+'\n════════════════\n'+
+    const text = 'تقرير الإتلاف\n— Saber Jo Snack —\n'+d.from+' → '+d.to+'\n════════════════\n'+
       'عدد العمليات: '+d.count+'\nالتكلفة: '+fmt(d.totalCost)+' '+CURRENCY+'\n────────────────\n'+
       d.staffRows.map(([n,x])=>n+': '+x.count+' عملية — '+fmt(x.cost)+' '+CURRENCY).join('\n')+'\n';
     const html = `<html dir="rtl"><head><meta charset="UTF-8"><style>body{font-family:Cairo,Arial;padding:16px}table{width:100%;border-collapse:collapse}td,th{padding:6px;border:1px solid #ccc;text-align:right}</style></head><body>
@@ -15250,7 +14404,7 @@ window.__lastEmpMealsData = null;
     const ing = INGR.find(x=>x.id===ingId);
     const br = BRANCHES.find(b=>b.id===branchId);
     const text = 'سند إتلاف\n'+
-      '— '+bizName()+' —\n'+
+      '— Saber Jo Snack —\n'+
       '════════════════\n'+
       'الفرع: '+(br?.name_ar||'—')+'\n'+
       'الموظف: '+ME.full_name+'\n'+
@@ -15268,7 +14422,7 @@ window.__lastEmpMealsData = null;
       hr{border:none;border-top:1px dashed #000;margin:5px 0}
       table{width:100%;border-collapse:collapse} td{padding:2px 0} .tl{text-align:left}
       </style></head><body>
-      <h2>سند إتلاف</h2><div class="c">${bizName()}</div><hr>
+      <h2>سند إتلاف</h2><div class="c">Saber Jo Snack</div><hr>
       <table>
         <tr><td>الفرع</td><td class="tl">${esc(br?.name_ar||'—')}</td></tr>
         <tr><td>الموظف</td><td class="tl">${esc(ME.full_name)}</td></tr>
@@ -15560,7 +14714,7 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
       <style>body{font-family:Cairo,Arial;padding:28px}h1{color:#4a1010}table{width:100%;border-collapse:collapse;margin-top:14px}td,th{padding:8px 10px;border:1px solid #eadfd4;text-align:right;font-size:.9rem}th{background:#FFF8EE;width:35%}@media print{.no-print{display:none}}</style>
       </head><body>
       <button class="no-print" onclick="window.print()" style="margin-bottom:16px;background:#4a1010;color:#FDE507;border:none;border-radius:10px;padding:10px 20px;font-weight:800;cursor:pointer">🖨️ طباعة / حفظ PDF</button>
-      <h1>🗑️ سند إتلاف — ${bizName()}</h1>
+      <h1>🗑️ سند إتلاف — Saber Jo Snack</h1>
       <table>
         <tr><th>التاريخ والساعة</th><td>${new Date(w.created_at).toLocaleString('ar-JO')}</td></tr>
         <tr><th>الفرع</th><td>${esc(w.branches?.name_ar||'—')}</td></tr>
@@ -15641,7 +14795,7 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
       <style>body{font-family:Cairo,Arial;padding:28px}h1{color:#4a1010}table{width:100%;border-collapse:collapse;margin-top:14px}td,th{padding:8px 10px;border:1px solid #eadfd4;text-align:right;font-size:.85rem}th{background:#FFF8EE}@media print{.no-print{display:none}}</style>
       </head><body>
       <button class="no-print" onclick="window.print()" style="margin-bottom:16px;background:#4a1010;color:#FDE507;border:none;border-radius:10px;padding:10px 20px;font-weight:800;cursor:pointer">🖨️ طباعة / حفظ PDF</button>
-      <h1>🚚 تقرير الموردين — ${bizName()}</h1>
+      <h1>🚚 تقرير الموردين — Saber Jo Snack</h1>
       <div>تاريخ الطباعة: ${new Date().toLocaleString('ar-JO')}</div>
       <table><tr><th>المورد</th><th>الهاتف</th><th>عدد الفواتير</th><th>الإجمالي</th><th>الدين المستحق</th><th>آخر شراء</th></tr>
       ${SUPPLIERS_DATA.map(s=>{ const st=stats[s.name]||{count:0,total:0,last:null,debt:0};
@@ -15786,7 +14940,7 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
   }
   function printSupplierStatement(){
     const d = window.__lastSupplierStmt; if(!d) return;
-    const text = 'كشف حساب مورد — '+d.supplierName+'\n— '+bizName()+' —\n'+d.from+' → '+d.to+'\n════════════════\n'+
+    const text = 'كشف حساب مورد — '+d.supplierName+'\n— Saber Jo Snack —\n'+d.from+' → '+d.to+'\n════════════════\n'+
       'عدد الفواتير: '+d.list.length+'\nالإجمالي: '+fmt(d.total)+' '+CURRENCY+'\nالدين المستحق: '+fmt(d.debt)+' '+CURRENCY+'\n────────────────\n'+
       Object.entries(d.byItem).map(([nm,x])=>nm+': '+fmt(x.qty)+' '+x.unit+' — '+fmt(x.cost)+' '+CURRENCY).join('\n')+'\n';
     const html = `<html dir="rtl"><head><meta charset="UTF-8"><style>body{font-family:Cairo,Arial;padding:16px}table{width:100%;border-collapse:collapse}td,th{padding:6px;border:1px solid #ccc;text-align:right}</style></head><body>
@@ -15815,7 +14969,7 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
       </style></head><body>
       <button class="no-print" onclick="window.print()" style="margin-bottom:16px;background:#4a1010;color:#FDE507;border:none;border-radius:10px;padding:10px 20px;font-weight:800;cursor:pointer">🖨️ طباعة / حفظ PDF</button>
       <h1>📄 كشف حساب مورد — ${esc(d.supplierName)}</h1>
-      <div class="sub">الفترة: ${d.from} → ${d.to} — ${bizName()} — تاريخ الطباعة: ${new Date().toLocaleString('ar-JO')}</div>
+      <div class="sub">الفترة: ${d.from} → ${d.to} — Saber Jo Snack — تاريخ الطباعة: ${new Date().toLocaleString('ar-JO')}</div>
 
       <h2>الملخص</h2>
       <table><tr><th>عدد الفواتير</th><th>إجمالي المشتريات</th><th>مدفوع بالفترة</th><th>الدين المستحق حاليًا</th></tr>
@@ -16079,7 +15233,7 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
       return { oComm, oNet, items };
     };
     const text = 'كشف حساب — '+d.platformName+'\n'+
-      '— '+bizName()+' —\n'+
+      '— Saber Jo Snack —\n'+
       'الفترة: '+d.from+' → '+d.to+'\n'+
       '════════════════\n'+
       'عدد الطلبات: '+d.orders.length+'\n'+
@@ -16271,7 +15425,7 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
 
   function printTransferReceipt(fromBranch, toBranch, items, fee, notes){
     const text = 'سند نقل بضاعة\n'+
-      '— '+bizName()+' —\n'+
+      '— Saber Jo Snack —\n'+
       '════════════════\n'+
       'من: '+(fromBranch?.name_ar||'—')+'\n'+
       'إلى: '+(toBranch?.name_ar||'—')+'\n'+
@@ -16291,7 +15445,7 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
       table{width:100%;border-collapse:collapse} td{padding:2px 0} .tl{text-align:left}
       </style></head><body>
       <h2>سند نقل بضاعة</h2>
-      <div class="c">${bizName()}</div><hr>
+      <div class="c">Saber Jo Snack</div><hr>
       <table>
         <tr><td>من</td><td class="tl">${esc(fromBranch?.name_ar||'—')}</td></tr>
         <tr><td>إلى</td><td class="tl">${esc(toBranch?.name_ar||'—')}</td></tr>
@@ -16461,7 +15615,6 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
       auto_print_branch: f_autoPrintBranch ? f_autoPrintBranch.checked : false,
     });
     const settings = {
-      business_name: document.getElementById('f_bizName')?.value.trim() || '',
       ai_invoice_enabled: document.getElementById('f_aiEnabled')?.checked ?? false,
       ai_model: document.getElementById('f_aiModel')?.value || 'claude-sonnet-5',
       hr_portal_show_hours: document.getElementById('f_hrShowHours')?.checked ?? true,
@@ -17008,14 +16161,6 @@ try {
     if(rec.role==='cashier'&&!rec.branch_id){ toast('⚠️ الكاشير يحتاج فرع'); return; }
     const dup=STAFF.find(x=>x.pin===rec.pin&&x.id!==id&&x.is_active);
     if(dup){ toast('⚠️ PIN مستخدم'); return; }
-    // 👥 سقف عدد الموظفين (لو محدّد من لوحة المنصة) — بس عند إضافة موظف جديد، مش عند تعديل موجود
-    if(!id && TENANT && TENANT.max_staff!=null){
-      const current = STAFF.filter(x=>x.is_active).length;
-      if(current >= TENANT.max_staff){
-        toast('⛔ وصلتوا الحد الأقصى المسموح لعدد الموظفين ('+TENANT.max_staff+') — تواصلوا معنا لزيادته');
-        return;
-      }
-    }
     try {
       const r=id?await db.from('staff').update(rec).eq('id',id):await db.from('staff').insert(rec);
       if(r.error){ console.error('saveStaff error:', r.error); toast(r.error.code==='23505'?'⚠️ اسم المستخدم مكرر':'✗ فشل الحفظ: '+(r.error.message||r.error.code||'خطأ غير معروف')); return; }
@@ -17100,14 +16245,6 @@ try {
   async function saveBranch(id){
     if(!lockSubmit('saveBranch')) return;
     setTimeout(()=>unlockSubmit('saveBranch'), 15000);
-    // 🏢 سقف عدد الفروع (لو محدّد من لوحة المنصة) — بس عند إضافة فرع جديد، مش عند تعديل موجود
-    if(!id && TENANT && TENANT.max_branches!=null){
-      const current = BRANCHES.length;
-      if(current >= TENANT.max_branches){
-        toast('⛔ وصلتوا الحد الأقصى المسموح لعدد الفروع ('+TENANT.max_branches+') — تواصلوا معنا لزيادته');
-        return;
-      }
-    }
     const f_bn = document.getElementById('f_bn');
     const f_be = document.getElementById('f_be');
     const rec={name_ar: f_bn ? f_bn.value.trim() : '', address: f_be ? f_be.value.trim()||null : null};
