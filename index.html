@@ -1497,7 +1497,7 @@
     box.appendChild(line);
   }
 
-  const APP_VERSION = '2026-08-13-01';
+  const APP_VERSION = '2026-09-02-01';
   // 🔄 فحص تلقائي للنسخة — يحل مشكلة "الصفحة ما بتاخد آخر تحديث" نهائيًا: كل شوي منقارن نسختنا
   // المحمّلة حاليًا مع ملف version.txt الحقيقي على السيرفر (بدون كاش أبدًا). لو مختلفة، معناته
   // في نسخة أحدث انرفعت، فمنعمل تحديث كامل للصفحة تلقائيًا بدون ما ننتظر حدا يسكر التبويب يدويًا.
@@ -4198,7 +4198,13 @@
         const namesStr = overItems.map(l=>l.item.name_ar+' ('+fmt(l.item.price)+' '+CURRENCY+')').join('، ');
         const pin = prompt('⛔ الأصناف التالية سعرها أكتر من الحد المسموح بوجبة موظف ('+fmt(priceLimit)+' '+CURRENCY+'):\n'+namesStr+'\n\nممنوع بدون موافقة المالك.\nأدخلي الرقم السري تبع المالك للموافقة:');
         if(pin===null){ unlockSubmit('saveOrder'); return; }
-        const ownerMatch = STAFF.find(s=>s.role==='admin' && s.is_active!==false && String(s.pin||'')===String(pin).trim());
+        const ownerMatch = STAFF.find(s=>{
+          if(s.is_active===false || String(s.pin||'')!==String(pin).trim()) return false;
+          if(s.role==='admin') return true;
+          if(s.role==='custom' && s.permissions?.act_as_owner) return true;
+          if(s.role==='custom' && (window.CUSTOM_ROLES||[]).find(r=>r.id===s.role_id)?.permissions?.act_as_owner) return true;
+          return false;
+        });
         if(!ownerMatch){ toast('⛔ رقم سري غلط — ما تمّت الموافقة'); unlockSubmit('saveOrder'); return; }
         window.__empMealPriceApprovedFor = empMealName;
         await logActivity('emp_meal_price_approve', 'موافقة '+ownerMatch.full_name+' على أصناف فوق الحد بوجبة '+empMealName+': '+namesStr);
