@@ -422,6 +422,14 @@
               <option value="">بدون منصة (مباشر)</option>
             </select>
             <div id="platformNote" class="hidden" style="color:var(--warn);font-weight:900;font-size:.82rem;margin-bottom:6px">🛵 ذمم على المنصة — ما بتحاسب عليه كاش بآخر الشيفت</div>
+            <select class="branch-sel hidden" id="orderChannel" style="margin-bottom:6px;border-color:var(--red)">
+              <option value="">📞 من وين إجا الطلب؟ (إجباري)</option>
+              <option value="whatsapp">💬 واتساب</option>
+              <option value="facebook">📘 فيسبوك</option>
+              <option value="messenger">✉️ مسنجر</option>
+              <option value="phone1">☎️ مكالمة جهاز 1</option>
+              <option value="phone2">☎️ مكالمة جهاز 2</option>
+            </select>
             <label style="display:flex;align-items:center;gap:8px;background:var(--cream);border:1px dashed var(--line);border-radius:10px;padding:8px 10px;margin-bottom:6px;font-weight:800;font-size:.9rem">
               <input type="checkbox" id="empMealChk" onchange="onEmpMealToggle()" style="width:18px;height:18px">
               🍽️ وجبة موظف (خصم 20% تلقائي — ذمم بالاسم)
@@ -761,6 +769,7 @@
   const esc = s => String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   const toast = m => { const t=$('toast'); t.textContent=m; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),2400); };
   const TYPE_AR = { takeaway:'استلام', delivery:'توصيل', dine_in:'صالة' };
+  const CHANNEL_AR = { whatsapp:'💬 واتساب', facebook:'📘 فيسبوك', messenger:'✉️ مسنجر', phone1:'☎️ جهاز 1', phone2:'☎️ جهاز 2' };
   const PAY_AR = { cash:'كاش', card:'كرت', cliq:'كليك' };
   const ROLE_AR = { admin:'مدير', cashier:'كاشير', callcenter:'كول سنتر', kitchen:'مطبخ' };
   PAY_AR['platform'] = 'ذمم (تطبيق)';
@@ -925,7 +934,7 @@
   function canRevealInventory(){ return isAdmin() || perm('inventory_reveal'); }
   function canSeeAllBranches(){ return isAdmin() || perm('cross_branch_reports'); }
   function canManageWaste(){ return isAdmin() || perm('waste_manage'); }
-  const isCallCenter = () => ME && ME.role==='callcenter';
+  const isCallCenter = () => !!(ME && (ME.role==='callcenter' || (ME.role==='custom' && ME.permissions?.act_as_callcenter) || (ME.role==='custom' && (window.CUSTOM_ROLES||[]).find(r=>r.id===ME.role_id)?.permissions?.act_as_callcenter)));
 
   /* ================= صوت التنبيه ================= */
   let audioCtx = null;
@@ -1310,6 +1319,7 @@
     },
     '👑 صلاحيات خاصة (حساسة جدًا)': {
       act_as_owner: '🔑 كل صلاحيات المالك تلقائيًا (حزمة شاملة تغطي كل يلي فوق دفعة وحدة) — ما عدا "الأدوار" و"تصفير النظام"',
+      act_as_callcenter: '📞 موظف كول سنتر — قناة الطلب (واتساب/فيسبوك/مسنجر/مكالمة) تصير إجبارية له مع كل طلب',
     },
   };
   const ROLE_DEFAULT_PERMS = {
@@ -1467,6 +1477,8 @@
     if (!perm('order_platform') && platformNoteEl) platformNoteEl.classList.add('hidden');
     const branchSel = document.getElementById('branchSel');
     document.getElementById('branchSelWrap')?.classList.toggle('hidden', !(adm||cc||!ME.branch_id));
+    // 📞 قناة الطلب (واتساب/فيسبوك/مسنجر/مكالمة جهاز) — إجبارية للكول سنتر بس، عشان نعرف مصدر كل طلب
+    document.getElementById('orderChannel')?.classList.toggle('hidden', !cc);
     const discInput = document.getElementById('discInput');
     if (discInput) discInput.classList.toggle('hidden', !adm);
   }
@@ -1497,7 +1509,7 @@
     box.appendChild(line);
   }
 
-  const APP_VERSION = '2026-09-02-01';
+  const APP_VERSION = '2026-09-02-02';
   // 🔄 فحص تلقائي للنسخة — يحل مشكلة "الصفحة ما بتاخد آخر تحديث" نهائيًا: كل شوي منقارن نسختنا
   // المحمّلة حاليًا مع ملف version.txt الحقيقي على السيرفر (بدون كاش أبدًا). لو مختلفة، معناته
   // في نسخة أحدث انرفعت، فمنعمل تحديث كامل للصفحة تلقائيًا بدون ما ننتظر حدا يسكر التبويب يدويًا.
@@ -2925,6 +2937,8 @@
     });
     const platformSel = document.getElementById('orderPlatform');
     if(platformSel){ platformSel.value = ''; onPlatformChange(); }
+    const channelSel = document.getElementById('orderChannel');
+    if(channelSel) channelSel.value = '';
     const empChk = document.getElementById('empMealChk');
     if(empChk){ empChk.checked = false; onEmpMealToggle(); }
     const empNameSel = document.getElementById('empMealName');
@@ -4182,6 +4196,9 @@
     if(!perm(orderType==='delivery'?'order_delivery':'order_takeaway')){ toast('⛔ ما عندك صلاحية بيع '+(orderType==='delivery'?'التوصيل':'الاستلام')); return; }
     const platformValSel = document.getElementById('orderPlatform')?.value;
     if(platformValSel && !perm('order_platform')){ toast('⛔ ما عندك صلاحية البيع عبر التطبيقات/المنصات'); return; }
+    // 📞 قناة الطلب إجبارية للكول سنتر — لازم يحدد من وين إجا الطلب (واتساب/فيسبوك/مسنجر/مكالمة)
+    const orderChannel = document.getElementById('orderChannel')?.value || '';
+    if(isCallCenter() && !orderChannel){ toast('⚠️ حددي من وين إجا الطلب (واتساب/فيسبوك/مسنجر/مكالمة) — إجباري'); return; }
     const empMealName = document.getElementById('empMealChk')?.checked ? (document.getElementById('empMealName')?.value.trim()||'') : '';
     if(document.getElementById('empMealChk')?.checked && !empMealName){ toast('⚠️ اكتب اسم الموظف — إجباري لوجبة الموظف'); return; }
     if(empMealName){
@@ -4295,6 +4312,7 @@
         notes: orderNote ? orderNote.value.trim() || null : null,
         discount_code: appliedCode ? appliedCode.code : null,
         platform_id: document.getElementById('orderPlatform')?.value || null,
+        channel: orderChannel || null,
         employee_tab_name: empMealName || null,
         employee_meal_id: empMealName ? (MEAL_NAMES_DATA.find(n=>n.name===empMealName)?.id || null) : null,
         split_details: payMethod==='split' ? {
@@ -4545,6 +4563,7 @@
         <tr><td><b>الفرع</b></td><td>${esc(o.branches?.name_ar||'—')}</td></tr>
         <tr><td><b>الموظف</b></td><td>${esc(o.created_by_name||'—')}</td></tr>
         <tr><td><b>النوع / الدفع</b></td><td>${TYPE_AR[o.order_type]||''} / ${PAY_AR[o.payment_method]||''}</td></tr>
+        ${o.channel?`<tr><td><b>قناة الطلب</b></td><td>${CHANNEL_AR[o.channel]||esc(o.channel)}</td></tr>`:''}
         <tr><td><b>العميل</b></td><td>${esc(o.customers?.name||'—')}${o.customers?.phone?` — <span dir="ltr">${esc(o.customers.phone)}</span>`:''}</td></tr>
         ${o.customers?.address?`<tr><td><b>العنوان</b></td><td>${esc(o.customers.address)}</td></tr>`:''}
         ${o.notes?`<tr><td><b>ملاحظة</b></td><td>${esc(o.notes)}</td></tr>`:''}
@@ -4773,7 +4792,7 @@
           return;
         }
 
-        dayList.innerHTML = `<table class="tbl"><tr><th>#</th><th>الوقت</th><th>⏱️</th><th>النوع</th>${(adm||cc)?'<th>الفرع</th>':''}<th>العميل</th><th>الكاشير</th><th>الأصناف</th><th>الإجمالي</th>${ownerView?'<th>أجور التوصيل</th><th>الربح</th>':''}<th>الحالة</th><th></th></tr>
+        dayList.innerHTML = `<table class="tbl"><tr><th>#</th><th>الوقت</th><th>⏱️</th><th>النوع</th>${(adm||cc)?'<th>الفرع</th><th>القناة</th>':''}<th>العميل</th><th>الكاشير</th><th>الأصناف</th><th>الإجمالي</th>${ownerView?'<th>أجور التوصيل</th><th>الربح</th>':''}<th>الحالة</th><th></th></tr>
           ${DAY.map(o=>{
             const mins = Math.floor((Date.now()-new Date(o.created_at))/60000);
             const readyMins = o.status==='ready' ? Math.floor((Date.now()-new Date(o.updated_at||o.created_at))/60000) : 0;
@@ -4789,7 +4808,7 @@
             <td>${new Date(o.created_at).toLocaleTimeString('ar-JO',{hour:'2-digit',minute:'2-digit'})}</td>
             <td>${timer}</td>
             <td>${TYPE_AR[o.order_type]||''}</td>
-            ${(adm||cc)?`<td>${esc(o.branches?.name_ar||'—')}</td>`:''}
+            ${(adm||cc)?`<td>${esc(o.branches?.name_ar||'—')}</td><td style="white-space:nowrap">${CHANNEL_AR[o.channel]||'—'}</td>`:''}
             <td>${esc(o.customers?.name||'—')}</td>
             <td>${esc(o.created_by_name||'—')}</td>
             <td>${(o.order_items||[]).map(l=>l.quantity+'× '+esc(l.item_name)).join('، ')}</td>
