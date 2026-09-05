@@ -1509,7 +1509,7 @@
     box.appendChild(line);
   }
 
-  const APP_VERSION = '2026-09-04-05';
+  const APP_VERSION = '2026-09-04-07';
   // 🔄 فحص تلقائي للنسخة — يحل مشكلة "الصفحة ما بتاخد آخر تحديث" نهائيًا: كل شوي منقارن نسختنا
   // المحمّلة حاليًا مع ملف version.txt الحقيقي على السيرفر (بدون كاش أبدًا). لو مختلفة، معناته
   // في نسخة أحدث انرفعت، فمنعمل تحديث كامل للصفحة تلقائيًا بدون ما ننتظر حدا يسكر التبويب يدويًا.
@@ -2480,11 +2480,17 @@
         <label>الفرع يلي رح ينضاف له المخزون *</label>
         <select id="dr_branch"><option value="">— اختاري —</option>${BRANCHES.map(b=>`<option value="${b.id}" ${ME.branch_id===b.id?'selected':''}>${esc(b.name_ar)}</option>`).join('')}</select>
         <label style="margin-top:8px">الصنف المشترى *</label>
-        <select id="dr_ing"><option value="">— اختاري —</option>${INGR.map(i=>`<option value="${i.id}">${esc(i.name)}</option>`).join('')}</select>
-        <label style="margin-top:8px">الكمية المشتراة *</label>
+        <select id="dr_ing" onchange="updateDrawerIngUnit()"><option value="">— اختاري —</option>${INGR.map(i=>`<option value="${i.id}" data-unit="${esc(i.unit||'')}">${esc(i.name)}</option>`).join('')}</select>
+        <label style="margin-top:8px">الكمية المشتراة * <span id="dr_unit_hint" style="color:var(--maroon);font-weight:900"></span></label>
         <input id="dr_qty" type="number" step="0.01" placeholder="مثال: 5">
       </div>
       <div class="m-act"><button class="save" onclick="saveDrawerRequest()">تأكيد السحب ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
+  }
+  function updateDrawerIngUnit(){
+    const sel = document.getElementById('dr_ing');
+    const opt = sel?.options[sel.selectedIndex];
+    const hint = document.getElementById('dr_unit_hint');
+    if(hint) hint.textContent = opt?.dataset.unit ? '('+opt.dataset.unit+')' : '';
   }
   function toggleDrawerKind(){
     const kind = document.getElementById('dr_kind')?.value;
@@ -11135,7 +11141,11 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
       .order('branch_id');
     // 🔒 الموظف العادي (مش مدير) بيشوف بس الفرع اللي هو تابع له + أي فروع إضافية اتربطت فيه من
     // شاشة الموظفين (مفيدة للكول سنتر أو أي حدا محتاج يتابع أكتر من فرع) — والمدير بيشوف كل الفروع
-    const allowedBranchIds = new Set([ME.branch_id, ...(ME.extra_branch_ids||[])].filter(Boolean));
+    // 🔧 إصلاح: ME (بيانات تسجيل الدخول) ممكن تكون قديمة/ناقصة أعمدة جديدة (زي extra_branch_ids)،
+    // ومصفوفة STAFF العامة ممكن تكون فاضية أصلًا لغير المدير أو ناقصة هالعمود. أضمن حل: نجيب
+    // فروع هاد الموظف تحديدًا مباشرة من القاعدة بكل مرة تفتح فيها الشاشة (استعلام صغير وسريع).
+    const { data: myStaffRow } = await db.from('staff').select('branch_id, extra_branch_ids').eq('id', ME.id).maybeSingle();
+    const allowedBranchIds = new Set([myStaffRow?.branch_id ?? ME.branch_id, ...((myStaffRow?.extra_branch_ids)||ME.extra_branch_ids||[])].filter(Boolean));
     let inv = admin ? (invAll||[]) : (invAll||[]).filter(x=>allowedBranchIds.has(x.branch_id));
     // 🔧 مهم: نستبعد أي فرع معطّل/مسكّر من شاشة الجرد — ما لازم يضل يظهر كأنه شغّال بعد ما تعطّليه
     const activeBranchIds = new Set(BRANCHES.map(b=>b.id));
