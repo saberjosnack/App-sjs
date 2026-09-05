@@ -1509,7 +1509,7 @@
     box.appendChild(line);
   }
 
-  const APP_VERSION = '2026-09-04-04';
+  const APP_VERSION = '2026-09-04-05';
   // 🔄 فحص تلقائي للنسخة — يحل مشكلة "الصفحة ما بتاخد آخر تحديث" نهائيًا: كل شوي منقارن نسختنا
   // المحمّلة حاليًا مع ملف version.txt الحقيقي على السيرفر (بدون كاش أبدًا). لو مختلفة، معناته
   // في نسخة أحدث انرفعت، فمنعمل تحديث كامل للصفحة تلقائيًا بدون ما ننتظر حدا يسكر التبويب يدويًا.
@@ -2466,27 +2466,23 @@
   function openDrawerRequest(){
     if(!perm('drawer_open')){ toast('⛔ ما عندك صلاحية فتح الدرج'); return; }
     if(!currentShift){ toast('⚠️ لازم يكون عندك شيفت مفتوح'); return; }
-    const threshold = SETTINGS.drawer_pin_threshold ?? 10;
     modal(`<h3>🔓 فتح الدرج — سحب مبلغ</h3>
-      <div style="color:var(--muted);font-size:.82rem;font-weight:700;margin-bottom:10px">هاد المبلغ رح ينخصم من الكاش المتوقع بدرجك وقت الإغلاق.</div>
+      <div style="color:var(--muted);font-size:.82rem;font-weight:700;margin-bottom:10px">هاد المبلغ رح ينخصم من الكاش المتوقع بدرجك وقت الإغلاق. بينتسجل فورًا وبيضل بانتظار موافقة المالك من شاشته الخاصة (مش محتاجة رقمه السري هون).</div>
       <div class="fld"><label>نوع السحب</label>
         <select id="dr_kind" onchange="toggleDrawerKind()">
           <option value="expense">💸 مصاريف عامة</option>
-          <option value="purchase">🛒 مشتريات (تنضاف للمخزون)</option>
+          <option value="purchase">🛒 مشتريات (تنضاف للمخزون فورًا)</option>
         </select>
       </div>
-      <div class="fld"><label>المبلغ (${CURRENCY})</label><input id="dr_amt" type="number" step="0.01" placeholder="مثال: 10" oninput="toggleDrawerPinField(${threshold})"></div>
+      <div class="fld"><label>المبلغ (${CURRENCY})</label><input id="dr_amt" type="number" step="0.01" placeholder="مثال: 10"></div>
       <div id="dr_expenseWrap" class="fld"><label>السبب *</label><input id="dr_reason" placeholder="مثال: ثمن جرة غاز"></div>
       <div id="dr_purchaseWrap" class="fld hidden">
-        <label>الصنف المشترى *</label>
+        <label>الفرع يلي رح ينضاف له المخزون *</label>
+        <select id="dr_branch"><option value="">— اختاري —</option>${BRANCHES.map(b=>`<option value="${b.id}" ${ME.branch_id===b.id?'selected':''}>${esc(b.name_ar)}</option>`).join('')}</select>
+        <label style="margin-top:8px">الصنف المشترى *</label>
         <select id="dr_ing"><option value="">— اختاري —</option>${INGR.map(i=>`<option value="${i.id}">${esc(i.name)}</option>`).join('')}</select>
         <label style="margin-top:8px">الكمية المشتراة *</label>
         <input id="dr_qty" type="number" step="0.01" placeholder="مثال: 5">
-      </div>
-      <div id="dr_pin_wrap" class="fld hidden">
-        <label>🔒 رقم المالك السري</label>
-        <input id="dr_pin" type="password" inputmode="numeric" placeholder="أدخلي رقم المالك السري للتأكيد">
-        <div id="dr_pin_note" style="color:var(--muted);font-size:.78rem;font-weight:700;margin-top:4px"></div>
       </div>
       <div class="m-act"><button class="save" onclick="saveDrawerRequest()">تأكيد السحب ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
   }
@@ -2494,30 +2490,18 @@
     const kind = document.getElementById('dr_kind')?.value;
     document.getElementById('dr_expenseWrap')?.classList.toggle('hidden', kind!=='expense');
     document.getElementById('dr_purchaseWrap')?.classList.toggle('hidden', kind!=='purchase');
-    const threshold = SETTINGS.drawer_pin_threshold ?? 10;
-    toggleDrawerPinField(threshold);
-  }
-  function toggleDrawerPinField(threshold){
-    const kind = document.getElementById('dr_kind')?.value || 'expense';
-    const amt = parseFloat(document.getElementById('dr_amt')?.value)||0;
-    const wrap = document.getElementById('dr_pin_wrap');
-    // 🔒 المشتريات دايمًا بتحتاج موافقة المالك (بتأثر على المخزون والمشتريات)، بغض النظر عن المبلغ.
-    // المصاريف العادية بتحتاج موافقة بس لو المبلغ أكبر من الحد المسموح (زي ما كان).
-    const needsPin = kind==='purchase' || amt>threshold;
-    if(wrap) wrap.classList.toggle('hidden', !needsPin);
-    const note = document.getElementById('dr_pin_note');
-    if(note) note.textContent = kind==='purchase' ? 'إجباري لكل عملية شراء من الدرج' : ('المبلغ أكبر من '+fmt(threshold)+' '+CURRENCY);
   }
   async function saveDrawerRequest(){
     if(!lockSubmit('saveDrawerRequest')) return;
     const kind = document.getElementById('dr_kind')?.value || 'expense';
     const amt = parseFloat(document.getElementById('dr_amt').value);
-    const threshold = SETTINGS.drawer_pin_threshold ?? 10;
     if(isNaN(amt)||amt<=0){ toast('⚠️ اكتب مبلغ صحيح'); unlockSubmit('saveDrawerRequest'); return; }
-    let reason='', ingredientId='', qty=0;
+    let reason='', ingredientId='', qty=0, branchId='';
     if(kind==='purchase'){
+      branchId = document.getElementById('dr_branch')?.value;
       ingredientId = document.getElementById('dr_ing')?.value;
       qty = parseFloat(document.getElementById('dr_qty')?.value)||0;
+      if(!branchId){ toast('⚠️ اختاري الفرع'); unlockSubmit('saveDrawerRequest'); return; }
       if(!ingredientId){ toast('⚠️ اختاري الصنف المشترى'); unlockSubmit('saveDrawerRequest'); return; }
       if(!qty||qty<=0){ toast('⚠️ اكتبي كمية صحيحة'); unlockSubmit('saveDrawerRequest'); return; }
       reason = 'شراء '+(INGR.find(i=>i.id===ingredientId)?.name||'')+' (كمية '+qty+')';
@@ -2525,39 +2509,28 @@
       reason = document.getElementById('dr_reason').value.trim();
       if(!reason){ toast('⚠️ السبب إجباري'); unlockSubmit('saveDrawerRequest'); return; }
     }
-    // 🔒 موافقة المالك: إجبارية دايمًا للمشتريات (بتأثر على المخزون)، ولو المبلغ أكبر من الحد بالمصاريف
-    const needsPin = kind==='purchase' || amt>threshold;
-    if(needsPin){
-      const pin = normalizeDigits(document.getElementById('dr_pin')?.value||'');
-      if(!pin){ toast('⚠️ لازم رقم المالك السري لتأكيد '+(kind==='purchase'?'الشراء':'السحب')); unlockSubmit('saveDrawerRequest'); return; }
-      try{
-        const { data, error: pinErr } = await db.functions.invoke('rapid-handler', { body: { pin } });
-        if(pinErr || !data || data.error || !data.staff){ toast('⛔ الرقم السري غلط'); unlockSubmit('saveDrawerRequest'); return; }
-        if(data.staff.role !== 'admin'){ toast('⛔ هاد الرقم مش رقم المالك'); unlockSubmit('saveDrawerRequest'); return; }
-      }catch(e){ toast('✗ فشل التحقق من الرقم السري: '+e.message); unlockSubmit('saveDrawerRequest'); return; }
-    }
     try{
       if(kind==='purchase'){
         // 🛒 سحب مشتريات — بتنسجل بجدول المشتريات نفسه (تحسب بتقارير المشتريات) وبتضاف للمخزون فورًا
+        // (زي فاتورة الشراء العادية بالضبط: البضاعة وصلت فعليًا فالمخزون بيتحدّث فورًا، والموافقة
+        // المالية بتضل معلّقة لحد ما المالك يراجعها من شاشة "المشتريات" بنفسه — بدون رقمه السري هون).
         const unitCost = amt/qty;
         const { data: pur, error: purErr } = await db.from('purchases').insert({
           purchase_date: new Date().toISOString().split('T')[0],
           supplier: 'نقدًا من الدرج', total: amt,
-          branch_id: ME.branch_id||null, notes: reason,
+          branch_id: branchId, notes: reason,
           payment_status: 'paid', paid_amount: amt, paid_at: new Date().toISOString(),
-          approval_status: 'approved', approved_by: 'موافقة عند السحب', approved_at: new Date().toISOString(),
+          approval_status: 'pending',
         }).select().single();
         if(purErr){ toast('✗ '+purErr.message); unlockSubmit('saveDrawerRequest'); return; }
         const { error: itemErr } = await db.from('purchase_items').insert({ ingredient_id: ingredientId, qty, unit_price: unitCost, unit_cost: unitCost, purchase_order_id: pur.id });
         if(itemErr) console.error('purchase_items insert failed:', itemErr);
         await db.from('ingredients').update({ unit_cost: unitCost }).eq('id', ingredientId);
-        if(ME.branch_id){
-          const { data: bi } = await db.from('branch_inventory').select('id,stock').eq('branch_id',ME.branch_id).eq('ingredient_id',ingredientId).maybeSingle();
-          if(bi) await db.from('branch_inventory').update({ stock:(bi.stock||0)+qty }).eq('id', bi.id);
-          else await db.from('branch_inventory').insert({ branch_id:ME.branch_id, ingredient_id:ingredientId, stock:qty, min_stock:0 });
-          logMovement(ME.branch_id, ingredientId, qty, 'purchase', 'سحب من الدرج — '+reason, unitCost);
-        }
-        await addTreasuryTx('cash', -amt, 'purchase', pur.id, 'سحب من الدرج (شراء) — '+reason, ME.branch_id||currentShift.branch_id||null);
+        const { data: bi } = await db.from('branch_inventory').select('id,stock').eq('branch_id',branchId).eq('ingredient_id',ingredientId).maybeSingle();
+        if(bi) await db.from('branch_inventory').update({ stock:(bi.stock||0)+qty }).eq('id', bi.id);
+        else await db.from('branch_inventory').insert({ branch_id:branchId, ingredient_id:ingredientId, stock:qty, min_stock:0 });
+        logMovement(branchId, ingredientId, qty, 'purchase', 'سحب من الدرج — '+reason, unitCost);
+        await addTreasuryTx('cash', -amt, 'purchase', pur.id, 'سحب من الدرج (شراء) — '+reason, branchId);
       } else {
         const { error } = await db.from('expenses').insert({
           expense_date: new Date().toISOString().split('T')[0],
@@ -2570,7 +2543,7 @@
         await addTreasuryTx('cash', -amt, 'expense', null, 'سحب من الدرج — '+reason, ME.branch_id||currentShift.branch_id||null);
       }
       await logActivity('drawer_withdraw', 'سحب '+fmt(amt)+' ('+(kind==='purchase'?'مشتريات':'مصاريف')+') — '+reason);
-      closeModal(); toast(kind==='purchase' ? '✓ اتسجلت المشترى وانضافت للمخزون' : '✓ اتسجل السحب — بانتظار موافقة المدير');
+      closeModal(); toast(kind==='purchase' ? '✓ اتسجلت المشترى وانضافت للمخزون — بانتظار موافقة المالك' : '✓ اتسجل السحب — بانتظار موافقة المالك');
       printDrawerSlip(amt, reason);
     }catch(e){ toast('✗ '+e.message); console.error(e); }
     finally{ unlockSubmit('saveDrawerRequest'); } // 🔒 فك القفل فورًا بعد ما العملية تخلص (نجحت أو فشلت) — مش بعد وقت ثابت، عشان ما ينفتح المجال لسحب مزدوج بشبكة بطيئة
