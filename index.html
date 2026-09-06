@@ -1509,7 +1509,7 @@
     box.appendChild(line);
   }
 
-  const APP_VERSION = '2026-09-04-08';
+  const APP_VERSION = '2026-09-04-09';
   // 🔄 فحص تلقائي للنسخة — يحل مشكلة "الصفحة ما بتاخد آخر تحديث" نهائيًا: كل شوي منقارن نسختنا
   // المحمّلة حاليًا مع ملف version.txt الحقيقي على السيرفر (بدون كاش أبدًا). لو مختلفة، معناته
   // في نسخة أحدث انرفعت، فمنعمل تحديث كامل للصفحة تلقائيًا بدون ما ننتظر حدا يسكر التبويب يدويًا.
@@ -2467,9 +2467,12 @@
     setTimeout(()=>{ try{ box.remove(); }catch(e){} }, 60000);
   }
   /* ================= فتح الدرج — سحب نقدي بسبب، بانتظار موافقة المدير ================= */
-  function openDrawerRequest(){
+  async function openDrawerRequest(){
     if(!perm('drawer_open')){ toast('⛔ ما عندك صلاحية فتح الدرج'); return; }
     if(!currentShift){ toast('⚠️ لازم يكون عندك شيفت مفتوح'); return; }
+    // 🔧 إصلاح: قائمة المكونات (INGR) ما بتتحمّل تلقائيًا إلا لما حدا يزور شاشة "المكونات" —
+    // الكاشير العادي غالبًا ما زارها، فمنتأكد نحمّلها هون بالذات قبل ما نبني قائمة "الصنف المشترى".
+    if(!INGR.length){ toast('⏳ جاري تحميل قائمة المكونات...'); await loadIngredients(); }
     modal(`<h3>🔓 فتح الدرج — سحب مبلغ</h3>
       <div style="color:var(--muted);font-size:.82rem;font-weight:700;margin-bottom:10px">هاد المبلغ رح ينخصم من الكاش المتوقع بدرجك وقت الإغلاق. بينتسجل فورًا وبيضل بانتظار موافقة المالك من شاشته الخاصة (مش محتاجة رقمه السري هون).</div>
       <div class="fld"><label>نوع السحب</label>
@@ -2483,7 +2486,7 @@
       <div id="dr_purchaseWrap" class="fld hidden">
         <label>الفرع يلي رح ينضاف له المخزون *</label>
         <select id="dr_branch"><option value="">— اختاري —</option>${BRANCHES.map(b=>`<option value="${b.id}" ${ME.branch_id===b.id?'selected':''}>${esc(b.name_ar)}</option>`).join('')}</select>
-        <label style="margin-top:8px">الصنف المشترى *</label>
+        <label style="margin-top:8px">الصنف المشترى * ${!INGR.length?'<span style="color:var(--red);font-weight:700;font-size:.78rem">(ما في مكونات مسجّلة بالنظام أصلًا — ضيفيها من شاشة "المكونات" أول)</span>':''}</label>
         <select id="dr_ing" onchange="updateDrawerIngUnit()"><option value="">— اختاري —</option>${INGR.map(i=>`<option value="${i.id}" data-unit="${esc(i.unit||'')}">${esc(i.name)}</option>`).join('')}</select>
         <label style="margin-top:8px">الكمية المشتراة * <span id="dr_unit_hint" style="color:var(--maroon);font-weight:900"></span></label>
         <input id="dr_qty" type="number" step="0.01" placeholder="مثال: 5">
