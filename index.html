@@ -1509,7 +1509,7 @@
     box.appendChild(line);
   }
 
-  const APP_VERSION = '2026-09-04-07';
+  const APP_VERSION = '2026-09-04-08';
   // 🔄 فحص تلقائي للنسخة — يحل مشكلة "الصفحة ما بتاخد آخر تحديث" نهائيًا: كل شوي منقارن نسختنا
   // المحمّلة حاليًا مع ملف version.txt الحقيقي على السيرفر (بدون كاش أبدًا). لو مختلفة، معناته
   // في نسخة أحدث انرفعت، فمنعمل تحديث كامل للصفحة تلقائيًا بدون ما ننتظر حدا يسكر التبويب يدويًا.
@@ -2181,8 +2181,12 @@
       const cardSales = byPay['card']||0;
       const cliqSales = byPay['cliq']||0;
       // سحوبات الدرج بهاد الشيفت (أي حالة موافقة — لأنها فعليًا طلعت من الدرج فورًا وقت السحب) — كاش بس
+      // 💸 مصاريف + 🛒 مشتريات (سحب الدرج نوعين هلق — لازم الاثنين ينخصموا من المتوقع بالدرج ويظهروا بالورقة)
       const { data: drawerWithdrawals } = await db.from('expenses').select('amount, title, description, approval_status').eq('shift_id', currentShift.id).eq('category','سحب من الدرج');
-      const withdrawalsTotal = (drawerWithdrawals||[]).reduce((a,w)=>a+parseFloat(w.amount||0),0);
+      const { data: drawerPurchasesRaw } = await db.from('purchases').select('total, notes, approval_status').eq('shift_id', currentShift.id).eq('supplier','نقدًا من الدرج');
+      const drawerPurchases = (drawerPurchasesRaw||[]).map(p=>({ amount: p.total, title: p.notes, description: p.notes, approval_status: p.approval_status }));
+      const allDrawerOut = [...(drawerWithdrawals||[]), ...drawerPurchases];
+      const withdrawalsTotal = allDrawerOut.reduce((a,w)=>a+parseFloat(w.amount||0),0);
       const expected = opening + cashSales - withdrawalsTotal; // المتوقع بالدرج = الافتتاحي + مبيعات الكاش − السحوبات
       const expectedCard = openingCard + cardSales;
       const expectedCliq = openingCliq + cliqSales;
@@ -2206,7 +2210,7 @@
         openingCard, cardSales, expectedCard, countedCard, diffCard,
         openingCliq, cliqSales, expectedCliq, countedCliq, diffCliq,
         totalExpected, totalCounted, totalDiff,
-        drawerWithdrawals: drawerWithdrawals||[], withdrawalsTotal
+        drawerWithdrawals: allDrawerOut, withdrawalsTotal
       };
       const { error } = await db.from('cash_shifts').update({
         closing_balance: ccSkip ? null : countedValue,
@@ -2524,7 +2528,7 @@
         const { data: pur, error: purErr } = await db.from('purchases').insert({
           purchase_date: new Date().toISOString().split('T')[0],
           supplier: 'نقدًا من الدرج', total: amt,
-          branch_id: branchId, notes: reason,
+          branch_id: branchId, notes: reason, shift_id: currentShift.id,
           payment_status: 'paid', paid_amount: amt, paid_at: new Date().toISOString(),
           approval_status: 'pending',
         }).select().single();
@@ -7263,7 +7267,10 @@
     const expectedCliq = sh.expected_cliq!==null && sh.expected_cliq!==undefined ? parseFloat(sh.expected_cliq) : openingCliq+cliqSales;
     const countedCliq = sh.closing_cliq!==null && sh.closing_cliq!==undefined ? parseFloat(sh.closing_cliq) : 0;
     const { data: drawerWithdrawals } = await db.from('expenses').select('amount, title, description, approval_status').eq('shift_id', sh.id).eq('category','سحب من الدرج');
-    const withdrawalsTotal = (drawerWithdrawals||[]).reduce((a,w)=>a+parseFloat(w.amount||0),0);
+    const { data: drawerPurchasesRaw } = await db.from('purchases').select('total, notes, approval_status').eq('shift_id', sh.id).eq('supplier','نقدًا من الدرج');
+    const drawerPurchases = (drawerPurchasesRaw||[]).map(p=>({ amount: p.total, title: p.notes, description: p.notes, approval_status: p.approval_status }));
+    const allDrawerOut = [...(drawerWithdrawals||[]), ...drawerPurchases];
+    const withdrawalsTotal = allDrawerOut.reduce((a,w)=>a+parseFloat(w.amount||0),0);
     const rep = { count: ok.length, total: sum('total'), discount: sum('discount'), delivery: sum('delivery_fee'), byPay,
       cancelled: cancelledOrders.length, cancelledOrders, topItems,
       delCount: ok.filter(o=>o.order_type==='delivery').length,
@@ -7275,7 +7282,7 @@
       openingCliq, cliqSales, expectedCliq, countedCliq, diffCliq: countedCliq-expectedCliq,
       totalExpected: expected+expectedCard+expectedCliq, totalCounted: counted+countedCard+countedCliq,
       totalDiff: (counted+countedCard+countedCliq)-(expected+expectedCard+expectedCliq),
-      drawerWithdrawals: drawerWithdrawals||[], withdrawalsTotal };
+      drawerWithdrawals: allDrawerOut, withdrawalsTotal };
     const realName = ME.full_name; ME.full_name = sh.staff?.full_name || realName;
     printZReport(sh, rep);
     ME.full_name = realName;
