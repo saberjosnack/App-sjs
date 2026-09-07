@@ -1512,7 +1512,7 @@
     box.appendChild(line);
   }
 
-  const APP_VERSION = '2026-09-07-11';
+  const APP_VERSION = '2026-09-07-12';
   // 🔄 فحص تلقائي للنسخة — يحل مشكلة "الصفحة ما بتاخد آخر تحديث" نهائيًا: كل شوي منقارن نسختنا
   // المحمّلة حاليًا مع ملف version.txt الحقيقي على السيرفر (بدون كاش أبدًا). لو مختلفة، معناته
   // في نسخة أحدث انرفعت، فمنعمل تحديث كامل للصفحة تلقائيًا بدون ما ننتظر حدا يسكر التبويب يدويًا.
@@ -4452,8 +4452,10 @@
         const zoneName = document.getElementById('delZone')?.value.trim();
         const zoneFee = parseFloat(document.getElementById('delFee')?.value);
         if(zoneName && !isNaN(zoneFee) && zoneFee>0){
-          const exists = (DELIVERY_ZONES||[]).some(z=>z.area_name===zoneName);
-          if(!exists){
+          // 🧠 لو قريبة كتير من منطقة موجودة أصلًا (غلطة إملائية بسيطة)، منعتبرها نفس المنطقة
+          // وما منضيف نسخة مكررة — بس لو فعليًا مختلفة (منطقة جديدة حقيقية)، هون بس منتعلّمها.
+          const closest = findClosestZone(zoneName);
+          if(!closest){
             db.from('delivery_zones').insert({ area_name: zoneName, delivery_price: zoneFee, is_active: true })
               .then(()=>loadDeliveryZones()).catch(e=>console.error('auto-save zone failed:', e));
           }
@@ -15173,12 +15175,32 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
         byAddress[addr][fee] = (byAddress[addr][fee]||0) + 1;
       });
       const existing = new Set((DELIVERY_ZONES||[]).map(z=>z.area_name));
-      const candidates = Object.entries(byAddress).map(([addr, feeCounts])=>{
-        const bestFee = Object.entries(feeCounts).sort((a,b)=>b[1]-a[1])[0][0];
-        const totalCount = Object.values(feeCounts).reduce((a,b)=>a+b,0);
-        return { addr, fee: parseFloat(bestFee), count: totalCount };
-      }).filter(c=>!existing.has(c.addr)).sort((a,b)=>b.count-a.count);
-      if(!candidates.length){ toast('ℹ️ ما لقيت مناطق جديدة بالسجل (كلها موجودة أصلًً أو ما في طلبات توصيل كفاية)'); return; }
+      // 🧠 دمج العناوين المتقاربة (غلطة إملائية بسيطة) بمجموعة وحدة قبل ما نعرضها — بدل ما "الجبيهة"
+      // و"الجبيهه" يطلعوا سطرين منفصلين، بيندمجوا بمرشّح واحد (باسم أكتر نسخة متكررة منهم).
+      const rawAddresses = Object.keys(byAddress);
+      const clusters = []; // كل عنصر: { addrs: [...], feeCounts: {...} }
+      rawAddresses.forEach(addr=>{
+        const norm = normalizeArabicText(addr);
+        let cluster = clusters.find(c=>{
+          const cNorm = normalizeArabicText(c.addrs[0]);
+          const dist = editDistance(norm, cNorm);
+          const maxAllowed = Math.max(1, Math.floor(Math.max(norm.length, cNorm.length) * 0.25));
+          return dist <= maxAllowed;
+        });
+        if(!cluster){ cluster = { addrs: [], feeCounts: {} }; clusters.push(cluster); }
+        cluster.addrs.push(addr);
+        Object.entries(byAddress[addr]).forEach(([fee,cnt])=>{ cluster.feeCounts[fee] = (cluster.feeCounts[fee]||0) + cnt; });
+      });
+      const candidates = clusters.map(cluster=>{
+        // اسم العرض = أكتر صيغة كتابة متكررة بنفس المجموعة (مش أول وحدة عشوائية)
+        const addrCounts = {};
+        cluster.addrs.forEach(a=>{ addrCounts[a] = Object.values(byAddress[a]).reduce((s,c)=>s+c,0); });
+        const displayAddr = Object.entries(addrCounts).sort((a,b)=>b[1]-a[1])[0][0];
+        const bestFee = Object.entries(cluster.feeCounts).sort((a,b)=>b[1]-a[1])[0][0];
+        const totalCount = Object.values(cluster.feeCounts).reduce((a,b)=>a+b,0);
+        return { addr: displayAddr, fee: parseFloat(bestFee), count: totalCount };
+      }).filter(c=>!existing.has(c.addr) && !findClosestZone(c.addr)).sort((a,b)=>b.count-a.count);
+      if(!candidates.length){ toast('ℹ️ ما لقيت مناطق جديدة بالسجل (كلها موجودة أصلًا أو ما في طلبات توصيل كفاية)'); return; }
       modal(`<h3>📥 مناطق مستخرجة من طلباتك (${candidates.length})</h3>
         <div style="color:var(--muted);font-weight:700;font-size:.82rem;margin-bottom:10px">راجعيها وشيلي أي واحدة مش دقيقة قبل الحفظ (العناوين طالعة كتابة العملاء تماما، ممكن تحتاج تعديل بسيط بعد الاستيراد).</div>
         <div style="max-height:340px;overflow-y:auto;text-align:right">
@@ -15229,12 +15251,50 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
   }
   // 📍 لمّا الكاشير/الكول سنتر يكتب اسم منطقة مطابق (أو قريب) من قائمة المناطق، نعبّي سعر التوصيل
   // تلقائيًا — وبيضل الحقل قابل للتعديل اليدوي بعدها لو احتاجوا يغيّروا شوي لحالة خاصة.
+  // 🧠 تطبيع النص العربي — يشيل التشكيل ويوحّد أشكال الألف/التاء المربوطة/الياء المختلفة، عشان
+  // "الجبيهة" و"الجبيهه" و"الجبيهـة" كلهم يتحسبوا نفس المنطقة بالظبط، مش ٣ مناطق مختلفة.
+  function normalizeArabicText(s){
+    return (s||'').toString().trim()
+      .replace(/[\u064B-\u0652\u0640]/g,'') // تشكيل وتطويل
+      .replace(/[إأآا]/g,'ا').replace(/ة/g,'ه').replace(/ى/g,'ي')
+      .replace(/\s+/g,' ').toLowerCase();
+  }
+  // مسافة التحرير (Levenshtein) — بتحسب كم حرف لازم تغيّري عشان توصلي من كلمة لكلمة
+  function editDistance(a, b){
+    const m=a.length, n=b.length;
+    const dp = Array.from({length:m+1},(_,i)=>[i,...Array(n).fill(0)]);
+    for(let j=0;j<=n;j++) dp[0][j]=j;
+    for(let i=1;i<=m;i++) for(let j=1;j<=n;j++){
+      dp[i][j] = a[i-1]===b[j-1] ? dp[i-1][j-1] : 1+Math.min(dp[i-1][j], dp[i][j-1], dp[i-1][j-1]);
+    }
+    return dp[m][n];
+  }
+  // بتلاقي أقرب منطقة محفوظة لنص مكتوب — لو التشابه عالي كفاية (غلطة إملائية بسيطة) بترجعها،
+  // وإلا بترجع null (يعني هاي فعليًا منطقة جديدة، مش خطأ كتابة لمنطقة موجودة)
+  function findClosestZone(typed){
+    const norm = normalizeArabicText(typed);
+    if(!norm) return null;
+    let best = null, bestDist = 99;
+    (DELIVERY_ZONES||[]).forEach(z=>{
+      const zNorm = normalizeArabicText(z.area_name);
+      if(zNorm===norm){ best=z; bestDist=0; return; }
+      const dist = editDistance(norm, zNorm);
+      // نسبة الخطأ المسموحة تتناسب مع طول الاسم — كلمة قصيرة تتحمّل غلطة وحدة بس، الطويلة أكتر
+      const maxAllowed = Math.max(1, Math.floor(Math.max(norm.length, zNorm.length) * 0.25));
+      if(dist <= maxAllowed && dist < bestDist){ best = z; bestDist = dist; }
+    });
+    return best;
+  }
   function autofillDeliveryFeeFromZone(){
     const zoneInput = document.getElementById('delZone');
     const feeInput = document.getElementById('delFee');
     if(!zoneInput || !feeInput) return;
     const typed = zoneInput.value.trim();
-    const match = DELIVERY_ZONES.find(z=>z.area_name===typed) || DELIVERY_ZONES.find(z=>typed && z.area_name.includes(typed));
+    if(!typed) return;
+    // مطابقة حرفية أول (أسرع وأدق)، وإلا نص جزئي، وإلا تقريبية (تسامح غلطة إملائية بسيطة)
+    const match = DELIVERY_ZONES.find(z=>z.area_name===typed)
+      || DELIVERY_ZONES.find(z=>z.area_name.includes(typed))
+      || findClosestZone(typed);
     if(match){ feeInput.value = match.delivery_price; renderCart(); }
   }
   async function renderPlatforms(){
