@@ -448,6 +448,8 @@
               <div id="custWarn" class="hidden"></div>
               <input class="dfield" id="custName" placeholder="الاسم">
               <input class="dfield hidden" id="custAddr" placeholder="العنوان">
+              <input class="dfield hidden" id="delZone" list="deliveryZonesDatalist" placeholder="🗺️ المنطقة (اكتبيها ليطلع سعر التوصيل تلقائي)" oninput="autofillDeliveryFeeFromZone()" autocomplete="off">
+              <datalist id="deliveryZonesDatalist"></datalist>
               <input class="dfield hidden" id="delFee" placeholder="أجرة التوصيل (د.أ)" inputmode="decimal" oninput="renderCart()">
             </div>
           </div>
@@ -635,6 +637,7 @@
         <button data-a="expenses" onclick="admTab('expenses')">💸 المصاريف</button>
         <button data-a="purchases" onclick="admTab('purchases')">🛒 المشتريات</button>
         <button data-a="platforms" onclick="admTab('platforms')">🛵 منصات التوصيل</button>
+        <button data-a="deliveryZones" onclick="admTab('deliveryZones')">🗺️ مناطق التوصيل</button>
         <button data-a="empmeals" onclick="admTab('empmeals')">🍽️ وجبات الموظفين</button>
         <button data-a="topcust" onclick="admTab('topcust')">🏆 أفضل العملاء</button>
         <button data-a="waste" onclick="admTab('waste')">🗑️ الإتلاف</button>
@@ -1509,7 +1512,7 @@
     box.appendChild(line);
   }
 
-  const APP_VERSION = '2026-09-04-09';
+  const APP_VERSION = '2026-09-07-11';
   // 🔄 فحص تلقائي للنسخة — يحل مشكلة "الصفحة ما بتاخد آخر تحديث" نهائيًا: كل شوي منقارن نسختنا
   // المحمّلة حاليًا مع ملف version.txt الحقيقي على السيرفر (بدون كاش أبدًا). لو مختلفة، معناته
   // في نسخة أحدث انرفعت، فمنعمل تحديث كامل للصفحة تلقائيًا بدون ما ننتظر حدا يسكر التبويب يدويًا.
@@ -1888,6 +1891,7 @@
       READY_WAIT_MIN = parseInt(SETTINGS.ready_wait_min); if(isNaN(READY_WAIT_MIN)||READY_WAIT_MIN<=0) READY_WAIT_MIN = 7;
       applyTheme();
       await loadActiveScheduledDiscount();
+      await loadDeliveryZones();
       if(ME){
         await loadCustomRoles(); // 🔧 لازم لكل الأدوار (كاشير/كول سنتر/مخصص) — هون بنزامن صلاحيات الأدوار الأساسية المعدّلة من قاعدة البيانات
         if(ME.role==='custom'){
@@ -2950,6 +2954,7 @@
     document.querySelectorAll('#otypeBar button').forEach(x=>x.classList.toggle('on', x.dataset.t===orderType));
     const delFieldsShow = orderType==='delivery';
     document.getElementById('custAddr')?.classList.toggle('hidden', !delFieldsShow);
+    document.getElementById('delZone')?.classList.toggle('hidden', !delFieldsShow);
     document.getElementById('delFee')?.classList.toggle('hidden', !delFieldsShow);
     if(document.getElementById('custPhone')) document.getElementById('custPhone').value = td.custPhone||'';
     if(document.getElementById('custName')) document.getElementById('custName').value = td.custName||'';
@@ -3032,6 +3037,7 @@
       const delFee = document.getElementById('delFee');
       const custReq = document.getElementById('custReq');
       if (custAddr) custAddr.classList.toggle('hidden', !del);
+      if (delZone) delZone.classList.toggle('hidden', !del);
       if (delFee) delFee.classList.toggle('hidden', !del);
       if (custReq) custReq.textContent = del ? '(إجباري للتوصيل)' : '(اختياري)';
       renderCart();
@@ -4438,6 +4444,21 @@
 
       // الطلب انحفظ بنجاح بقاعدة البيانات — أي خطأ من هون ورايح هو خطأ طباعة بس، مش خطأ حفظ
       toast(editingOrder ? `✓ تعدّل طلب #${ord.order_number}` : `✓ طلب #${ord.order_number} — انحفظ`);
+      // 🗺️ تعلّم تلقائي لمناطق التوصيل — لو الطلب توصيل وكتب الكاشير اسم منطقة جديدة (مش موجودة
+      // أصلًا بالقائمة) وحدّد لها سعر، منحفظها تلقائيًً بجدول المناطق — المرة الجاية بتطلع لحالها
+      // بالاقتراح التلقائي، بدون ي احتياج المالكة تضيفها يدوي إطلاقًا. هيك القائمة بتبني حالها من
+      // الاستخدام الفعلي مع الوقت.
+      if(orderType==='delivery'){
+        const zoneName = document.getElementById('delZone')?.value.trim();
+        const zoneFee = parseFloat(document.getElementById('delFee')?.value);
+        if(zoneName && !isNaN(zoneFee) && zoneFee>0){
+          const exists = (DELIVERY_ZONES||[]).some(z=>z.area_name===zoneName);
+          if(!exists){
+            db.from('delivery_zones').insert({ area_name: zoneName, delivery_price: zoneFee, is_active: true })
+              .then(()=>loadDeliveryZones()).catch(e=>console.error('auto-save zone failed:', e));
+          }
+        }
+      }
       // ⭐ تقييم العميل بعد إرسال الطلب — بس لو في عميل مرتبط (customer_id) ونحن كول سنتر/مدير
       if(customer_id && (isCallCenter()||canSeeAllBranches())){
         setTimeout(()=>askCustomerRating(customer_id, ord.id, custInfo.name||matchedCustomer?.name||''), 600);
@@ -5130,6 +5151,7 @@
     const delFee = document.getElementById('delFee');
     const custReq = document.getElementById('custReq');
     if (custAddr) custAddr.classList.toggle('hidden', !del);
+    if (delZone) delZone.classList.toggle('hidden', !del);
     if (delFee) delFee.classList.toggle('hidden', !del);
     if (custReq) custReq.textContent = del ? '(إجباري للتوصيل)' : '(اختياري)';
     if (del && delFee) delFee.value = o.delivery_fee||'';
@@ -5953,7 +5975,7 @@
     inventory:'inventory_audit', transfers:'inventory_transfer', warehouse:'tab_warehouse', treasury:'tab_treasury', hr:'tab_hr', chats:'tab_chats', dailyAudits:'tab_dailyAudits', hrLocations:'tab_hrLocations', dutyHours:'tab_dutyHours', hrClosures:'tab_hrClosures', ordersScreen:'tab_ordersScreen',
     complaints:'tab_complaints', violations:'tab_violations', deductions:'tab_deductions', rewards:'tab_rewards', activityLog:'tab_activityLog', manufacturing:'tab_manufacturing', satisfaction:'tab_satisfaction', ccPoints:'tab_ccPoints', shiftSchedule:'tab_shiftSchedule', shifts:'tab_shifts', productTimeline:'tab_productTimeline', spotCheck:'tab_spotCheck', breaksScreen:'tab_breaksScreen', supplierPayments:'tab_supplierPayments',
     expenses:'expenses_view', purchases:'purchases_view',
-    platforms:'platforms_view', empmeals:'empmeals_view', topcust:'topcust_view', waste:'waste_log', suppliers:'purchases_view',
+    platforms:'platforms_view', empmeals:'empmeals_view', topcust:'topcust_view', waste:'waste_log', suppliers:'purchases_view', deliveryZones:'settings_manage',
   };
   function canAccessAdminTab(tabKey){
     // 🔒 استثناء دائم: شاشة "الأدوار" للمالك الحقيقي بس، حتى لو الدور المخصص معاه "كل صلاحيات المالك" —
@@ -6049,6 +6071,7 @@
     if(admView==='shiftSchedule'){ renderShiftSchedule(); return; }
     if(admView==='ordersScreen'){ renderOrdersScreen(); return; }
     if(admView==='platforms'){ renderPlatforms(); return; }
+    if(admView==='deliveryZones'){ renderDeliveryZones(); return; }
     if(admView==='devices'){ renderDevices(); return; }
     if(admView==='reports'){ renderReports(); return; }
     if(admView==='termsLog'){ renderTermsLog(); return; }
@@ -15089,6 +15112,131 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
     toast('✓ انحذف'); renderSuppliers();
   }
 
+  let DELIVERY_ZONES = [];
+  async function loadDeliveryZones(){
+    const { data } = await db.from('delivery_zones').select('*').eq('is_active', true).order('area_name');
+    DELIVERY_ZONES = data||[];
+    const dl = document.getElementById('deliveryZonesDatalist');
+    if(dl) dl.innerHTML = DELIVERY_ZONES.map(z=>`<option value="${esc(z.area_name)}">`).join('');
+    return DELIVERY_ZONES;
+  }
+  async function renderDeliveryZones(){
+    const C = document.getElementById('admContent');
+    if(!C) return;
+    C.innerHTML = '<div class="empty-note">... جاري التحميل</div>';
+    try{
+      const { data, error } = await db.from('delivery_zones').select('*').order('area_name');
+      if(error){
+        C.innerHTML = `<div class="alert-red">⚠️ خطأ: ${esc(error.message||'الجدول delivery_zones غير موجود — نفّذ SQL أولاً')}</div>
+          <button class="add-btn" style="margin-top:10px" onclick="deliveryZoneForm()">＋ منطقة جديدة</button>`;
+        console.error('renderDeliveryZones error:', error);
+        return;
+      }
+      const zones = data||[];
+      DELIVERY_ZONES = zones.filter(z=>z.is_active);
+      C.innerHTML = `
+        <div style="color:var(--muted);font-weight:700;font-size:.85rem;margin-bottom:10px">حدّدي سعر التوصيل لكل منطقة — بيظهر تلقائيًا للكاشير/الكول سنتر أول ما يكتبوا اسم المنطقة بشاشة الطلب، وبيقدروا يعدّلوا عليه شوي لو احتاجوا. أي منطقة جديدة يكتبها الكاشير بيتحفظ سعرها تلقائيًا لحالك.</div>
+        <button class="add-btn" onclick="deliveryZoneForm()">＋ منطقة جديدة</button>
+        <button class="add-btn" style="background:var(--ok)" onclick="importDeliveryZonesFromHistory()">📥 استيراد من الطلبات القديمة</button>
+        <div class="tbl-wrap"><table class="tbl">
+          <tr><th>المنطقة</th><th>سعر التوصيل</th><th>الحالة</th><th></th></tr>
+          ${zones.map(z=>`<tr class="${z.is_active?'':'off'}">
+            <td><b>${esc(z.area_name)}</b></td>
+            <td>${fmt(z.delivery_price)} ${CURRENCY}</td>
+            <td>${z.is_active?'✅ فعالة':'🚫 موقوفة'}</td>
+            <td style="white-space:nowrap">
+              <button class="mini edit" onclick="deliveryZoneForm('${z.id}')">تعديل</button>
+              <button class="mini tog" onclick="toggleDeliveryZone('${z.id}',${!z.is_active})">${z.is_active?'إيقاف':'تفعيل'}</button>
+            </td>
+          </tr>`).join('') || '<tr><td colspan="4" class="empty-note">ما في مناطق مضافة بعد</td></tr>'}
+        </table></div>`;
+    }catch(e){
+      C.innerHTML = `<div class="alert-red">⚠️ خطأ: ${esc(e.message||'غير معروف')}</div>`;
+      console.error('renderDeliveryZones exception:', e);
+    }
+  }
+  async function importDeliveryZonesFromHistory(){
+    toast('⏳ جاري تحليل الطلبات السابقة...');
+    try{
+      const { data, error } = await db.from('orders')
+        .select('delivery_fee, customer_id, customers(address)')
+        .eq('order_type','delivery').neq('status','cancelled').not('delivery_fee','is',null);
+      if(error){ toast('✗ '+error.message); return; }
+      // 📊 نجمع حسب العنوان — ولكل عنوان ناخد السعر الأكتر تكرارًا (مش أول سعر لقيناه، عشان لو
+      // في غلطة إدخال قديمة مرة وحدة ما تخرّب النتيجة)
+      const byAddress = {};
+      (data||[]).forEach(o=>{
+        const addr = (o.customers?.address||'').trim();
+        const fee = parseFloat(o.delivery_fee);
+        if(!addr || !fee || fee<=0) return;
+        if(!byAddress[addr]) byAddress[addr] = {};
+        byAddress[addr][fee] = (byAddress[addr][fee]||0) + 1;
+      });
+      const existing = new Set((DELIVERY_ZONES||[]).map(z=>z.area_name));
+      const candidates = Object.entries(byAddress).map(([addr, feeCounts])=>{
+        const bestFee = Object.entries(feeCounts).sort((a,b)=>b[1]-a[1])[0][0];
+        const totalCount = Object.values(feeCounts).reduce((a,b)=>a+b,0);
+        return { addr, fee: parseFloat(bestFee), count: totalCount };
+      }).filter(c=>!existing.has(c.addr)).sort((a,b)=>b.count-a.count);
+      if(!candidates.length){ toast('ℹ️ ما لقيت مناطق جديدة بالسجل (كلها موجودة أصلًً أو ما في طلبات توصيل كفاية)'); return; }
+      modal(`<h3>📥 مناطق مستخرجة من طلباتك (${candidates.length})</h3>
+        <div style="color:var(--muted);font-weight:700;font-size:.82rem;margin-bottom:10px">راجعيها وشيلي أي واحدة مش دقيقة قبل الحفظ (العناوين طالعة كتابة العملاء تماما، ممكن تحتاج تعديل بسيط بعد الاستيراد).</div>
+        <div style="max-height:340px;overflow-y:auto;text-align:right">
+          ${candidates.map((c,i)=>`<label style="display:flex;align-items:center;gap:8px;background:#f7f2e9;border-radius:8px;padding:8px 10px;margin-bottom:6px;font-weight:700;font-size:.88rem">
+            <input type="checkbox" class="importZoneChk" checked data-addr="${c.addr.replace(/"/g,'&quot;')}" data-fee="${c.fee}">
+            <span style="flex:1">${esc(c.addr)}</span>
+            <span style="color:var(--ok);white-space:nowrap">${fmt(c.fee)} ${CURRENCY}</span> <span style="color:var(--muted);font-size:.78rem">(×${c.count})</span>
+          </label>`).join('')}
+        </div>
+        <div class="m-act"><button class="save" onclick="confirmImportDeliveryZones()">استيراد المحدد ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
+    }catch(e){ toast('✗ '+e.message); }
+  }
+  async function confirmImportDeliveryZones(){
+    const checked = [...document.querySelectorAll('.importZoneChk:checked')];
+    if(!checked.length){ toast('⚠️ ما حددتي أي منطقة'); return; }
+    const rows = checked.map(c=>({ area_name: c.dataset.addr, delivery_price: parseFloat(c.dataset.fee), is_active: true }));
+    try{
+      const { error } = await db.from('delivery_zones').insert(rows);
+      if(error){ toast('✗ '+error.message); return; }
+      closeModal(); toast('✓ اتستوردت '+rows.length+' منطقة'); renderDeliveryZones(); loadDeliveryZones();
+    }catch(e){ toast('✗ '+e.message); }
+  }
+  function deliveryZoneForm(id){
+    const z = id ? (DELIVERY_ZONES.find(x=>x.id===id) || {}) : {};
+    modal(`<h3>${id?'تعديل منطقة':'منطقة جديدة'}</h3>
+      <div class="fld"><label>اسم المنطقة *</label><input id="dz_name" value="${esc(z.area_name||'')}" placeholder="مثال: جبل الحسين"></div>
+      <div class="fld"><label>سعر التوصيل (${CURRENCY}) *</label><input id="dz_price" inputmode="decimal" value="${z.delivery_price??''}" placeholder="مثال: 1.5"></div>
+      <div class="m-act"><button class="save" onclick="saveDeliveryZone('${id||''}')">حفظ ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
+  }
+  async function saveDeliveryZone(id){
+    const name = document.getElementById('dz_name')?.value.trim();
+    const price = parseFloat(document.getElementById('dz_price')?.value);
+    if(!name){ toast('⚠️ اكتبي اسم المنطقة'); return; }
+    if(isNaN(price)||price<0){ toast('⚠️ اكتبي سعر صحيح'); return; }
+    try{
+      const rec = { area_name: name, delivery_price: price };
+      const { error } = id ? await db.from('delivery_zones').update(rec).eq('id', id) : await db.from('delivery_zones').insert({...rec, is_active:true});
+      if(error){ toast('✗ '+error.message); return; }
+      closeModal(); toast('✓ انحفظت'); renderDeliveryZones(); loadDeliveryZones();
+    }catch(e){ toast('✗ '+e.message); }
+  }
+  async function toggleDeliveryZone(id, active){
+    try{
+      const { error } = await db.from('delivery_zones').update({ is_active: active }).eq('id', id);
+      if(error){ toast('✗ '+error.message); return; }
+      renderDeliveryZones(); loadDeliveryZones();
+    }catch(e){ toast('✗ '+e.message); }
+  }
+  // 📍 لمّا الكاشير/الكول سنتر يكتب اسم منطقة مطابق (أو قريب) من قائمة المناطق، نعبّي سعر التوصيل
+  // تلقائيًا — وبيضل الحقل قابل للتعديل اليدوي بعدها لو احتاجوا يغيّروا شوي لحالة خاصة.
+  function autofillDeliveryFeeFromZone(){
+    const zoneInput = document.getElementById('delZone');
+    const feeInput = document.getElementById('delFee');
+    if(!zoneInput || !feeInput) return;
+    const typed = zoneInput.value.trim();
+    const match = DELIVERY_ZONES.find(z=>z.area_name===typed) || DELIVERY_ZONES.find(z=>typed && z.area_name.includes(typed));
+    if(match){ feeInput.value = match.delivery_price; renderCart(); }
+  }
   async function renderPlatforms(){
     const C = document.getElementById('admContent');
     if(!C) return;
