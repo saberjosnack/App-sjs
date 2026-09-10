@@ -1512,7 +1512,7 @@
     box.appendChild(line);
   }
 
-  const APP_VERSION = '2026-09-07-15';
+  const APP_VERSION = '2026-09-07-16';
   // 🔄 فحص تلقائي للنسخة — يحل مشكلة "الصفحة ما بتاخد آخر تحديث" نهائيًا: كل شوي منقارن نسختنا
   // المحمّلة حاليًا مع ملف version.txt الحقيقي على السيرفر (بدون كاش أبدًا). لو مختلفة، معناته
   // في نسخة أحدث انرفعت، فمنعمل تحديث كامل للصفحة تلقائيًا بدون ما ننتظر حدا يسكر التبويب يدويًا.
@@ -4058,7 +4058,7 @@
     if(ME.role !== 'callcenter' && ME.role !== 'admin'){ toast('⚠️ فقط الكول سنتر والمدير'); return; }
     const o = DAY.find(x=>x.id===id); if(!o) return;
     const items = (o.order_items||[]).map(l=>l.quantity+'× '+l.item_name).join('\n');
-    const msg = `🛵 *طلب توصيل ${bizName()}*\nفاتورة: #${o.order_number}\nالفرع: ${o.branches?.name_ar||''}\n——————\nالعميل: ${o.customers?.name||''}\nالهاتف: ${o.customers?.phone||''}\nالعنوان: ${o.customers?.address||''}\n——————\n${items}\n——————\nالإجمالي: ${fmt(o.total)} ${CURRENCY}`;
+    const msg = `🛵 *طلب توصيل صابر جو سناك*\nفاتورة: #${o.order_number}\nالفرع: ${o.branches?.name_ar||''}\n——————\nالعميل: ${o.customers?.name||''}\nالهاتف: ${o.customers?.phone||''}\nالعنوان: ${o.customers?.address||''}\n——————\n${items}\n——————\nالإجمالي: ${fmt(o.total)} ${CURRENCY}`;
     // بدون رقم محدد — واتساب بيفتح شاشة اختيار الجهة (شركة التوصيل أو أي جروب)
     window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`, '_blank');
   }
@@ -4483,15 +4483,15 @@
         if(custPhone){
           const custName = rec.__customerName||document.getElementById('custName')?.value||'';
           const msg = orderType==='pickup'
-            ? `🙏 مرحبا ${custName} 👋\nطلبك من *${bizName()}* قيد التجهيز الآن. جاهزينه إلك أقرب وقت، وبتقدر تستلمه من فرعنا:\n📍 ${SETTINGS.branch_location_link||'(اطلبي رابط الموقع من الفرع)'}\nشكرًا لثقتك فينا 💛`
-            : `🙏 مرحبا ${custName} 👋\nطلبك من *${bizName()}* قيد التجهيز الآن، وبنبعتلك تحديث لما يطلع مع مندوب التوصيل.\nشكرًا لثقتك فينا 💛`;
+            ? `🙏 مرحبا ${custName} 👋\nطلبك من *صابر جو سناك* قيد التجهيز الآن. جاهزينه إلك أقرب وقت، وبتقدر تستلمه من فرعنا:\n📍 ${SETTINGS.branch_location_link||'(اطلبي رابط الموقع من الفرع)'}\nشكرًا لثقتك فينا 💛`
+            : `🙏 مرحبا ${custName} 👋\nطلبك من *صابر جو سناك* قيد التجهيز الآن، وبنبعتلك تحديث لما يطلع مع مندوب التوصيل.\nشكرًا لثقتك فينا 💛`;
           setTimeout(()=>window.open(`https://wa.me/${custPhone}?text=${encodeURIComponent(msg)}`, '_blank'), delay);
           delay += 400;
         }
         // 🛵 توصيل شركة التوصيل تلقائيًا بتفاصيل الطلب — بدون رقم محدد، بيفتح شاشة اختيار واتساب (شركة التوصيل أأو أي جروب منضمين له) — تختاروا الجهة بنفسكم كل مرة
         if(orderType==='delivery'){
           const itemsStr = cart.map(l=>l.qty+'× '+l.item.name_ar).join('\n');
-          const dmsg = `🛵 *طلب توصيل ${bizName()}*\nفاتورة: #${ord.order_number}\n——————\nالعميل: ${rec.__customerName||document.getElementById('custName')?.value||''}\nالهاتف: ${custPhone||''}\nالمنطقة: ${document.getElementById('delZone')?.value||''}\nالعنوان: ${document.getElementById('custAddr')?.value||''}\n——————\n${itemsStr}\n——————\nالإجمالي: ${fmt(ord.total)} ${CURRENCY}`;
+          const dmsg = `🛵 *طلب توصيل صابر جو سناك*\nفاتورة: #${ord.order_number}\n——————\nالعميل: ${rec.__customerName||document.getElementById('custName')?.value||''}\nالهاتف: ${custPhone||''}\nالمنطقة: ${document.getElementById('delZone')?.value||''}\nالعنوان: ${document.getElementById('custAddr')?.value||''}\n——————\n${itemsStr}\n——————\nالإجمالي: ${fmt(ord.total)} ${CURRENCY}`;
           setTimeout(()=>window.open(`https://wa.me/?text=${encodeURIComponent(dmsg)}`, '_blank'), delay);
         }
       }
@@ -5078,7 +5078,7 @@
         const { data: o } = await db.from('orders').select('order_type, customers(name, phone)').eq('id', id).maybeSingle();
         const phone = (o?.customers?.phone||'').replace(/\D/g,'');
         if(o && o.order_type==='delivery' && phone){
-          const msg = `🛵 مرحبا ${o.customers?.name||''} 👋\nطلبك من *${bizName()}* قيد التوصيل الآن، وصلك قريبًا إن شاء الله! 🙏`;
+          const msg = `🛵 مرحبا ${o.customers?.name||''} 👋\nطلبك من *صابر جو سناك* قيد التوصيل الآن، وصلك قريبًا إن شاء الله! 🙏`;
           setTimeout(()=>window.open(`https://wa.me/${phone}?text=${encodeURIComponent(msg)}`, '_blank'), 300);
         }
       }
