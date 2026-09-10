@@ -770,6 +770,17 @@
     }
   }, true);
   const esc = s => String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  // 📱 واتساب لازم رقم بصيغة دولية كاملة (بدون صفر بالأول، مع رمز البلد) — لو الرقم محفوظ محليًا
+  // (07XXXXXXXX) منحوّله تلقائيًا لصيغة الأردن الدولية (9627XXXXXXXX) قبل ما نبني رابط wa.me،
+  // وإلا واتساب ما بيتعرف عليه كرقم صحيح ومارح يفتح على الشخص المطلوب.
+  function toIntlPhone(raw){
+    let d = (raw||'').replace(/\D/g,'');
+    if(!d) return '';
+    if(d.startsWith('00')) d = d.slice(2);
+    if(d.startsWith('0')) d = '962' + d.slice(1);
+    else if(!d.startsWith('962')) d = '962' + d; // احتياطي لو انكتب بدون صفر ولا رمز بلد إطلاقًا
+    return d;
+  }
   const toast = m => { const t=$('toast'); t.textContent=m; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),2400); };
   const TYPE_AR = { takeaway:'استلام', delivery:'توصيل', dine_in:'صالة' };
   const CHANNEL_AR = { whatsapp:'💬 واتساب', facebook:'📘 فيسبوك', messenger:'✉️ مسنجر', phone1:'☎️ جهاز 1', phone2:'☎️ جهاز 2' };
@@ -1512,7 +1523,7 @@
     box.appendChild(line);
   }
 
-  const APP_VERSION = '2026-09-07-18';
+  const APP_VERSION = '2026-09-07-20';
   // 🔄 فحص تلقائي للنسخة — يحل مشكلة "الصفحة ما بتاخد آخر تحديث" نهائيًا: كل شوي منقارن نسختنا
   // المحمّلة حاليًا مع ملف version.txt الحقيقي على السيرفر (بدون كاش أبدًا). لو مختلفة، معناته
   // في نسخة أحدث انرفعت، فمنعمل تحديث كامل للصفحة تلقائيًا بدون ما ننتظر حدا يسكر التبويب يدويًا.
@@ -2687,9 +2698,11 @@
         // النافذة التلقائي هون لأنه ما نتج مباشرة عن ضغطة يوزر — لو صار هيك، خلي المتصفح "يسمح
         // بالنوافذ المنبثقة" لهاد الموقع مرة وحدة من إعداداته.
         if(o.order_type==='delivery' && isCallCenter()){
-          const wmsg = `⏰ *تنبيه تأخير* — طلب #${o.order_number}\nمتأخر أكتر من ${READY_WAIT_MIN} دقيقة ولسا ما وصل للعميل.\nالعميل: ${nm}${ph?' — '+ph:''}\nرجاءً تابعوا مع المندوب 🙏`;
-          // بدون رقم محدد — واتساب بيفتح شاشة "اختاري لمين تبعتي" وتختاروا شركة التوصيل أو الجروب بنفسكم
-          window.open(`https://wa.me/?text=${encodeURIComponent(wmsg)}`, '_blank');
+          const delNum = toIntlPhone(SETTINGS.delivery_whatsapp);
+          if(delNum){
+            const wmsg = `⏰ *تنبيه تأخير* — طلب #${o.order_number}\nمتأخر أكتر من ${READY_WAIT_MIN} دقيقة ولسا ما وصل للعميل.\nالعميل: ${nm}${ph?' — '+ph:''}\nرجاءً تابعوا مع المندوب 🙏`;
+            window.open(`https://wa.me/${delNum}?text=${encodeURIComponent(wmsg)}`, '_blank');
+          }
         }
       });
     } catch(e) { console.error('checkReadyAlerts:', e); }
@@ -4054,13 +4067,23 @@
   }
 
   /* ================= واتساب ================= */
+  // 📞 واتساب محتاج صيغة دولية كاملة (962...) عشان يفتح مباشرة على رقم الشخص — رقم محلي زي
+  // "0790807761" ما بيشتغل صح مع رابط wa.me، وبيطلع واتساب بشاشة عامة بدل ما يفتح على الشخص مباشرة.
+  function toIntlPhone(phone){
+    let d = (phone||'').replace(/\D/g,'');
+    if(!d) return '';
+    if(d.startsWith('0')) d = '962' + d.slice(1);
+    else if(!d.startsWith('962')) d = '962' + d;
+    return d;
+  }
   function waSend(id){
     if(ME.role !== 'callcenter' && ME.role !== 'admin'){ toast('⚠️ فقط الكول سنتر والمدير'); return; }
     const o = DAY.find(x=>x.id===id); if(!o) return;
+    const delNum = toIntlPhone(SETTINGS.delivery_whatsapp);
+    if(!delNum){ toast('⚠️ رقم واتساب شركة التوصيل مش مسجّل بالإعدادات'); return; }
     const items = (o.order_items||[]).map(l=>l.quantity+'× '+l.item_name).join('\n');
     const msg = `🛵 *طلب توصيل صابر جو سناك*\nفاتورة: #${o.order_number}\nالفرع: ${o.branches?.name_ar||''}\n——————\nالعميل: ${o.customers?.name||''}\nالهاتف: ${o.customers?.phone||''}\nالعنوان: ${o.customers?.address||''}\n——————\n${items}\n——————\nالإجمالي: ${fmt(o.total)} ${CURRENCY}`;
-    // بدون رقم محدد — واتساب بيفتح شاشة اختيار الجهة (شركة التوصيل أو أي جروب)
-    window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`, '_blank');
+    window.open(`https://wa.me/${delNum}?text=${encodeURIComponent(msg)}`, '_blank');
   }
 
   /* ================= حفظ الطلب ================= */
@@ -4481,21 +4504,26 @@
       // (تصفير السلة، الطباعة) أبدًا؛ الطلب أصلًا محفوظ بالقاعدة قبل ما نوصل هون.
       try{
         if(!editingOrder && isCallCenter() && SETTINGS.auto_whatsapp_customer!=='0'){
-          const custPhoneDigits = (document.getElementById('custPhone')?.value||'').replace(/\D/g,'');
+          const custPhoneDigits = toIntlPhone(document.getElementById('custPhone')?.value);
           const custNameVal = document.getElementById('custName')?.value||'';
-          let waDelay = 300;
+          // 🔧 إصلاح: فتحها فورًا بدون setTimeout — أي تأخير هون بخلّي أغلب المتصفحات تحجب النافذة
+          // (Popup Blocker) لأنها ما عادت مرتبطة مباشرة بضغطة اليوزر. أول نافذة (العميل) لازم
+          // تفتح فورًا، والثانية (شركة التوصيل، لو في) بتضل بتأخير بسيط تفاديًا لتعارضهم مع بعض.
           if(custPhoneDigits){
-            const msg = orderType==='pickup'
-              ? `🙏 مرحبا ${custNameVal} 👋\nطلبك من *صابر جو سناك* قيد التجهيز الآن. جاهزينه إلك أقرب وقت، وبتقدر تستلمه من فرعنا:\n📍 ${SETTINGS.branch_location_link||'(اطلبي رابط الموقع من الفرع)'}\nشكرًا لثقتك فينا 💛`
-              : `🙏 مرحبا ${custNameVal} 👋\nطلبك من *صابر جو سناك* قيد التجهيز الآن، وبنبعتلك تحديث لما يطلع مع مندوب التوصيل.\nشكرًا لثقتك فينا 💛`;
-            setTimeout(()=>window.open(`https://wa.me/${custPhoneDigits}?text=${encodeURIComponent(msg)}`, '_blank'), waDelay);
-            waDelay += 400;
+            const tpl = orderType==='pickup'
+              ? (SETTINGS.msg_pickup_prep || '🙏 مرحبا [الاسم] 👋\nطلبك من *صابر جو سناك* قيد التجهيز الآن. جاهزينه إلك أقرب وقت، وبتقدر تستلمه من فرعنا:\n📍 [الموقع]\nشكرًا لثقتك فينا 💛')
+              : (SETTINGS.msg_delivery_prep || '🙏 مرحبا [الاسم] 👋\nطلبك من *صابر جو سناك* قيد التجهيز الآن، وبنبعتلك تحديث لما يطلع مع مندوب التوصيل.\nشكرًا لثقتك فينا 💛');
+            const msg = tpl.replace(/\[الاسم\]/g, custNameVal).replace(/\[الموقع\]/g, SETTINGS.branch_location_link||'(اطلبي رابط الموقع من الفرع)');
+            window.open(`https://wa.me/${custPhoneDigits}?text=${encodeURIComponent(msg)}`, '_blank');
           }
-          // 🛵 توصيل شركة التوصيل تلقائيًا بتفاصيل الطلب — بدون رقم محدد، بيفتح شاشة اختيار واتساب
+          // 🛵 شركة التوصيل — بس لو رقمها مسجّل بالإعدادات. لو مش مسجّل، ما منفتح أي شي (بدل شاشة اختيار عامة).
           if(orderType==='delivery'){
-            const itemsStr = cartCopy.map(l=>l.qty+'× '+(l.item?.name_ar||'')).join('\n');
-            const dmsg = `🛵 *طلب توصيل صابر جو سناك*\nفاتورة: #${ord.order_number}\n——————\nالعميل: ${custNameVal}\nالهاتف: ${custPhoneDigits}\nالمنطقة: ${document.getElementById('delZone')?.value||''}\nالعنوان: ${document.getElementById('custAddr')?.value||''}\n——————\n${itemsStr}\n——————\nالإجمالي: ${fmt(ord.total)} ${CURRENCY}`;
-            setTimeout(()=>window.open(`https://wa.me/?text=${encodeURIComponent(dmsg)}`, '_blank'), waDelay);
+            const delNum = toIntlPhone(SETTINGS.delivery_whatsapp);
+            if(delNum){
+              const itemsStr = cartCopy.map(l=>l.qty+'× '+(l.item?.name_ar||'')).join('\n');
+              const dmsg = `🛵 *طلب توصيل صابر جو سناك*\nفاتورة: #${ord.order_number}\n——————\nالعميل: ${custNameVal}\nالهاتف: ${custPhoneDigits}\nالمنطقة: ${document.getElementById('delZone')?.value||''}\nالعنوان: ${document.getElementById('custAddr')?.value||''}\n——————\n${itemsStr}\n——————\nالإجمالي: ${fmt(ord.total)} ${CURRENCY}`;
+              setTimeout(()=>window.open(`https://wa.me/${delNum}?text=${encodeURIComponent(dmsg)}`, '_blank'), 400);
+            }
           }
         }
       }catch(waErr){ console.error('واتساب التلقائي فشل (الطلب محفوظ فعليًا، ما تأثر):', waErr); }
@@ -4927,6 +4955,7 @@
               ${isReady?`<button class="mini ok" onclick="finishOrder('${o.id}')">📦 تم الاستلام</button>`:''}
               <button class="mini tog" onclick="reprintDay('${o.id}')">🖨️</button>
               ${o.order_type==='delivery' && o.status!=='cancelled' && (ME.role==='callcenter'||adm) ? `<button class="mini wa" onclick="waSend('${o.id}')">📲</button>` : ''}
+              ${o.order_type==='delivery' && o.status!=='cancelled' && (ME.role==='callcenter'||adm) ? `<button class="mini tog" onclick="setTrackingNumber('${o.id}','${esc(o.delivery_tracking_number||'')}')" title="رقم متابعة شركة التوصيل">${o.delivery_tracking_number?'🔢 '+esc(o.delivery_tracking_number):'➕ رقم متابعة'}</button>` : ''}
               ${adm && o.status!=='cancelled' ? `<button class="mini edit" onclick="editOrder('${o.id}')">✏️</button>`:''}
               ${o.status!=='cancelled' && perm('order_cancel')?`<button class="mini del" onclick="cancelDay('${o.id}')">✗</button>`:''}
             </td></tr>`;}).join('')}</table>`;
@@ -5077,12 +5106,13 @@
       await db.from('orders').update({ status:'ready', updated_at: new Date().toISOString() }).eq('id', id);
       toast('✅ الطلب صار جاهز');
       loadDay(); checkOverdue();
-      // 📱 رسالة واتساب تلقائية للعميل — بس لطلبات التوصيل، تفتح جاهزة (ضغطة إرسال وحدة بالواتساب)
-      if(SETTINGS.auto_whatsapp_customer!=='0'){
+      // 📱 رسالة واتساب تلقائية للعميل — بس لطلبات التوصيل، وبس للكول سنتر
+      if(isCallCenter() && SETTINGS.auto_whatsapp_customer!=='0'){
         const { data: o } = await db.from('orders').select('order_type, customers(name, phone)').eq('id', id).maybeSingle();
-        const phone = (o?.customers?.phone||'').replace(/\D/g,'');
+        const phone = toIntlPhone(o?.customers?.phone);
         if(o && o.order_type==='delivery' && phone){
-          const msg = `🛵 مرحبا ${o.customers?.name||''} 👋\nطلبك من *صابر جو سناك* قيد التوصيل الآن، وصلك قريبًا إن شاء الله! 🙏`;
+          const tpl = SETTINGS.msg_ready || '🛵 مرحبا [الاسم] 👋\nطلبك من *صابر جو سناك* قيد التوصيل الآن، وصلك قريبًا إن شاء الله! 🙏';
+          const msg = tpl.replace(/\[الاسم\]/g, o.customers?.name||'');
           setTimeout(()=>window.open(`https://wa.me/${phone}?text=${encodeURIComponent(msg)}`, '_blank'), 300);
         }
       }
@@ -6130,13 +6160,22 @@
     if(admView==='waste'){ renderWaste(); return; }
     if(admView==='suppliers'){ renderSuppliers(); return; }
     if(admView==='sett'){
-      C.innerHTML=`<div class="mbox" style="max-width:480px">
+      C.innerHTML=`<div class="mbox" style="max-width:900px">
         <h3>🔧 إعدادات النظام</h3>
         <div class="fld"><label>📱 رقم واتساب التوصيل</label><input id="f_wanum" inputmode="tel" value="${esc(SETTINGS.delivery_whatsapp||'')}"></div>
         <div class="fld" style="background:#eafbea;border-radius:10px;padding:10px 12px">
           <label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="f_autoWa" ${SETTINGS.auto_whatsapp_customer!=='0'?'checked':''}> 📤 فتح واتساب تلقائي للعميل ولشركة التوصيل عند كل طلب جديد</label>
         </div>
         <div class="fld"><label>📍 رابط موقع الفرع (خرائط جوجل — يظهر برسالة العميل عند الاستلام)</label><input id="f_branchLoc" value="${esc(SETTINGS.branch_location_link||'')}" placeholder="https://maps.google.com/..."></div>
+        <div class="fld"><label>💬 رسالة "قيد التجهيز" — استلام (استخدمي [الاسم] و[الموقع] بأي مكان بالنص)</label>
+          <textarea id="f_msgPickupPrep" rows="3" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;font-family:inherit">${esc(SETTINGS.msg_pickup_prep || '🙏 مرحبا [الاسم] 👋\nطلبك من *صابر جو سناك* قيد التجهيز الآن. جاهزينه إلك أقرب وقت، وبتقدر تستلمه من فرعنا:\n📍 [الموقع]\nشكرًا لثقتك فينا 💛')}</textarea>
+        </div>
+        <div class="fld"><label>💬 رسالة "قيد التجهيز" — توصيل (استخدمي [الاسم] بأي مكان بالنص)</label>
+          <textarea id="f_msgDeliveryPrep" rows="3" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;font-family:inherit">${esc(SETTINGS.msg_delivery_prep || '🙏 مرحبا [الاسم] 👋\nطلبك من *صابر جو سناك* قيد التجهيز الآن، وبنبعتلك تحديث لما يطلع مع مندوب التوصيل.\nشكرًا لثقتك فينا 💛')}</textarea>
+        </div>
+        <div class="fld"><label>💬 رسالة "قيد التوصيل" (لما يصير الطلب جاهز) — استخدمي [الاسم]</label>
+          <textarea id="f_msgReady" rows="2" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;font-family:inherit">${esc(SETTINGS.msg_ready || '🛵 مرحبا [الاسم] 👋\nطلبك من *صابر جو سناك* قيد التوصيل الآن، وصلك قريبًا إن شاء الله! 🙏')}</textarea>
+        </div>
         <div class="fld"><label>📦 رقم واتساب "توريدات" عام (احتياطي لو المورد ماله رقم محدد)</label><input id="f_procWa" inputmode="tel" value="${esc(SETTINGS.procurement_whatsapp||'')}" placeholder="مثال: 962791234567"></div>
         <div class="fld"><label>💬 نص رسالة "جربتوا الأكل؟" الافتراضي (للعملاء)</label>
           <textarea id="f_feedbackMsg" rows="4" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;font-family:inherit;font-size:1rem" placeholder="مرحبا [الاسم]، شو رأيك بطلبك الأخير...">${esc(SETTINGS.feedback_msg_template||'مرحبا [الاسم] 🙏 شو رأيك بطلبك الأخير من صابر جو سناك؟ رأيك بهمنا كتير وبيساعدنا نتحسّن. لو عندك دقيقة، تقييمك على خرائط جوجل بفرحنا كتير 🌟 https://www.google.com/maps/place/Saber+Jo+Snack/@32.0186841,35.8578738,15.33z/data=!4m8!3m7!1s0x151c9f2da3f2b8e9:0xe10b35d58f8bc73!8m2!3d32.0225298!4d35.8554483!9m1!1b1!16s%2Fg%2F11yww9mzpw?entry=ttu&g_ep=EgoyMDI2MDcyMi4wIKXMDSoASAFQAw%3D%3D شكرًا إلك 💛')}</textarea>
@@ -15968,6 +16007,9 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
       delivery_whatsapp: f_wanum ? f_wanum.value.trim() : '',
       auto_whatsapp_customer: document.getElementById('f_autoWa')?.checked ? '1' : '0',
       branch_location_link: document.getElementById('f_branchLoc')?.value.trim() || '',
+      msg_pickup_prep: document.getElementById('f_msgPickupPrep')?.value || '',
+      msg_delivery_prep: document.getElementById('f_msgDeliveryPrep')?.value || '',
+      msg_ready: document.getElementById('f_msgReady')?.value || '',
       feedback_msg_template: document.getElementById('f_feedbackMsg')?.value.trim() || '',
       procurement_whatsapp: document.getElementById('f_procWa')?.value.trim() || '',
       receipt_template: f_receiptTemplate ? f_receiptTemplate.value : 'modern',
