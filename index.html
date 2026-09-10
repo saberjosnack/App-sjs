@@ -1523,7 +1523,7 @@
     box.appendChild(line);
   }
 
-  const APP_VERSION = '2026-09-07-20';
+  const APP_VERSION = '2026-09-07-22';
   // 🔄 فحص تلقائي للنسخة — يحل مشكلة "الصفحة ما بتاخد آخر تحديث" نهائيًا: كل شوي منقارن نسختنا
   // المحمّلة حاليًا مع ملف version.txt الحقيقي على السيرفر (بدون كاش أبدًا). لو مختلفة، معناته
   // في نسخة أحدث انرفعت، فمنعمل تحديث كامل للصفحة تلقائيًا بدون ما ننتظر حدا يسكر التبويب يدويًا.
@@ -4512,7 +4512,7 @@
           if(custPhoneDigits){
             const tpl = orderType==='pickup'
               ? (SETTINGS.msg_pickup_prep || '🙏 مرحبا [الاسم] 👋\nطلبك من *صابر جو سناك* قيد التجهيز الآن. جاهزينه إلك أقرب وقت، وبتقدر تستلمه من فرعنا:\n📍 [الموقع]\nشكرًا لثقتك فينا 💛')
-              : (SETTINGS.msg_delivery_prep || '🙏 مرحبا [الاسم] 👋\nطلبك من *صابر جو سناك* قيد التجهيز الآن، وبنبعتلك تحديث لما يطلع مع مندوب التوصيل.\nشكرًا لثقتك فينا 💛');
+              : (SETTINGS.msg_ready || '🛵 مرحبا [الاسم] 👋\nطلبك من *صابر جو سناك* قيد التجهيز الآن، وخلال ٢٠-٣٠ دقيقة رح يتحرك إلك.\nبنبعتلك رقم مندوب التوصيل أول ما يطلع بالطريق.\nشكرًا لثقتك فينا 💛');
             const msg = tpl.replace(/\[الاسم\]/g, custNameVal).replace(/\[الموقع\]/g, SETTINGS.branch_location_link||'(اطلبي رابط الموقع من الفرع)');
             window.open(`https://wa.me/${custPhoneDigits}?text=${encodeURIComponent(msg)}`, '_blank');
           }
@@ -5106,16 +5106,8 @@
       await db.from('orders').update({ status:'ready', updated_at: new Date().toISOString() }).eq('id', id);
       toast('✅ الطلب صار جاهز');
       loadDay(); checkOverdue();
-      // 📱 رسالة واتساب تلقائية للعميل — بس لطلبات التوصيل، وبس للكول سنتر
-      if(isCallCenter() && SETTINGS.auto_whatsapp_customer!=='0'){
-        const { data: o } = await db.from('orders').select('order_type, customers(name, phone)').eq('id', id).maybeSingle();
-        const phone = toIntlPhone(o?.customers?.phone);
-        if(o && o.order_type==='delivery' && phone){
-          const tpl = SETTINGS.msg_ready || '🛵 مرحبا [الاسم] 👋\nطلبك من *صابر جو سناك* قيد التوصيل الآن، وصلك قريبًا إن شاء الله! 🙏';
-          const msg = tpl.replace(/\[الاسم\]/g, o.customers?.name||'');
-          setTimeout(()=>window.open(`https://wa.me/${phone}?text=${encodeURIComponent(msg)}`, '_blank'), 300);
-        }
-      }
+      // 📱 ملاحظة: رسالة "قيد التوصيل" صارت تنبعت فورًا لحظة إنشاء الطلب (من الكول سنتر مباشرة)،
+      // مش هون — عشان ما نبعت رسالتين لنفس الزبون. هاي الدالة هلق بس تغيّر حالة الطلب.
     } catch(e) { console.error(e); toast('✗ صار خطأ — حاول تاني'); }
   }
   async function finishOrder(id){
@@ -6160,7 +6152,7 @@
     if(admView==='waste'){ renderWaste(); return; }
     if(admView==='suppliers'){ renderSuppliers(); return; }
     if(admView==='sett'){
-      C.innerHTML=`<div class="mbox" style="max-width:900px">
+      C.innerHTML=`<div class="mbox" style="width:100% !important;max-width:none !important;max-height:none">
         <h3>🔧 إعدادات النظام</h3>
         <div class="fld"><label>📱 رقم واتساب التوصيل</label><input id="f_wanum" inputmode="tel" value="${esc(SETTINGS.delivery_whatsapp||'')}"></div>
         <div class="fld" style="background:#eafbea;border-radius:10px;padding:10px 12px">
@@ -6170,11 +6162,8 @@
         <div class="fld"><label>💬 رسالة "قيد التجهيز" — استلام (استخدمي [الاسم] و[الموقع] بأي مكان بالنص)</label>
           <textarea id="f_msgPickupPrep" rows="3" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;font-family:inherit">${esc(SETTINGS.msg_pickup_prep || '🙏 مرحبا [الاسم] 👋\nطلبك من *صابر جو سناك* قيد التجهيز الآن. جاهزينه إلك أقرب وقت، وبتقدر تستلمه من فرعنا:\n📍 [الموقع]\nشكرًا لثقتك فينا 💛')}</textarea>
         </div>
-        <div class="fld"><label>💬 رسالة "قيد التجهيز" — توصيل (استخدمي [الاسم] بأي مكان بالنص)</label>
-          <textarea id="f_msgDeliveryPrep" rows="3" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;font-family:inherit">${esc(SETTINGS.msg_delivery_prep || '🙏 مرحبا [الاسم] 👋\nطلبك من *صابر جو سناك* قيد التجهيز الآن، وبنبعتلك تحديث لما يطلع مع مندوب التوصيل.\nشكرًا لثقتك فينا 💛')}</textarea>
-        </div>
-        <div class="fld"><label>💬 رسالة "قيد التوصيل" (لما يصير الطلب جاهز) — استخدمي [الاسم]</label>
-          <textarea id="f_msgReady" rows="2" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;font-family:inherit">${esc(SETTINGS.msg_ready || '🛵 مرحبا [الاسم] 👋\nطلبك من *صابر جو سناك* قيد التوصيل الآن، وصلك قريبًا إن شاء الله! 🙏')}</textarea>
+        <div class="fld"><label>💬 رسالة "قيد التوصيل" — توصيل (بتنبعت فورًا لحظة الطلب — استخدمي [الاسم])</label>
+          <textarea id="f_msgReady" rows="3" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;font-family:inherit">${esc(SETTINGS.msg_ready || '🛵 مرحبا [الاسم] 👋\nطلبك من *صابر جو سناك* قيد التجهيز الآن، وخلال ٢٠-٣٠ دقيقة رح يتحرك إلك.\nبنبعتلك رقم مندوب التوصيل أول ما يطلع بالطريق.\nشكرًا لثقتك فينا 💛')}</textarea>
         </div>
         <div class="fld"><label>📦 رقم واتساب "توريدات" عام (احتياطي لو المورد ماله رقم محدد)</label><input id="f_procWa" inputmode="tel" value="${esc(SETTINGS.procurement_whatsapp||'')}" placeholder="مثال: 962791234567"></div>
         <div class="fld"><label>💬 نص رسالة "جربتوا الأكل؟" الافتراضي (للعملاء)</label>
@@ -16008,7 +15997,6 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
       auto_whatsapp_customer: document.getElementById('f_autoWa')?.checked ? '1' : '0',
       branch_location_link: document.getElementById('f_branchLoc')?.value.trim() || '',
       msg_pickup_prep: document.getElementById('f_msgPickupPrep')?.value || '',
-      msg_delivery_prep: document.getElementById('f_msgDeliveryPrep')?.value || '',
       msg_ready: document.getElementById('f_msgReady')?.value || '',
       feedback_msg_template: document.getElementById('f_feedbackMsg')?.value.trim() || '',
       procurement_whatsapp: document.getElementById('f_procWa')?.value.trim() || '',
