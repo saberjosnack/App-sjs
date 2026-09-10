@@ -1512,7 +1512,7 @@
     box.appendChild(line);
   }
 
-  const APP_VERSION = '2026-09-07-16';
+  const APP_VERSION = '2026-09-07-18';
   // 🔄 فحص تلقائي للنسخة — يحل مشكلة "الصفحة ما بتاخد آخر تحديث" نهائيًا: كل شوي منقارن نسختنا
   // المحمّلة حاليًا مع ملف version.txt الحقيقي على السيرفر (بدون كاش أبدًا). لو مختلفة، معناته
   // في نسخة أحدث انرفعت، فمنعمل تحديث كامل للصفحة تلقائيًا بدون ما ننتظر حدا يسكر التبويب يدويًا.
@@ -2686,7 +2686,7 @@
         // (نفس حارس _readyAlertsSent فوق بيمنع التكرار). ملاحظة: بعض المتصفحات ممكن توقف فتح
         // النافذة التلقائي هون لأنه ما نتج مباشرة عن ضغطة يوزر — لو صار هيك، خلي المتصفح "يسمح
         // بالنوافذ المنبثقة" لهاد الموقع مرة وحدة من إعداداته.
-        if(o.order_type==='delivery'){
+        if(o.order_type==='delivery' && isCallCenter()){
           const wmsg = `⏰ *تنبيه تأخير* — طلب #${o.order_number}\nمتأخر أكتر من ${READY_WAIT_MIN} دقيقة ولسا ما وصل للعميل.\nالعميل: ${nm}${ph?' — '+ph:''}\nرجاءً تابعوا مع المندوب 🙏`;
           // بدون رقم محدد — واتساب بيفتح شاشة "اختاري لمين تبعتي" وتختاروا شركة التوصيل أو الجروب بنفسكم
           window.open(`https://wa.me/?text=${encodeURIComponent(wmsg)}`, '_blank');
@@ -4477,24 +4477,28 @@
       }
       // 📱 رسائل واتساب تلقائية — بتفتح جاهزة، ضغطة "إرسال" وحدة بالواتساب بس (مش إرسال صامت
       // ١٠٠٪ — هاد قيد تقني من واتساب نفسه، مش من النظام). بس لو أول طلب (مش تعديل طلب موجود).
-      if(!editingOrder && SETTINGS.auto_whatsapp_customer!=='0'){
-        const custPhone = (rec.__customerPhone||document.getElementById('custPhone')?.value||'').replace(/\D/g,'');
-        let delay = 300;
-        if(custPhone){
-          const custName = rec.__customerName||document.getElementById('custName')?.value||'';
-          const msg = orderType==='pickup'
-            ? `🙏 مرحبا ${custName} 👋\nطلبك من *صابر جو سناك* قيد التجهيز الآن. جاهزينه إلك أقرب وقت، وبتقدر تستلمه من فرعنا:\n📍 ${SETTINGS.branch_location_link||'(اطلبي رابط الموقع من الفرع)'}\nشكرًا لثقتك فينا 💛`
-            : `🙏 مرحبا ${custName} 👋\nطلبك من *صابر جو سناك* قيد التجهيز الآن، وبنبعتلك تحديث لما يطلع مع مندوب التوصيل.\nشكرًا لثقتك فينا 💛`;
-          setTimeout(()=>window.open(`https://wa.me/${custPhone}?text=${encodeURIComponent(msg)}`, '_blank'), delay);
-          delay += 400;
+      // 🛡️ محمية بالكامل بـtry/catch — أي خطأ هون (حتى لو صار) ما لازم يوقف باقي عملية الحفظ
+      // (تصفير السلة، الطباعة) أبدًا؛ الطلب أصلًا محفوظ بالقاعدة قبل ما نوصل هون.
+      try{
+        if(!editingOrder && isCallCenter() && SETTINGS.auto_whatsapp_customer!=='0'){
+          const custPhoneDigits = (document.getElementById('custPhone')?.value||'').replace(/\D/g,'');
+          const custNameVal = document.getElementById('custName')?.value||'';
+          let waDelay = 300;
+          if(custPhoneDigits){
+            const msg = orderType==='pickup'
+              ? `🙏 مرحبا ${custNameVal} 👋\nطلبك من *صابر جو سناك* قيد التجهيز الآن. جاهزينه إلك أقرب وقت، وبتقدر تستلمه من فرعنا:\n📍 ${SETTINGS.branch_location_link||'(اطلبي رابط الموقع من الفرع)'}\nشكرًا لثقتك فينا 💛`
+              : `🙏 مرحبا ${custNameVal} 👋\nطلبك من *صابر جو سناك* قيد التجهيز الآن، وبنبعتلك تحديث لما يطلع مع مندوب التوصيل.\nشكرًا لثقتك فينا 💛`;
+            setTimeout(()=>window.open(`https://wa.me/${custPhoneDigits}?text=${encodeURIComponent(msg)}`, '_blank'), waDelay);
+            waDelay += 400;
+          }
+          // 🛵 توصيل شركة التوصيل تلقائيًا بتفاصيل الطلب — بدون رقم محدد، بيفتح شاشة اختيار واتساب
+          if(orderType==='delivery'){
+            const itemsStr = cartCopy.map(l=>l.qty+'× '+(l.item?.name_ar||'')).join('\n');
+            const dmsg = `🛵 *طلب توصيل صابر جو سناك*\nفاتورة: #${ord.order_number}\n——————\nالعميل: ${custNameVal}\nالهاتف: ${custPhoneDigits}\nالمنطقة: ${document.getElementById('delZone')?.value||''}\nالعنوان: ${document.getElementById('custAddr')?.value||''}\n——————\n${itemsStr}\n——————\nالإجمالي: ${fmt(ord.total)} ${CURRENCY}`;
+            setTimeout(()=>window.open(`https://wa.me/?text=${encodeURIComponent(dmsg)}`, '_blank'), waDelay);
+          }
         }
-        // 🛵 توصيل شركة التوصيل تلقائيًا بتفاصيل الطلب — بدون رقم محدد، بيفتح شاشة اختيار واتساب (شركة التوصيل أأو أي جروب منضمين له) — تختاروا الجهة بنفسكم كل مرة
-        if(orderType==='delivery'){
-          const itemsStr = cart.map(l=>l.qty+'× '+l.item.name_ar).join('\n');
-          const dmsg = `🛵 *طلب توصيل صابر جو سناك*\nفاتورة: #${ord.order_number}\n——————\nالعميل: ${rec.__customerName||document.getElementById('custName')?.value||''}\nالهاتف: ${custPhone||''}\nالمنطقة: ${document.getElementById('delZone')?.value||''}\nالعنوان: ${document.getElementById('custAddr')?.value||''}\n——————\n${itemsStr}\n——————\nالإجمالي: ${fmt(ord.total)} ${CURRENCY}`;
-          setTimeout(()=>window.open(`https://wa.me/?text=${encodeURIComponent(dmsg)}`, '_blank'), delay);
-        }
-      }
+      }catch(waErr){ console.error('واتساب التلقائي فشل (الطلب محفوظ فعليًا، ما تأثر):', waErr); }
       // ⭐ تقييم العميل بعد إرسال الطلب — بس لو في عميل مرتبط (customer_id) ونحن كول سنتر/مدير
       if(customer_id && (isCallCenter()||canSeeAllBranches())){
         setTimeout(()=>askCustomerRating(customer_id, ord.id, custInfo.name||matchedCustomer?.name||''), 600);
