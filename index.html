@@ -1512,7 +1512,7 @@
     box.appendChild(line);
   }
 
-  const APP_VERSION = '2026-09-07-13';
+  const APP_VERSION = '2026-09-07-15';
   // 🔄 فحص تلقائي للنسخة — يحل مشكلة "الصفحة ما بتاخد آخر تحديث" نهائيًا: كل شوي منقارن نسختنا
   // المحمّلة حاليًا مع ملف version.txt الحقيقي على السيرفر (بدون كاش أبدًا). لو مختلفة، معناته
   // في نسخة أحدث انرفعت، فمنعمل تحديث كامل للصفحة تلقائيًا بدون ما ننتظر حدا يسكر التبويب يدويًا.
@@ -2682,6 +2682,15 @@
         div.innerHTML='⏰ '+typeLabel+' متأخر على طلب #'+o.order_number+' (+'+READY_WAIT_MIN+' د)<br><small style="text-decoration:underline">اضغط هون لفتح الطلب</small><br><small>'+esc(nm)+(ph?' — '+esc(ph):'')+'</small>';
         document.body.appendChild(div);
         setTimeout(()=>div.remove(), 8000);
+        // 📱 تنبيه واتساب تلقائي لشركة التوصيل — بس لطلبات التوصيل المتأخرة، ومرة وحدة بس لكل طلب
+        // (نفس حارس _readyAlertsSent فوق بيمنع التكرار). ملاحظة: بعض المتصفحات ممكن توقف فتح
+        // النافذة التلقائي هون لأنه ما نتج مباشرة عن ضغطة يوزر — لو صار هيك، خلي المتصفح "يسمح
+        // بالنوافذ المنبثقة" لهاد الموقع مرة وحدة من إعداداته.
+        if(o.order_type==='delivery'){
+          const wmsg = `⏰ *تنبيه تأخير* — طلب #${o.order_number}\nمتأخر أكتر من ${READY_WAIT_MIN} دقيقة ولسا ما وصل للعميل.\nالعميل: ${nm}${ph?' — '+ph:''}\nرجاءً تابعوا مع المندوب 🙏`;
+          // بدون رقم محدد — واتساب بيفتح شاشة "اختاري لمين تبعتي" وتختاروا شركة التوصيل أو الجروب بنفسكم
+          window.open(`https://wa.me/?text=${encodeURIComponent(wmsg)}`, '_blank');
+        }
       });
     } catch(e) { console.error('checkReadyAlerts:', e); }
   }
@@ -4048,11 +4057,10 @@
   function waSend(id){
     if(ME.role !== 'callcenter' && ME.role !== 'admin'){ toast('⚠️ فقط الكول سنتر والمدير'); return; }
     const o = DAY.find(x=>x.id===id); if(!o) return;
-    const num = (SETTINGS.delivery_whatsapp||'').replace(/\D/g,'');
     const items = (o.order_items||[]).map(l=>l.quantity+'× '+l.item_name).join('\n');
-    const msg = `🛵 *طلب توصيل SJS*\nفاتورة: #${o.order_number}\nالفرع: ${o.branches?.name_ar||''}\n——————\nالعميل: ${o.customers?.name||''}\nالهاتف: ${o.customers?.phone||''}\nالعنوان: ${o.customers?.address||''}\n——————\n${items}\n——————\nالإجمالي: ${fmt(o.total)} ${CURRENCY}`;
-    const url = num ? `https://wa.me/${num}?text=${encodeURIComponent(msg)}` : `https://wa.me/?text=${encodeURIComponent(msg)}`;
-    window.open(url, '_blank');
+    const msg = `🛵 *طلب توصيل ${bizName()}*\nفاتورة: #${o.order_number}\nالفرع: ${o.branches?.name_ar||''}\n——————\nالعميل: ${o.customers?.name||''}\nالهاتف: ${o.customers?.phone||''}\nالعنوان: ${o.customers?.address||''}\n——————\n${items}\n——————\nالإجمالي: ${fmt(o.total)} ${CURRENCY}`;
+    // بدون رقم محدد — واتساب بيفتح شاشة اختيار الجهة (شركة التوصيل أو أي جروب)
+    window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`, '_blank');
   }
 
   /* ================= حفظ الطلب ================= */
@@ -4465,6 +4473,26 @@
             db.from('delivery_zones').insert({ area_name: zoneName, delivery_price: zoneFee, is_active: true })
               .then(()=>loadDeliveryZones()).catch(e=>console.error('auto-save zone failed:', e));
           }
+        }
+      }
+      // 📱 رسائل واتساب تلقائية — بتفتح جاهزة، ضغطة "إرسال" وحدة بالواتساب بس (مش إرسال صامت
+      // ١٠٠٪ — هاد قيد تقني من واتساب نفسه، مش من النظام). بس لو أول طلب (مش تعديل طلب موجود).
+      if(!editingOrder && SETTINGS.auto_whatsapp_customer!=='0'){
+        const custPhone = (rec.__customerPhone||document.getElementById('custPhone')?.value||'').replace(/\D/g,'');
+        let delay = 300;
+        if(custPhone){
+          const custName = rec.__customerName||document.getElementById('custName')?.value||'';
+          const msg = orderType==='pickup'
+            ? `🙏 مرحبا ${custName} 👋\nطلبك من *${bizName()}* قيد التجهيز الآن. جاهزينه إلك أقرب وقت، وبتقدر تستلمه من فرعنا:\n📍 ${SETTINGS.branch_location_link||'(اطلبي رابط الموقع من الفرع)'}\nشكرًا لثقتك فينا 💛`
+            : `🙏 مرحبا ${custName} 👋\nطلبك من *${bizName()}* قيد التجهيز الآن، وبنبعتلك تحديث لما يطلع مع مندوب التوصيل.\nشكرًا لثقتك فينا 💛`;
+          setTimeout(()=>window.open(`https://wa.me/${custPhone}?text=${encodeURIComponent(msg)}`, '_blank'), delay);
+          delay += 400;
+        }
+        // 🛵 توصيل شركة التوصيل تلقائيًا بتفاصيل الطلب — بدون رقم محدد، بيفتح شاشة اختيار واتساب (شركة التوصيل أأو أي جروب منضمين له) — تختاروا الجهة بنفسكم كل مرة
+        if(orderType==='delivery'){
+          const itemsStr = cart.map(l=>l.qty+'× '+l.item.name_ar).join('\n');
+          const dmsg = `🛵 *طلب توصيل ${bizName()}*\nفاتورة: #${ord.order_number}\n——————\nالعميل: ${rec.__customerName||document.getElementById('custName')?.value||''}\nالهاتف: ${custPhone||''}\nالمنطقة: ${document.getElementById('delZone')?.value||''}\nالعنوان: ${document.getElementById('custAddr')?.value||''}\n——————\n${itemsStr}\n——————\nالإجمالي: ${fmt(ord.total)} ${CURRENCY}`;
+          setTimeout(()=>window.open(`https://wa.me/?text=${encodeURIComponent(dmsg)}`, '_blank'), delay);
         }
       }
       // ⭐ تقييم العميل بعد إرسال الطلب — بس لو في عميل مرتبط (customer_id) ونحن كول سنتر/مدير
@@ -5045,6 +5073,15 @@
       await db.from('orders').update({ status:'ready', updated_at: new Date().toISOString() }).eq('id', id);
       toast('✅ الطلب صار جاهز');
       loadDay(); checkOverdue();
+      // 📱 رسالة واتساب تلقائية للعميل — بس لطلبات التوصيل، تفتح جاهزة (ضغطة إرسال وحدة بالواتساب)
+      if(SETTINGS.auto_whatsapp_customer!=='0'){
+        const { data: o } = await db.from('orders').select('order_type, customers(name, phone)').eq('id', id).maybeSingle();
+        const phone = (o?.customers?.phone||'').replace(/\D/g,'');
+        if(o && o.order_type==='delivery' && phone){
+          const msg = `🛵 مرحبا ${o.customers?.name||''} 👋\nطلبك من *${bizName()}* قيد التوصيل الآن، وصلك قريبًا إن شاء الله! 🙏`;
+          setTimeout(()=>window.open(`https://wa.me/${phone}?text=${encodeURIComponent(msg)}`, '_blank'), 300);
+        }
+      }
     } catch(e) { console.error(e); toast('✗ صار خطأ — حاول تاني'); }
   }
   async function finishOrder(id){
@@ -6092,6 +6129,10 @@
       C.innerHTML=`<div class="mbox" style="max-width:480px">
         <h3>🔧 إعدادات النظام</h3>
         <div class="fld"><label>📱 رقم واتساب التوصيل</label><input id="f_wanum" inputmode="tel" value="${esc(SETTINGS.delivery_whatsapp||'')}"></div>
+        <div class="fld" style="background:#eafbea;border-radius:10px;padding:10px 12px">
+          <label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="f_autoWa" ${SETTINGS.auto_whatsapp_customer!=='0'?'checked':''}> 📤 فتح واتساب تلقائي للعميل ولشركة التوصيل عند كل طلب جديد</label>
+        </div>
+        <div class="fld"><label>📍 رابط موقع الفرع (خرائط جوجل — يظهر برسالة العميل عند الاستلام)</label><input id="f_branchLoc" value="${esc(SETTINGS.branch_location_link||'')}" placeholder="https://maps.google.com/..."></div>
         <div class="fld"><label>📦 رقم واتساب "توريدات" عام (احتياطي لو المورد ماله رقم محدد)</label><input id="f_procWa" inputmode="tel" value="${esc(SETTINGS.procurement_whatsapp||'')}" placeholder="مثال: 962791234567"></div>
         <div class="fld"><label>💬 نص رسالة "جربتوا الأكل؟" الافتراضي (للعملاء)</label>
           <textarea id="f_feedbackMsg" rows="4" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;font-family:inherit;font-size:1rem" placeholder="مرحبا [الاسم]، شو رأيك بطلبك الأخير...">${esc(SETTINGS.feedback_msg_template||'مرحبا [الاسم] 🙏 شو رأيك بطلبك الأخير من صابر جو سناك؟ رأيك بهمنا كتير وبيساعدنا نتحسّن. لو عندك دقيقة، تقييمك على خرائط جوجل بفرحنا كتير 🌟 https://www.google.com/maps/place/Saber+Jo+Snack/@32.0186841,35.8578738,15.33z/data=!4m8!3m7!1s0x151c9f2da3f2b8e9:0xe10b35d58f8bc73!8m2!3d32.0225298!4d35.8554483!9m1!1b1!16s%2Fg%2F11yww9mzpw?entry=ttu&g_ep=EgoyMDI2MDcyMi4wIKXMDSoASAFQAw%3D%3D شكرًا إلك 💛')}</textarea>
@@ -15921,6 +15962,8 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
       hr_portal_show_balance: document.getElementById('f_hrShowBalance')?.checked ?? true,
       hr_portal_show_violations: document.getElementById('f_hrShowViolations')?.checked ?? true,
       delivery_whatsapp: f_wanum ? f_wanum.value.trim() : '',
+      auto_whatsapp_customer: document.getElementById('f_autoWa')?.checked ? '1' : '0',
+      branch_location_link: document.getElementById('f_branchLoc')?.value.trim() || '',
       feedback_msg_template: document.getElementById('f_feedbackMsg')?.value.trim() || '',
       procurement_whatsapp: document.getElementById('f_procWa')?.value.trim() || '',
       receipt_template: f_receiptTemplate ? f_receiptTemplate.value : 'modern',
