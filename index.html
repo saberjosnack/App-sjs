@@ -1523,7 +1523,7 @@
     box.appendChild(line);
   }
 
-  const APP_VERSION = '2026-09-11-27';
+  const APP_VERSION = '2026-09-11-28';
   // 🔄 فحص تلقائي للنسخة — يحل مشكلة "الصفحة ما بتاخد آخر تحديث" نهائيًا: كل شوي منقارن نسختنا
   // المحمّلة حاليًا مع ملف version.txt الحقيقي على السيرفر (بدون كاش أبدًا). لو مختلفة، معناته
   // في نسخة أحدث انرفعت، فمنعمل تحديث كامل للصفحة تلقائيًا بدون ما ننتظر حدا يسكر التبويب يدويًا.
@@ -7560,12 +7560,17 @@
     if(!confirm('⚠️ هاد بيمرّ على كل مكون بالنظام، ويجيبله آخر سعر وحدة من آخر فاتورة شراء فعلية له (بغض النظر عن أي سعر يدوي عندلته)، ويحدّث سعره الحالي عليها.\n\nمتابعة؟')) return;
     toast('⏳ جاري مزامنة الأسعار... ممكن ياخد شوي');
     try{
-      // 🔧 نجيب أحدث بند شراء لكل مكون (بحسب تاريخ إنشاء البند نفسه، مش تاريخ الفاتورة المكتوب يدويًا
-      // — عشان نضمن "آخر مرة انحفظ فيها سعر فعليًا" مش "آخر تاريخ مكتوب" يلي ممكن يكون غلط مدخل)
-      const { data: items, error } = await db.from('purchase_items')
-        .select('ingredient_id, unit_cost, created_at, purchases(purchase_date)')
-        .order('created_at', {ascending:false});
+      // 🔧 نجيب أحدث بند شراء لكل مكون — بحسب تاريخ إنشاء الفاتورة نفسها (purchases.created_at)،
+      // مش بند الفاتورة (ما عنده عمود تاريخ لحاله). منرتبها بجافاسكريبت بعد الجلب (أضمن من الاعتماد
+      // على ترتيب جدول خارجي مباشرة بالاستعلام).
+      const { data: rawItems, error } = await db.from('purchase_items')
+        .select('ingredient_id, unit_cost, purchases(created_at)');
       if(error){ toast('✗ '+error.message); return; }
+      const items = (rawItems||[]).slice().sort((a,b)=>{
+        const da = a.purchases?.created_at || '';
+        const db_ = b.purchases?.created_at || '';
+        return db_.localeCompare(da); // تنازلي — الأحدث أول
+      });
       const latestByIng = {};
       (items||[]).forEach(it=>{
         if(!it.ingredient_id || latestByIng[it.ingredient_id]) return; // أول ظهور = الأحدث (مرتبة تنازلي أصلًا)
