@@ -1523,7 +1523,7 @@
     box.appendChild(line);
   }
 
-  const APP_VERSION = '2026-09-11-26';
+  const APP_VERSION = '2026-09-11-27';
   // 🔄 فحص تلقائي للنسخة — يحل مشكلة "الصفحة ما بتاخد آخر تحديث" نهائيًا: كل شوي منقارن نسختنا
   // المحمّلة حاليًا مع ملف version.txt الحقيقي على السيرفر (بدون كاش أبدًا). لو مختلفة، معناته
   // في نسخة أحدث انرفعت، فمنعمل تحديث كامل للصفحة تلقائيًا بدون ما ننتظر حدا يسكر التبويب يدويًا.
@@ -7555,6 +7555,35 @@
   }
 
   /* ---- المكونات ---- */
+  async function syncAllIngredientPrices(){
+    if(!canDeleteRecords()){ toast('⛔ صلاحية المالك فقط'); return; }
+    if(!confirm('⚠️ هاد بيمرّ على كل مكون بالنظام، ويجيبله آخر سعر وحدة من آخر فاتورة شراء فعلية له (بغض النظر عن أي سعر يدوي عندلته)، ويحدّث سعره الحالي عليها.\n\nمتابعة؟')) return;
+    toast('⏳ جاري مزامنة الأسعار... ممكن ياخد شوي');
+    try{
+      // 🔧 نجيب أحدث بند شراء لكل مكون (بحسب تاريخ إنشاء البند نفسه، مش تاريخ الفاتورة المكتوب يدويًا
+      // — عشان نضمن "آخر مرة انحفظ فيها سعر فعليًا" مش "آخر تاريخ مكتوب" يلي ممكن يكون غلط مدخل)
+      const { data: items, error } = await db.from('purchase_items')
+        .select('ingredient_id, unit_cost, created_at, purchases(purchase_date)')
+        .order('created_at', {ascending:false});
+      if(error){ toast('✗ '+error.message); return; }
+      const latestByIng = {};
+      (items||[]).forEach(it=>{
+        if(!it.ingredient_id || latestByIng[it.ingredient_id]) return; // أول ظهور = الأحدث (مرتبة تنازلي أصلًا)
+        latestByIng[it.ingredient_id] = it.unit_cost;
+      });
+      let updated = 0, skipped = 0;
+      for(const [ingId, cost] of Object.entries(latestByIng)){
+        if(!cost || cost<=0){ skipped++; continue; }
+        const { error: updErr } = await db.from('ingredients').update({ unit_cost: cost }).eq('id', ingId);
+        if(updErr){ console.error('sync price failed for', ingId, updErr); skipped++; continue; }
+        updated++;
+      }
+      RECIPE_COST_MAP = null; INGREDIENT_COST_MAP = null;
+      await loadIngredients();
+      toast('✓ اتحدّث سعر '+updated+' مكون'+(skipped?(' — '+skipped+' اتخطّوا (بدون فاتورة شراء أو خطأ)'):''));
+      renderIngredients();
+    }catch(e){ toast('✗ '+e.message); }
+  }
   async function renderIngredients(){
     await loadIngredients();
     const C=document.getElementById('admContent');
@@ -7587,6 +7616,7 @@
         </table></div>
       </div>`:''}
       <button class="add-btn" onclick="ingredientForm()">＋ إضافة مكون</button>
+      <button class="mini ok" style="background:var(--warn)" onclick="syncAllIngredientPrices()">🔄 مزامنة كل الأسعار مع آخر فاتورة شراء</button>
       <div style="color:var(--muted);font-size:.78rem;font-weight:600;margin-bottom:8px">💡 عمود "المخزون" هون مجموع كل الفروع مع بعض (للمرجعية بس) — التفصيل حسب كل فرع من شاشة "🏬 المستودع"</div>
       <div class="tbl-wrap"><table class="tbl">
         <tr><th>المكون</th><th>الوحدة</th><th>سعر الوحدة</th><th>المخزون (كل الفروع)</th><th>الحد الأدنى</th><th>الحالة</th><th></th></tr>
