@@ -1523,7 +1523,7 @@
     box.appendChild(line);
   }
 
-  const APP_VERSION = '2026-09-07-22';
+  const APP_VERSION = '2026-09-11-25';
   // 🔄 فحص تلقائي للنسخة — يحل مشكلة "الصفحة ما بتاخد آخر تحديث" نهائيًا: كل شوي منقارن نسختنا
   // المحمّلة حاليًا مع ملف version.txt الحقيقي على السيرفر (بدون كاش أبدًا). لو مختلفة، معناته
   // في نسخة أحدث انرفعت، فمنعمل تحديث كامل للصفحة تلقائيًا بدون ما ننتظر حدا يسكر التبويب يدويًا.
@@ -10092,23 +10092,73 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
 
   function editPurchaseInfo(id){
     const p = PURCHASES_DATA.find(x=>x.id===id); if(!p) return;
-    modal(`<h3>تعديل بيانات الفاتورة</h3>
-      <div style="color:var(--muted);font-size:.85rem;font-weight:700;margin-bottom:10px">⚠️ تعديل المواد والكميات غير متاح — احذف الفاتورة وأضف واحدة جديدة صحيحة</div>
+    modal(`<h3>تعديل فاتورة الشراء</h3>
+      <div style="color:var(--muted);font-size:.85rem;font-weight:700;margin-bottom:10px">⚠️ تعديل الكمية بيصحّح المخزون تلقائيًا (بيرجّع القديمة ويطبّق الجديدة) — تأكدي من الرقم قبل الحفظ.</div>
       <div class="fld"><label>التاريخ</label><input type="date" id="ep_dt" value="${p.purchase_date}"></div>
       <div class="fld"><label>المورد</label><input id="ep_sup" value="${esc(p.supplier||'')}"></div>
       <div class="fld"><label>ملاحظات</label><input id="ep_note" value="${esc(p.notes||'')}"></div>
+      <div class="fld"><label>المواد والكميات</label>
+        <table class="tbl"><tr><th>المادة</th><th>الكمية</th><th>سعر الوحدة</th></tr>
+        ${(p.purchase_items||[]).map(i=>`<tr>
+          <td>${esc(i.ingredients?.name||'—')} <span style="color:var(--muted);font-size:.78rem">(${esc(i.ingredients?.unit||'')})</span></td>
+          <td><input type="number" step="0.01" class="ep_qty" data-item-id="${i.id}" data-ing-id="${i.ingredient_id}" data-old-qty="${i.qty}" value="${i.qty}" style="width:90px"></td>
+          <td><input type="number" step="0.001" class="ep_cost" data-item-id="${i.id}" value="${i.unit_cost||0}" style="width:90px"></td>
+        </tr>`).join('')}
+        </table>
+      </div>
       <div class="m-act"><button class="save" onclick="savePurchaseInfo('${id}')">حفظ ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
   }
   async function savePurchaseInfo(id){
+    const p = PURCHASES_DATA.find(x=>x.id===id); if(!p) return;
     const rec={purchase_date:document.getElementById('ep_dt').value, supplier:document.getElementById('ep_sup').value.trim(), notes:document.getElementById('ep_note').value.trim()||null};
-    const r=await db.from('purchases').update(rec).eq('id',id);
-    if(r.error){toast('✗ '+r.error.message);return;}
-    await logActivity('edit_purchase','فاتورة شراء: '+rec.supplier);
-    closeModal();toast('✓ انحفظ');renderPurchases();
+    const qtyInputs = [...document.querySelectorAll('.ep_qty')];
+    const costInputs = [...document.querySelectorAll('.ep_cost')];
+    // 🔒 نفس تحذير الحذف بالضبط — فاتورة بدون فرع محدد يعني "كل الفروع"، وتصحيح كمياتها بيأثر
+    // على كل فروعك مع بعض. لو مش قصدك، رجّعي وحدّدي الفرع الصح أول.
+    if(!p.branch_id && !confirm('⚠️ هاي الفاتورة "لكل الفروع" (بدون فرع محدد) — تعديل الكمية هلق رح يصحّح المخزون بكل فروعك مع بعض. متابعة؟')) return;
+    try{
+      const targetBranch = p.branch_id;
+      const branches = targetBranch ? BRANCHES.filter(b=>b.id===targetBranch) : BRANCHES;
+      let newTotal = 0;
+      for(const inp of qtyInputs){
+        const itemId = inp.dataset.itemId;
+        const ingId = inp.dataset.ingId;
+        const oldQty = parseFloat(inp.dataset.oldQty)||0;
+        const newQty = parseFloat(inp.value)||0;
+        const costInp = costInputs.find(c=>c.dataset.itemId===itemId);
+        const newCost = parseFloat(costInp?.value)||0;
+        newTotal += newQty*newCost;
+        const diff = newQty - oldQty; // 📐 الفرق بس هو يلي بيتطبّق على المخزون (مش نرجّع الكل ونعيد الكل)
+        if(Math.abs(diff) < 0.0001) continue; // ما تغيّر شي لهالمادة، نتخطاها
+        for(const branch of branches){
+          const {data:bi} = await db.from('branch_inventory').select('id,stock').eq('branch_id',branch.id).eq('ingredient_id',ingId).maybeSingle();
+          if(bi) await db.from('branch_inventory').update({stock: Math.max(0,(bi.stock||0)+diff)}).eq('id',bi.id);
+          else if(diff>0) await db.from('branch_inventory').insert({branch_id:branch.id, ingredient_id:ingId, stock:diff, min_stock:0});
+          logMovement(branch.id, ingId, diff, 'purchase_edit', 'تصحيح كمية فاتورة شراء — '+rec.supplier+' (من '+oldQty+' لـ'+newQty+')', newCost);
+        }
+        await db.from('purchase_items').update({ qty:newQty, unit_cost:newCost, unit_price:newCost }).eq('id', itemId);
+      }
+      rec.total = newTotal;
+      const r=await db.from('purchases').update(rec).eq('id',id);
+      if(r.error){toast('✗ '+r.error.message);return;}
+      await logActivity('edit_purchase','تعديل فاتورة شراء: '+rec.supplier);
+      closeModal();toast('✓ انحفظ التعديل وتصحّح المخزون');
+      // ⚠️ تذكير: لو الإجمالي الجديد اختلف عن القديم، سجل الدفعات/الخزينة القديم ما بيتحدّث تلقائيًا —
+      // راجعيه يدويًا من "💳 دفعات الموردين" لو المبلغ المدفوع لازم يتغيّر كمان.
+      if(Math.abs(newTotal-(p.total||0))>0.01) toast('⚠️ تذكير: الإجمالي اتغيّر — راجعي "دفعات الموردين" يدويًا لو لازم تعدّلي المبلغ المدفوع');
+      renderPurchases();
+    }catch(e){ toast('✗ '+e.message); }
   }
   async function deletePurchase(id){
-    if(!confirm('حذف فاتورة الشراء؟ سيتم التراجع عن كمياتها من المخزون.')) return;
     const p = PURCHASES_DATA.find(x=>x.id===id); if(!p) return;
+    // 🛡️ حماية جديدة: فاتورة قديمة (من قبل ميزة "كل الفروع") ممكن يكون فرعها فاضي بالغلط مش
+    // بالقصد — حذفها بمنطق "كل الفروع" كان رح ينقص مخزون فروع ما استفادت أصلًا من هالفاتورة.
+    // منوضّح للمستخدم هالخطر صراحة ونطلب تأكيد ثاني قبل ما نكمل بهالحالة تحديدًا.
+    if(!p.branch_id){
+      if(!confirm('⚠️ تنبيه مهم: هاي الفاتورة مسجّلة بدون فرع محدد.\nلو هي فعلًا فاتورة "لكل الفروع"، احذفيها عادي.\nبس لو هي فاتورة قديمة لفرع وحيد وبس الفرع ما انسجل وقتها، حذفها هلق رح "يرجّع" الكمية من كل فروعك — بما فيها فروع ما استفادت من الفاتورة أصلًا، وهاد بينقص مخزونهم بالغلط!\n\nمتأكدة إنها فعلًا فاتورة لكل الفروع؟')) return;
+    } else {
+      if(!confirm('حذف فاتورة الشراء؟ سيتم التراجع عن كمياتها من المخزون.')) return;
+    }
     try{
       // التراجع عن الكميات المضافة للمخزون بكل الفروع
       const targetBranch = p.branch_id;
@@ -16279,6 +16329,27 @@ try {
     loadCompositeData(it.id, it.name);
   }
 
+  function findDuplicateItems(){
+    // 🔍 نحدّد الأصناف المكررة بمطابقة الاسم بعد تطبيع بسيط (نشيل مسافات زيادة ونوحّد الحالة)
+    const groups = {};
+    ITEMS.forEach(i=>{
+      const key = (i.name_ar||'').trim().replace(/\s+/g,' ').toLowerCase();
+      if(!key) return;
+      (groups[key] = groups[key]||[]).push(i);
+    });
+    const dupes = Object.values(groups).filter(g=>g.length>1);
+    if(!dupes.length){ toast('✅ ما في أصناف مكررة بالاسم حاليًا'); return; }
+    modal(`<h3>🔀 أصناف مكررة (${dupes.length} مجموعة)</h3>
+      <div style="color:var(--muted);font-weight:700;font-size:.85rem;margin-bottom:12px">لكل مجموعة، احتفظي بنسخة وحدة واحذفي الباقي. لو صنف له طلبات قديمة، النظام رح يرفض حذفه ويقترح تخفيه بدلًا من الحذف.</div>
+      ${dupes.map(g=>`<div style="background:#f7f2e9;border-radius:10px;padding:10px 14px;margin-bottom:10px">
+        <div style="font-weight:900;margin-bottom:6px">${esc(g[0].name_ar)}</div>
+        ${g.map(i=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0">
+          <span style="font-size:.85rem">${fmt(i.price)} ${CURRENCY} — ${i.is_available?'✅ ظاهر':'🚫 مخفي'}</span>
+          <button class="mini del" onclick="deleteMenuItem('${i.id}','${esc(i.name_ar)}')">حذف هاي النسخة</button>
+        </div>`).join('')}
+      </div>`).join('')}
+      <div class="m-act"><button class="cancel" onclick="closeModal()">إغلاق</button></div>`);
+  }
   async function toggleItem(id,v){ try { const r=await db.from('menu_items').update({is_available:v}).eq('id',id); if(r.error){toast('✗ '+r.error.message);console.error(r.error);return;} toast(v?'✓ ظاهر':'✓ مخفي'); renderAdmin(); bootData(); } catch(e) { toast('✗ '+e.message); console.error(e); } }
   async function deleteMenuItem(id, name){
     if(!canDeleteRecords()){ toast('⛔ صلاحية المالك فقط'); return; }
