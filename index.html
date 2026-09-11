@@ -1523,7 +1523,7 @@
     box.appendChild(line);
   }
 
-  const APP_VERSION = '2026-09-11-25';
+  const APP_VERSION = '2026-09-11-26';
   // 🔄 فحص تلقائي للنسخة — يحل مشكلة "الصفحة ما بتاخد آخر تحديث" نهائيًا: كل شوي منقارن نسختنا
   // المحمّلة حاليًا مع ملف version.txt الحقيقي على السيرفر (بدون كاش أبدًا). لو مختلفة، معناته
   // في نسخة أحدث انرفعت، فمنعمل تحديث كامل للصفحة تلقائيًا بدون ما ننتظر حدا يسكر التبويب يدويًا.
@@ -7819,6 +7819,15 @@
   function calcRecipeCost(r){
     return (r.recipe_items||[]).reduce((s,ri)=>s+(ri.quantity||0)*(ri.ingredients?.unit_cost||0),0);
   }
+  // 🔄 تحديث آخر أسعار المكونات — RECIPES_DATA محمّلة بالذاكرة من أول ما فتحتي الشاشة، فلو أحد الأسعار
+  // اتغيّر بعدها (فاتورة شراء جديدة/معدّلة)، الوصفة المفتوحة كانت تضل تعرض السعر القديم لحد ما تسكّري
+  // الشاشة كلها وترجعي تفتحيها. هلق هالزر بيعيد الجلب من القاعدة مباشرة ويفتح نفس الوصفة بأحدث سعر.
+  async function refreshRecipePrices(id){
+    toast('⏳ جاري تحديث الأسعار...');
+    RECIPE_COST_MAP = null;
+    await renderRecipes();
+    showRecipeDetail(id);
+  }
   function showRecipeDetail(id){
     const r=RECIPES_DATA.find(x=>x.id===id);if(!r)return;
     const cost=calcRecipeCost(r),price=parseFloat(r.menu_items?.price||0);
@@ -7835,6 +7844,7 @@
       <div class="trow total"><span>Food Cost %</span><b>${price>0?Math.round(cost/price*100):0}%</b></div>
       ${r.prep_method?`<div style="margin-top:12px"><b style="color:var(--maroon)">📝 طريقة التحضير:</b><div style="white-space:pre-wrap;margin-top:6px;background:#FFF8EE;border-radius:10px;padding:10px 12px;font-weight:700">${esc(r.prep_method)}</div></div>`:''}
       <div class="m-act">
+        <button class="mini ok" onclick="refreshRecipePrices('${id}')" style="background:var(--warn)">🔄 تحديث آخر أسعار المكونات</button>
         <button class="mini ok" onclick="printRecipeSheet('${id}', true)">🖨️ طباعة بالمبالغ</button>
         <button class="mini edit" onclick="printRecipeSheet('${id}', false)">🖨️ طباعة الكميات بس</button>
       </div>
@@ -10137,10 +10147,15 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
           logMovement(branch.id, ingId, diff, 'purchase_edit', 'تصحيح كمية فاتورة شراء — '+rec.supplier+' (من '+oldQty+' لـ'+newQty+')', newCost);
         }
         await db.from('purchase_items').update({ qty:newQty, unit_cost:newCost, unit_price:newCost }).eq('id', itemId);
+        // 🔧 كانت ناقصة: تعديل سعر بند بفاتورة شراء ما كان يحدّث سعر المكوّن نفسه (ingredients.unit_cost)،
+        // فكانت الوصفات تضل عارضة السعر القديم حتى لو الفاتورة اتصحّحت. هلق منحدّثه هون كمان، مطابق
+        // لنفس اللي بيصير عند إضافة فاتورة شراء جديدة عادية.
+        if(newCost>0) await db.from('ingredients').update({ unit_cost: newCost }).eq('id', ingId);
       }
       rec.total = newTotal;
       const r=await db.from('purchases').update(rec).eq('id',id);
       if(r.error){toast('✗ '+r.error.message);return;}
+      RECIPE_COST_MAP = null; // 🔧 أسعار مكونات اتغيّرت — لازم تكلفة كل الوصفات تتحسب من جديد
       await logActivity('edit_purchase','تعديل فاتورة شراء: '+rec.supplier);
       closeModal();toast('✓ انحفظ التعديل وتصحّح المخزون');
       // ⚠️ تذكير: لو الإجمالي الجديد اختلف عن القديم، سجل الدفعات/الخزينة القديم ما بيتحدّث تلقائيًا —
