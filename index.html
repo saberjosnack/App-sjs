@@ -1523,7 +1523,7 @@
     box.appendChild(line);
   }
 
-  const APP_VERSION = '2026-09-11-28';
+  const APP_VERSION = '2026-09-18-31';
   // 🔄 فحص تلقائي للنسخة — يحل مشكلة "الصفحة ما بتاخد آخر تحديث" نهائيًا: كل شوي منقارن نسختنا
   // المحمّلة حاليًا مع ملف version.txt الحقيقي على السيرفر (بدون كاش أبدًا). لو مختلفة، معناته
   // في نسخة أحدث انرفعت، فمنعمل تحديث كامل للصفحة تلقائيًا بدون ما ننتظر حدا يسكر التبويب يدويًا.
@@ -2502,7 +2502,7 @@
         <label>الفرع يلي رح ينضاف له المخزون *</label>
         <select id="dr_branch"><option value="">— اختاري —</option>${BRANCHES.map(b=>`<option value="${b.id}" ${ME.branch_id===b.id?'selected':''}>${esc(b.name_ar)}</option>`).join('')}</select>
         <label style="margin-top:8px">الصنف المشترى * ${!INGR.length?'<span style="color:var(--red);font-weight:700;font-size:.78rem">(ما في مكونات مسجّلة بالنظام أصلًا — ضيفيها من شاشة "المكونات" أول)</span>':''}</label>
-        <select id="dr_ing" onchange="updateDrawerIngUnit()"><option value="">— اختاري —</option>${INGR.map(i=>`<option value="${i.id}" data-unit="${esc(i.unit||'')}">${esc(i.name)}</option>`).join('')}</select>
+        <select id="dr_ing" onchange="updateDrawerIngUnit()"><option value="">— اختاري —</option>${INGR.map(i=>`<option value="${i.id}" data-unit="${esc(i.unit||'')}">${ingDisplayName(i)}</option>`).join('')}</select>
         <label style="margin-top:8px">الكمية المشتراة * <span id="dr_unit_hint" style="color:var(--maroon);font-weight:900"></span></label>
         <input id="dr_qty" type="number" step="0.01" placeholder="مثال: 5">
       </div>
@@ -7462,6 +7462,14 @@
 
   /* ================= المكونات والوصفات والمصاريف والمشتريات ================= */
   let INGR=[], RECIPES_DATA=[], EXPENSES_DATA=[], PURCHASES_DATA=[];
+  // 🏷️ لو في مكونين أو أكتر بنفس الاسم بالضبط (نسخة مكررة بالغلط)، منضيف رقم مميّز صغير جنب الاسم
+  // بكل قوائم الاختيار — عشان محدا يختار الوحدة الغلط بالغلط زي ما صار قبل (نفس الاسم، سعر/id مختلف).
+  // ⚠️ نص عادي (مش HTML) — عناصر <option> ما بتعرض وسوم HTML، بس نص خام.
+  function ingDisplayName(i){
+    const dupCount = INGR.filter(x=>(x.name||'').trim()===(i.name||'').trim()).length;
+    if(dupCount<2) return esc(i.name);
+    return esc(i.name)+' [#'+i.id.slice(0,4)+' — '+fmt(i.unit_cost||0)+']';
+  }
   // ================= 💰 تكلفة الوصفات وربح الطلبات (لشاشة المدير) =================
   // كاش بسيط: menu_item_id -> تكلفة الوصفة (مجموع كمية × سعر الوحدة لكل مكوّن). بيتحمّل مرة وحدة
   // ويترجع يستعمل من كذا شاشة (سجل اليوم، بحث الفواتير، تفاصيل الفاتورة) بدون ما يعيد نفس الاستعلام كل مرة.
@@ -7659,7 +7667,7 @@
     modal(`<h3>🔄 "${esc(name)}" مستخدم بمكان تاني</h3>
       <div style="color:var(--muted);font-weight:700;margin-bottom:10px">مربوط بوصفة صنف أو فاتورة شراء قديمة، فما ممكن نحذفه لحاله. اختار مادة بديلة تحل محله بكل هالأماكن، وبعدين نحذفه نهائي.</div>
       <div class="fld"><label>المادة البديلة</label>
-        <select id="ing_replace_sel"><option value="">اختر بديل...</option>${others.map(i=>`<option value="${i.id}">${esc(i.name)} (${esc(i.unit)})</option>`).join('')}</select>
+        <select id="ing_replace_sel"><option value="">اختر بديل...</option>${others.map(i=>`<option value="${i.id}">${ingDisplayName(i)} (${esc(i.unit)})</option>`).join('')}</select>
       </div>
       <div class="m-act"><button class="save" onclick="confirmIngredientReplace('${id}','${esc(name)}')">🔄 استبدل واحذف</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
   }
@@ -7724,16 +7732,33 @@
     setTimeout(()=>unlockSubmit('saveIngredient'), 15000);
     const unitSel = document.getElementById('fi_un').value;
     const unit = unitSel==='__custom__' ? (document.getElementById('fi_un_custom')?.value.trim()||'') : unitSel;
-    if(!unit){ toast('⚠️ اكتب وحدة القياس'); return; }
+    if(!unit){ toast('⚠️ اكتب وحدة القياس'); unlockSubmit('saveIngredient'); return; }
     const rec={name:document.getElementById('fi_nm').value.trim(),unit,
       unit_cost:parseFloat(document.getElementById('fi_uc').value)||0,
       min_stock:parseFloat(document.getElementById('fi_mn').value)||0};
-    if(!rec.name){toast('⚠️ الاسم مطلوب');return;}
+    if(!rec.name){toast('⚠️ الاسم مطلوب');unlockSubmit('saveIngredient');return;}
+    // 🛡️ منع التكرار من جذوره — بس عند إضافة مكوّن جديد (مش تعديل موجود). فرق السعر وحده مش سبب
+    // كافي للتحذير (الأسعار بترتفع طبيعي) — بس تطابق الاسم بالضبط هو المؤشر الحقيقي على تكرار محتمل.
+    if(!id){
+      const existing = INGR.find(i=>(i.name||'').trim().toLowerCase()===rec.name.toLowerCase());
+      if(existing){
+        const useExisting = confirm('⚠️ في مكوّن مسجّل أصلًا بنفس الاسم بالضبط:\n"'+existing.name+'" — سعره الحالي: '+fmt(existing.unit_cost||0)+' '+CURRENCY+'/'+existing.unit+'\n\nلو هاد فعليًا نفس المادة (بس تغيّر سعرها)، اضغطي "موافق" وبنحدّث سعرها القديم بدل ما ننشئ نسخة جديدة.\nلو هاد مادة مختلفة فعلًا بنفس الاسم بالصدفة، اضغطي "إلغاء" واختاري اسم مميّز أكتر (مثلًا "لحمة - نوع ٢").')
+        if(useExisting){
+          const { error } = await db.from('ingredients').update({ unit_cost: rec.unit_cost, min_stock: rec.min_stock }).eq('id', existing.id);
+          if(error){ toast('✗ '+error.message); unlockSubmit('saveIngredient'); return; }
+          RECIPE_COST_MAP = null; INGREDIENT_COST_MAP = null;
+          closeModal(); toast('✓ اتحدّث سعر "'+existing.name+'" القديم — ما انضافت نسخة جديدة'); renderIngredients();
+          unlockSubmit('saveIngredient'); return;
+        }
+        // لو ضغطت إلغاء، منكمل عادي وننشئ مكوّن جديد فعليًا (قرارها الواعي إنه مختلف)
+      }
+    }
     const r=id?await db.from('ingredients').update(rec).eq('id',id):await db.from('ingredients').insert(rec);
-    if(r.error){toast('✗ '+r.error.message);return;}
+    if(r.error){toast('✗ '+r.error.message);unlockSubmit('saveIngredient');return;}
     RECIPE_COST_MAP = null; // 🔧 سعر المكوّن تغيّر — لازم تكلفة الوصفات تتحسب من جديد
     INGREDIENT_COST_MAP = null;
     closeModal();toast('✓ انحفظ');renderIngredients();
+    unlockSubmit('saveIngredient');
   }
 
   /* ---- الوصفات ---- */
@@ -7959,7 +7984,7 @@
     return `<div class="two" style="margin-bottom:6px" id="ri_row_${idx}">
       <select class="ri_ing" style="flex:2;border:1.5px solid var(--line);border-radius:10px;padding:7px 10px">
         <option value="">المكون...</option>
-        ${INGR.map(i=>`<option value="${i.id}" ${i.id===ingId?'selected':''}>${esc(i.name)} (${esc(i.unit)})</option>`).join('')}
+        ${INGR.map(i=>`<option value="${i.id}" ${i.id===ingId?'selected':''}>${ingDisplayName(i)} (${esc(i.unit)})</option>`).join('')}
       </select>
       <input class="ri_qty" type="number" step="0.01" placeholder="الكمية" value="${qty||''}" style="flex:1;border:1.5px solid var(--line);border-radius:10px;padding:7px 10px">
       <button type="button" class="mini del" onclick="document.getElementById('ri_row_${idx}').remove()">✗</button></div>`;
@@ -8000,7 +8025,7 @@
           <div style="flex:1;min-width:150px"><label style="font-weight:700;font-size:.82rem">الفرع</label><br>
             <select id="sc_branch"><option value="">اختاري فرع...</option>${myBranches.map(b=>`<option value="${b.id}">${esc(b.name_ar)}</option>`).join('')}</select></div>
           <div style="flex:2;min-width:200px"><label style="font-weight:700;font-size:.82rem">أضيفي مادة للفحص</label><br>
-            <select id="sc_ing_add" onchange="addSpotCheckRow()"><option value="">اختاري مادة تضيفيها...</option>${INGR.map(i=>`<option value="${i.id}">${esc(i.name)} (${esc(i.unit)})</option>`).join('')}</select></div>
+            <select id="sc_ing_add" onchange="addSpotCheckRow()"><option value="">اختاري مادة تضيفيها...</option>${INGR.map(i=>`<option value="${i.id}">${ingDisplayName(i)} (${esc(i.unit)})</option>`).join('')}</select></div>
         </div>
       </div>
       <div id="sc_rows"></div>
@@ -8119,7 +8144,7 @@
         <h3>📜 خط سير المنتج — من الشراء لغاية البيع أو الإتلاف</h3>
         <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px">
           <div style="flex:2;min-width:200px"><label style="font-weight:700;font-size:.82rem">المادة</label><br>
-            <select id="pt_ing" style="width:100%"><option value="">اختاري مادة...</option>${INGR.map(i=>`<option value="${i.id}" ${PT_FILTER.ingredient===i.id?'selected':''}>${esc(i.name)} (${esc(i.unit)})</option>`).join('')}</select></div>
+            <select id="pt_ing" style="width:100%"><option value="">اختاري مادة...</option>${INGR.map(i=>`<option value="${i.id}" ${PT_FILTER.ingredient===i.id?'selected':''}>${ingDisplayName(i)} (${esc(i.unit)})</option>`).join('')}</select></div>
           <div style="flex:1;min-width:150px"><label style="font-weight:700;font-size:.82rem">الفرع</label><br>
             <select id="pt_branch" style="width:100%"><option value="">كل الفروع</option>${BRANCHES.map(b=>`<option value="${b.id}" ${PT_FILTER.branch===b.id?'selected':''}>${esc(b.name_ar)}</option>`).join('')}</select></div>
           <div><label style="font-weight:700;font-size:.82rem">من تاريخ</label><br><input type="date" id="pt_from" value="${PT_FILTER.from}"></div>
@@ -8138,8 +8163,47 @@
         </div>
         <div id="ra_result" style="margin-top:12px"></div>
       </div>
+      <div class="panel" style="margin-bottom:14px;border:2px solid var(--red)">
+        <h4 style="color:var(--red);margin-bottom:8px">🩺 تشخيص صنف محدد — شو بالضبط بيخصم وقت البيع؟</h4>
+        <div style="font-size:.8rem;color:var(--muted);font-weight:600;margin-bottom:8px">بيشغّل نفس الاستعلام يلي البيع الحقيقي بيستخدمه بالضبط، ويوريكي النتيجة الخام — بدون أي تخمين أو كاش.</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end">
+          <div style="flex:2;min-width:200px"><label style="font-weight:700;font-size:.82rem">الصنف</label><br>
+            <select id="dg_item" style="width:100%"><option value="">اختاري صنف...</option>${ITEMS.map(i=>`<option value="${i.id}">${esc(i.name_ar)} — (${i.id.slice(0,8)})</option>`).join('')}</select></div>
+          <button class="mini ok" style="background:var(--red)" onclick="diagnoseItemRecipe()">🩺 شخّصي</button>
+        </div>
+        <div id="dg_result" style="margin-top:12px"></div>
+      </div>
       <div id="pt_result"></div>`;
     if(PT_FILTER.ingredient) loadProductTimeline();
+  }
+  async function diagnoseItemRecipe(){
+    const itemId = document.getElementById('dg_item')?.value;
+    const box = document.getElementById('dg_result');
+    if(!itemId || !box) return;
+    box.innerHTML = '<div class="empty-note">⏳ جاري الفحص...</div>';
+    try{
+      // 🩺 نفس الاستعلام بالضبط يلي deductInventoryForSale() بيستخدمه — بدون أي كاش، مباشرة من القاعدة
+      const { data: recipes, error } = await db.from('recipes')
+        .select('id, menu_item_id, recipe_items(ingredient_id, quantity, ingredients(name, unit))')
+        .eq('menu_item_id', itemId);
+      const item = ITEMS.find(i=>i.id===itemId);
+      let html = `<div style="background:#f7f2e9;border-radius:10px;padding:12px 14px;font-family:monospace;font-size:.85rem;direction:ltr;text-align:left">`;
+      html += `item_id: ${itemId}<br>item_type: ${item?.item_type||'?'}<br>---<br>`;
+      if(error){ html += `❌ ERROR: ${error.message}`; }
+      else if(!recipes || !recipes.length){
+        html += `⚠️ recipes rows found for this menu_item_id: <b>0</b><br>→ هاد الصنف ما إله ولا صف وصفة إطلاقًا بجدول recipes — لهيك صفر خصم.`;
+      } else {
+        html += `✅ recipes rows found: <b>${recipes.length}</b>${recipes.length>1?' ⚠️⚠️ (لازم يكون ١ بس — فيه تكرار!)':''}<br><br>`;
+        recipes.forEach((r,idx)=>{
+          html += `--- recipe #${idx+1} (id: ${r.id}) ---<br>`;
+          if(!r.recipe_items || !r.recipe_items.length){ html += '⚠️ recipe_items فاضية — صفر مكونات مربوطة بهالصف!<br>'; }
+          else r.recipe_items.forEach(ri=>{ html += `• ${ri.ingredients?.name||'؟'} — كمية: ${ri.quantity} ${ri.ingredients?.unit||''} (ingredient_id: ${ri.ingredient_id})<br>`; });
+          html += '<br>';
+        });
+      }
+      html += `</div>`;
+      box.innerHTML = html;
+    }catch(e){ box.innerHTML = '<div class="alert-red">✗ '+e.message+'</div>'; }
   }
   async function runRecipeAudit(allTime){
     const from = allTime ? '2020-01-01' : document.getElementById('ra_from')?.value;
@@ -8470,7 +8534,7 @@
     return `<div class="two" style="margin-bottom:6px" id="mfg_row_${idx}">
       <select class="mfg_ing" style="flex:2;border:1.5px solid var(--line);border-radius:10px;padding:7px 10px">
         <option value="">المادة الخام...</option>
-        ${INGR.map(i=>`<option value="${i.id}" ${i.id===ingId?'selected':''}>${esc(i.name)} (${esc(i.unit)})</option>`).join('')}
+        ${INGR.map(i=>`<option value="${i.id}" ${i.id===ingId?'selected':''}>${ingDisplayName(i)} (${esc(i.unit)})</option>`).join('')}
       </select>
       <input class="mfg_qty" type="number" step="0.01" placeholder="الكمية" value="${qty||''}" style="flex:1;border:1.5px solid var(--line);border-radius:10px;padding:7px 10px">
       <button type="button" class="mini del" onclick="document.getElementById('mfg_row_${idx}').remove()">✗</button></div>`;
@@ -8485,7 +8549,7 @@
       <div class="fld"><label>المنتج الناتج</label>
         <select id="mfg_out" onchange="document.getElementById('mfg_out_new').classList.toggle('hidden', this.value!=='__new__')">
           <option value="">اختر مادة موجودة...</option>
-          ${INGR.map(i=>`<option value="${i.id}" ${r?.output_ingredient_id===i.id?'selected':''}>${esc(i.name)} (${esc(i.unit)})</option>`).join('')}
+          ${INGR.map(i=>`<option value="${i.id}" ${r?.output_ingredient_id===i.id?'selected':''}>${ingDisplayName(i)} (${esc(i.unit)})</option>`).join('')}
           <option value="__new__">+ مادة جديدة (اكتب اسمها ووحدتها تحت)</option>
         </select>
         <div id="mfg_out_new" class="hidden two" style="margin-top:6px">
@@ -9969,7 +10033,7 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
         </select>
         <select id="pur_filter_ing" style="flex:1;border:1.5px solid var(--line);border-radius:10px;padding:8px" onchange="window.__purFilterIng=this.value;renderPurchases()">
           <option value="">كل المنتجات</option>
-          ${INGR.map(i=>`<option value="${i.id}" ${filterIng===i.id?'selected':''}>${esc(i.name)}</option>`).join('')}
+          ${INGR.map(i=>`<option value="${i.id}" ${filterIng===i.id?'selected':''}>${ingDisplayName(i)}</option>`).join('')}
         </select>
         <button class="mini edit" onclick="printPurchasesReport()">🖨️ طباعة</button>
         <button class="mini ok" onclick="printPurchasesPDF()">📄 PDF منسّق</button>
@@ -10329,7 +10393,7 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
       ${(prefill.name && !matchedIngId)?`<div style="font-size:.72rem;color:var(--red);font-weight:800;margin-bottom:4px">🤖 "${esc(prefill.name)}" — ما لقيتلها مادة مطابقة، اختر يدويًا:</div>`:''}
       ${(prefill.name && matchedIngId)?`<div style="font-size:.72rem;color:var(--ok);font-weight:800;margin-bottom:4px">🤖 من الفاتورة: "${esc(prefill.name)}"</div>`:''}
       <select class="pi_ing" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:8px 10px;margin-bottom:6px">
-        <option value="">اختر المادة...</option>${INGR.map(i=>`<option value="${i.id}" ${i.id===matchedIngId?'selected':''}>${esc(i.name)} (${esc(i.unit)})</option>`).join('')}
+        <option value="">اختر المادة...</option>${INGR.map(i=>`<option value="${i.id}" ${i.id===matchedIngId?'selected':''}>${ingDisplayName(i)} (${esc(i.unit)})</option>`).join('')}
       </select>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px">
         <div><label style="font-size:.72rem;color:var(--muted);font-weight:800">الكمية</label>
@@ -12161,7 +12225,7 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
               ${BRANCHES.map(b=>`<option value="${b.id}" ${WH_FILTER.branch===b.id?'selected':''}>${esc(b.name_ar)}</option>`).join('')}</select></div>
           <div><label style="font-weight:700;font-size:.82rem">المادة</label><br>
             <select id="wh_ing" class="dfield"><option value="">كل المواد</option>
-              ${INGR.map(i=>`<option value="${i.id}" ${WH_FILTER.ing===i.id?'selected':''}>${esc(i.name)}</option>`).join('')}</select></div>
+              ${INGR.map(i=>`<option value="${i.id}" ${WH_FILTER.ing===i.id?'selected':''}>${ingDisplayName(i)}</option>`).join('')}</select></div>
           <button class="mini ok" style="align-self:end" onclick="applyWhFilter()">🔍 فلترة</button>
           <button class="mini edit" style="align-self:end" onclick="printWarehouseReport()">🖨️ طباعة (فاتورة)</button>
           <button class="mini ok" style="align-self:end;background:var(--maroon)" onclick="printWarehousePDF()">📄 PDF منسّق</button>
@@ -14760,7 +14824,7 @@ window.__lastEmpMealsData = null;
       </div>
       <div id="wf_ing_wrap" class="fld"><label>المادة</label><select id="wf_ing">
         <option value="">اختر المادة...</option>
-        ${INGR.map(i=>`<option value="${i.id}">${esc(i.name)} (${esc(i.unit)})</option>`).join('')}
+        ${INGR.map(i=>`<option value="${i.id}">${ingDisplayName(i)} (${esc(i.unit)})</option>`).join('')}
       </select></div>
       <div id="wf_item_wrap" class="fld hidden"><label>الصنف</label><select id="wf_item">
         <option value="">اختر الصنف...</option>
@@ -15099,7 +15163,7 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
         ingSection = `<hr style="margin:10px 0"><div style="font-weight:800;color:var(--maroon);margin-bottom:6px">📦 الأصناف يلي بنوخدها من هاد المورد</div>
           <div style="font-size:.78rem;color:var(--muted);font-weight:600;margin-bottom:6px">هاي بتظهر تلقائيًا وقت عمل فاتورة شراء لهاد المورد، وبتستخدم بتقرير النواقص بعد الجرد.</div>
           <div id="sup_ingsWrap" style="max-height:220px;overflow-y:auto;border:1.5px solid var(--line);border-radius:10px;padding:8px">
-            ${INGR.map(i=>`<label class="chk" style="display:block;margin-bottom:4px"><input type="checkbox" id="sup_ing_${i.id}" ${myIds.has(i.id)?'checked':''}> ${esc(i.name)} (${esc(i.unit)})</label>`).join('')||'<div class="empty-note">ما في مكونات بعد</div>'}
+            ${INGR.map(i=>`<label class="chk" style="display:block;margin-bottom:4px"><input type="checkbox" id="sup_ing_${i.id}" ${myIds.has(i.id)?'checked':''}> ${ingDisplayName(i)} (${esc(i.unit)})</label>`).join('')||'<div class="empty-note">ما في مكونات بعد</div>'}
           </div>`;
       }catch(e){ console.error('load supplier ingredients failed (نفّذ SQL):', e); }
     }
@@ -15790,7 +15854,7 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
     return `<div class="two" style="margin-bottom:6px" id="tr_row_${idx}">
       <select class="tr_ing" style="flex:2;border:1.5px solid var(--line);border-radius:10px;padding:7px 10px">
         <option value="">المادة...</option>
-        ${INGR.map(i=>`<option value="${i.id}">${esc(i.name)} (${esc(i.unit)})</option>`).join('')}
+        ${INGR.map(i=>`<option value="${i.id}">${ingDisplayName(i)} (${esc(i.unit)})</option>`).join('')}
       </select>
       <input class="tr_qty" type="number" step="0.01" placeholder="الكمية" style="flex:1;border:1.5px solid var(--line);border-radius:10px;padding:7px 10px">
       <button type="button" class="mini del" onclick="document.getElementById('tr_row_${idx}').remove()">✗</button>
