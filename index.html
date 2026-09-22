@@ -638,6 +638,7 @@
         <button data-a="purchases" onclick="admTab('purchases')">🛒 المشتريات</button>
         <button data-a="platforms" onclick="admTab('platforms')">🛵 منصات التوصيل</button>
         <button data-a="deliveryZones" onclick="admTab('deliveryZones')">🗺️ مناطق التوصيل</button>
+        <button data-a="expenseSort" onclick="admTab('expenseSort')">🏷️ تصنيف المصاريف</button>
         <button data-a="empmeals" onclick="admTab('empmeals')">🍽️ وجبات الموظفين</button>
         <button data-a="topcust" onclick="admTab('topcust')">🏆 أفضل العملاء</button>
         <button data-a="waste" onclick="admTab('waste')">🗑️ الإتلاف</button>
@@ -1523,7 +1524,7 @@
     box.appendChild(line);
   }
 
-  const APP_VERSION = '2026-09-18-31';
+  const APP_VERSION = '2026-09-22-33';
   // 🔄 فحص تلقائي للنسخة — يحل مشكلة "الصفحة ما بتاخد آخر تحديث" نهائيًا: كل شوي منقارن نسختنا
   // المحمّلة حاليًا مع ملف version.txt الحقيقي على السيرفر (بدون كاش أبدًا). لو مختلفة، معناته
   // في نسخة أحدث انرفعت، فمنعمل تحديث كامل للصفحة تلقائيًا بدون ما ننتظر حدا يسكر التبويب يدويًا.
@@ -6046,7 +6047,7 @@
     inventory:'inventory_audit', transfers:'inventory_transfer', warehouse:'tab_warehouse', treasury:'tab_treasury', hr:'tab_hr', chats:'tab_chats', dailyAudits:'tab_dailyAudits', hrLocations:'tab_hrLocations', dutyHours:'tab_dutyHours', hrClosures:'tab_hrClosures', ordersScreen:'tab_ordersScreen',
     complaints:'tab_complaints', violations:'tab_violations', deductions:'tab_deductions', rewards:'tab_rewards', activityLog:'tab_activityLog', manufacturing:'tab_manufacturing', satisfaction:'tab_satisfaction', ccPoints:'tab_ccPoints', shiftSchedule:'tab_shiftSchedule', shifts:'tab_shifts', productTimeline:'tab_productTimeline', spotCheck:'tab_spotCheck', breaksScreen:'tab_breaksScreen', supplierPayments:'tab_supplierPayments',
     expenses:'expenses_view', purchases:'purchases_view',
-    platforms:'platforms_view', empmeals:'empmeals_view', topcust:'topcust_view', waste:'waste_log', suppliers:'purchases_view', deliveryZones:'settings_manage',
+    platforms:'platforms_view', empmeals:'empmeals_view', topcust:'topcust_view', waste:'waste_log', suppliers:'purchases_view', deliveryZones:'settings_manage', expenseSort:'expenses_view',
   };
   function canAccessAdminTab(tabKey){
     // 🔒 استثناء دائم: شاشة "الأدوار" للمالك الحقيقي بس، حتى لو الدور المخصص معاه "كل صلاحيات المالك" —
@@ -6143,6 +6144,7 @@
     if(admView==='ordersScreen'){ renderOrdersScreen(); return; }
     if(admView==='platforms'){ renderPlatforms(); return; }
     if(admView==='deliveryZones'){ renderDeliveryZones(); return; }
+    if(admView==='expenseSort'){ renderExpenseSort(); return; }
     if(admView==='devices'){ renderDevices(); return; }
     if(admView==='reports'){ renderReports(); return; }
     if(admView==='termsLog'){ renderTermsLog(); return; }
@@ -9988,6 +9990,7 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
     closeModal();toast('✓ انحفظ');renderExpenses();
     } finally { unlockSubmit('saveExpense'); }
   }
+  const EXPENSE_CATEGORIES = ['🍳 مصاريف تشغيلية','👥 رواتب','📢 تسويق','🔧 صيانة','🧾 فواتير (كهرباء/ماء/نت)','🛒 مستلزمات','✨ أخرى'];
   async function approveExpense(id, approve){
     const status = approve ? 'approved' : 'rejected';
     const r = await db.from('expenses').update({ approval_status: status }).eq('id', id);
@@ -15364,6 +15367,41 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
     const dl = document.getElementById('deliveryZonesDatalist');
     if(dl) dl.innerHTML = DELIVERY_ZONES.map(z=>`<option value="${esc(z.area_name)}">`).join('');
     return DELIVERY_ZONES;
+  }
+  async function renderExpenseSort(){
+    const C = document.getElementById('admContent');
+    if(!C) return;
+    C.innerHTML = '<div class="empty-note">... جاري التحميل</div>';
+    try{
+      const { data, error } = await db.from('expenses').select('*').eq('category','سحب من الدرج').order('expense_date',{ascending:false});
+      if(error){ C.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message||'خطأ')}</div>`; return; }
+      const rows = data||[];
+      C.innerHTML = `
+        <div style="color:var(--muted);font-weight:700;font-size:.85rem;margin-bottom:14px">كل المصاريف يلي جاية من "سحب الدرج" وبعدها ما اتصنّفت — حدّدي نوع كل وحدة، وبتترتّب صح بتقرير "📋 المصاريف" العادي تلقائيًا.</div>
+        ${!rows.length ? '<div class="empty-note">✅ ما في مصاريف محتاجة تصنيف حاليًا — كل شي مرتّب</div>' : `
+        <div class="tbl-wrap"><table class="tbl">
+          <tr><th>التاريخ</th><th>السبب</th><th>المبلغ</th><th>الحالة</th><th>التصنيف</th><th></th></tr>
+          ${rows.map(e=>`<tr>
+            <td>${e.expense_date}</td>
+            <td>${esc(e.title||e.description||'—')}</td>
+            <td>${fmt(e.amount)} ${CURRENCY}</td>
+            <td>${e.approval_status==='approved'?'✅ موافَق':e.approval_status==='pending'?'⏳ معلّق':esc(e.approval_status||'—')}</td>
+            <td><select id="es_cat_${e.id}" style="min-width:160px">${EXPENSE_CATEGORIES.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('')}</select></td>
+            <td><button class="mini ok" onclick="saveExpenseCategory('${e.id}')">حفظ ✓</button></td>
+          </tr>`).join('')}
+        </table></div>`}`;
+    }catch(e){ C.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; }
+  }
+  async function saveExpenseCategory(id){
+    const cat = document.getElementById('es_cat_'+id)?.value;
+    if(!cat) return;
+    try{
+      const { error } = await db.from('expenses').update({ category: cat }).eq('id', id);
+      if(error){ toast('✗ '+error.message); return; }
+      await logActivity('expense_classify', 'تصنيف مصروف: '+cat);
+      toast('✓ انصنّف كـ"'+cat+'"');
+      renderExpenseSort();
+    }catch(e){ toast('✗ '+e.message); }
   }
   async function renderDeliveryZones(){
     const C = document.getElementById('admContent');
