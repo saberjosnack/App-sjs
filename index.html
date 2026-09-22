@@ -1525,7 +1525,7 @@
     box.appendChild(line);
   }
 
-  const APP_VERSION = '2026-09-22-36';
+  const APP_VERSION = '2026-09-22-37';
   // 🔄 فحص تلقائي للنسخة — يحل مشكلة "الصفحة ما بتاخد آخر تحديث" نهائيًا: كل شوي منقارن نسختنا
   // المحمّلة حاليًا مع ملف version.txt الحقيقي على السيرفر (بدون كاش أبدًا). لو مختلفة، معناته
   // في نسخة أحدث انرفعت، فمنعمل تحديث كامل للصفحة تلقائيًا بدون ما ننتظر حدا يسكر التبويب يدويًا.
@@ -5287,22 +5287,39 @@
     if(cnt) cnt.textContent = '✓ '+CUST_SELECTED.size+' عميل محدد';
   }
   let __bulkWaQueue = [];
-  function openBulkWhatsapp(){
+  async function openBulkWhatsapp(){
     if(!CUST_SELECTED.size){ toast('⚠️ حدد عميل واحد على الأقل'); return; }
+    // 🎟️ أكواد الخصم ممكن ما تكون محمّلة أصلًا لو ما زرتي شاشة "أكواد الخصم" بهالجلسة
+    if(!window.__CODES){
+      const { data: cd } = await db.from('discount_codes').select('*');
+      window.__CODES = cd||[];
+    }
     const defaultMsg = SETTINGS.feedback_msg_template || 'مرحبا [الاسم] 🙏 شو رأيك بطلبك الأخير من صابر جو سناك؟ رأيك بهمنا كتير وبيساعدنا نتحسّن. لو عندك دقيقة، تقييمك على خرائط جوجل بفرحنا كتير 🌟 https://www.google.com/maps/place/Saber+Jo+Snack/@32.0186841,35.8578738,15.33z/data=!4m8!3m7!1s0x151c9f2da3f2b8e9:0xe10b35d58f8bc73!8m2!3d32.0225298!4d35.8554483!9m1!1b1!16s%2Fg%2F11yww9mzpw?entry=ttu&g_ep=EgoyMDI2MDcyMi4wIKXMDSoASAFQAw%3D%3D شكرًا إلك 💛';
+    const activeCodes = (window.__CODES||[]).filter(c=>c.is_active);
     modal(`<h3>📢 رسالة واتساب جماعية</h3>
       <div style="color:var(--muted);font-size:.82rem;font-weight:700;margin-bottom:10px">هيك بتحدد لكل عميل واحد لحاله (واتساب ما بيسمح إرسال جماعي تلقائي بدون تطبيق رسمي) — بس هي أسرع طريقة: رسالة جاهزة، تفتح واتساب لكل عميل، تضغط إرسال، وننتقل للتالي.</div>
+      <div class="fld"><label>🎟️ إرفاق كود خصم (اختياري — عشان نقدر نتتبّع مين استلم خصم لاحقًا)</label>
+        <select id="bulk_code">
+          <option value="">— بدون كود —</option>
+          ${activeCodes.map(c=>`<option value="${c.id}">${esc(c.code)} — ${c.kind==='percent'?c.value+'%':fmt(c.value)+' '+CURRENCY}</option>`).join('')}
+        </select>
+      </div>
       <div class="fld"><label>نص الرسالة</label>
         <textarea id="bulk_msg" rows="5" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;font-family:inherit;font-size:1rem" placeholder="مرحبا [الاسم]، شو رأيك بطلبك الأخير من صابر جو سناك؟ رأيك بهمنا 🙏">${esc(defaultMsg)}</textarea>
-        <div style="color:var(--muted);font-size:.78rem;margin-top:4px">💡 اكتب <b>[الاسم]</b> بأي مكان بالرسالة وبينحط اسم كل عميل تلقائيًا. 💡 تقدر تغيّر النص الافتراضي بشكل دائم من ⚙️ الإعدادات.</div>
+        <div style="color:var(--muted);font-size:.78rem;margin-top:4px">💡 اكتب <b>[الاسم]</b> بأي مكان بالرسالة وبينحط اسم كل عميل تلقائيًا. لو اخترتي كود خصم، بينحط تلقائيًا بآخر الرسالة. 💡 تقدر تغيّر النص الافتراضي بشكل دائم من ⚙️ الإعدادات.</div>
       </div>
       <div class="m-act"><button class="save" onclick="startBulkWhatsapp()">🚀 ابدأ الإرسال (${CUST_SELECTED.size})</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
   }
   function startBulkWhatsapp(){
-    const msg = document.getElementById('bulk_msg').value.trim();
+    let msg = document.getElementById('bulk_msg').value.trim();
     if(!msg){ toast('⚠️ اكتب نص الرسالة'); return; }
+    const codeId = document.getElementById('bulk_code')?.value || null;
+    const codeObj = codeId ? (window.__CODES||[]).find(c=>c.id===codeId) : null;
+    if(codeObj) msg += '\n\n🎟️ كود الخصم إلك: '+codeObj.code;
     __bulkWaQueue = [...CUST_SELECTED].map(id=>CUSTOMERS.find(c=>c.id===id)).filter(Boolean);
     window.__bulkWaMsg = msg;
+    window.__bulkWaCodeId = codeId;
+    window.__bulkWaCodeText = codeObj?.code || null;
     window.__bulkWaIdx = 0;
     closeModal();
     sendNextBulkWhatsapp();
@@ -5321,10 +5338,18 @@
       <div style="font-weight:900;font-size:1.1rem;margin-bottom:8px">👤 ${esc(c.name)} — <span dir="ltr">${esc(c.phone)}</span></div>
       <div style="background:var(--cream);border-radius:10px;padding:10px;margin-bottom:12px;white-space:pre-wrap">${esc(personalMsg)}</div>
       <div class="m-act">
-        <button class="save" onclick="window.open('https://wa.me/${waPhone}?text=${encodeURIComponent(personalMsg)}','_blank');window.__bulkWaIdx++;sendNextBulkWhatsapp()">📱 فتح واتساب وإرسال</button>
+        <button class="save" onclick="window.open('https://wa.me/${waPhone}?text=${encodeURIComponent(personalMsg)}','_blank');logDiscountSendIfAny('${c.id}');window.__bulkWaIdx++;sendNextBulkWhatsapp()">📱 فتح واتساب وإرسال</button>
         <button class="cancel" onclick="window.__bulkWaIdx++;sendNextBulkWhatsapp()">⏭️ تخطي</button>
       </div>
       <div style="text-align:center;margin-top:10px"><button class="mini del" onclick="closeModal();clearCustSelection()">✕ إيقاف الإرسال كليًا</button></div>`);
+  }
+  // 🎟️ لو الرسالة الجماعية مرفق فيها كود خصم، نسجّل لكل عميل ضغط "إرسال" فعليًا إنه استلم هالكود —
+  // عشان نقدر نفلتر لاحقًا "مين استلم خصم فعّال" و"مين لسا ما استلم"
+  async function logDiscountSendIfAny(customerId){
+    if(!window.__bulkWaCodeId) return;
+    try{
+      await db.from('customer_discount_sends').insert({ customer_id: customerId, discount_code_id: window.__bulkWaCodeId, code_text: window.__bulkWaCodeText });
+    }catch(e){ console.error('log discount send failed:', e); }
   }
   function askCustomerRating(customerId, orderId, custName){
     modal(`<h3>⭐ تقييم العميل${custName?' — '+esc(custName):''}</h3>
@@ -14432,7 +14457,17 @@ window.__lastEmpMealsData = null;
   async function exportCustomersExcel(){
     try{
       toast('⏳ جاري تجهيز الملف...');
-      const { data: customers } = await db.from('customers').select('*').limit(20000);
+      let customers = [];
+      { let cf=0; const cp=1000;
+        while(true){
+          const { data: cd, error: ce } = await db.from('customers').select('*').range(cf, cf+cp-1);
+          if(ce){ console.error('customers page error:', ce); break; }
+          if(!cd || !cd.length) break;
+          customers = customers.concat(cd);
+          if(cd.length < cp) break;
+          cf += cp;
+        }
+      }
       const custIds = (customers||[]).map(c=>c.id);
       const orderCounts = await computeOrderCounts(custIds);
       const { data: ratedOrders } = custIds.length ? await db.from('orders').select('customer_id, customer_rating, total').in('customer_id', custIds) : {data:[]};
@@ -14543,7 +14578,17 @@ window.__lastEmpMealsData = null;
       // 🔧 إصلاح مهم: كان محدد بـ500 عميل بدون أي ترتيب (limit عشوائي) — لو عندك أكتر من 500
       // عميل، عملاء جداد أو محدّثين ممكن ما يطلعوا أصلًا لأنهم برا الـ500 يلي رجعت. شلنا الحد
       // (أو رفعناه لرقم كبير جدًا كأمان) عشان كل العملاء يدخلوا بالحساب صح.
-      const { data: customers } = await db.from('customers').select('*').limit(20000);
+      let customers = [];
+      { let cf=0; const cp=1000;
+        while(true){
+          const { data: cd, error: ce } = await db.from('customers').select('*').range(cf, cf+cp-1);
+          if(ce){ console.error('customers page error:', ce); break; }
+          if(!cd || !cd.length) break;
+          customers = customers.concat(cd);
+          if(cd.length < cp) break;
+          cf += cp;
+        }
+      }
       // العدد الحقيقي للطلبات من جدول الطلبات (بدل العداد المخزّن اللي ممكن ينزاح)
       const custIds = (customers||[]).map(c=>c.id);
       const orderCounts = await computeOrderCounts(custIds);
@@ -14593,6 +14638,8 @@ window.__lastEmpMealsData = null;
             <input type="date" id="topCustTo" value="${localTodayStr()}" style="border:1.5px solid var(--line);border-radius:8px;padding:6px 8px">
             <button class="mini ok" style="background:var(--maroon);color:var(--yellow)" onclick="filterCustomersByRange(document.getElementById('topCustFrom').value, document.getElementById('topCustTo').value)">📆 فلترة الفترة (لرسالة دعائية)</button>
           </div>
+          <button class="mini ok" style="background:#2e7d32" onclick="filterCustomersWithActiveDiscount(true)">🎟️ استلموا خصم فعّال</button>
+          <button class="mini ok" style="background:#e8890c" onclick="filterCustomersWithActiveDiscount(false)">📭 ما استلموا خصم</button>
           <button class="mini" onclick="TOP_CUST_DATA=TOP_CUST_ALL.slice();document.getElementById('topCustTableWrap').innerHTML=renderTopCustRows(TOP_CUST_DATA)">↩️ إلغاء الفلتر (كل العملاء)</button>
         </div>
         <div id="topCustTableWrap">${renderTopCustRows(TOP_CUST_DATA)}</div>
@@ -14622,6 +14669,23 @@ window.__lastEmpMealsData = null;
       TOP_CUST_DATA = TOP_CUST_ALL.filter(c=>ids.has(c.id));
       document.getElementById('topCustTableWrap').innerHTML = renderTopCustRows(TOP_CUST_DATA);
       toast('✓ '+ids.size+' عميل طلبوا بهاي الفترة');
+    }catch(e){ toast('✗ '+e.message); }
+  }
+  // 🎟️ فلترة العملاء حسب "استلموا خصم فعّال" أو "لسا ما استلموا" — بالاعتماد على سجل الإرسال الفعلي
+  // (customer_discount_sends) مقارنة بحالة الكود نفسه (is_active) بلحظة الفحص، مش لحظة الإرسال.
+  async function filterCustomersWithActiveDiscount(wantReceived){
+    toast('⏳ جاري الفحص...');
+    try{
+      const { data: sends, error } = await db.from('customer_discount_sends').select('customer_id, discount_code_id');
+      if(error){ toast('✗ '+error.message); return; }
+      if(!window.__CODES){ const { data: cd } = await db.from('discount_codes').select('*'); window.__CODES = cd||[]; }
+      const activeCodeIds = new Set((window.__CODES||[]).filter(c=>c.is_active).map(c=>c.id));
+      const custWithActiveDiscount = new Set((sends||[]).filter(s=>activeCodeIds.has(s.discount_code_id)).map(s=>s.customer_id));
+      TOP_CUST_DATA = wantReceived
+        ? TOP_CUST_ALL.filter(c=>custWithActiveDiscount.has(c.id))
+        : TOP_CUST_ALL.filter(c=>!custWithActiveDiscount.has(c.id));
+      document.getElementById('topCustTableWrap').innerHTML = renderTopCustRows(TOP_CUST_DATA);
+      toast('✓ '+TOP_CUST_DATA.length+' عميل');
     }catch(e){ toast('✗ '+e.message); }
   }
   function renderTopCustRows(list){
