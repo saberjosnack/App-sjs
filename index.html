@@ -548,6 +548,7 @@
         <button class="mini ok" style="background:#0d6efd" onclick="filterTodayCustomersMain()">📅 عملاء اليوم بس (وحددهم للإرسال)</button>
         <button class="mini" onclick="loadCustomers()">↩️ إلغاء الفلتر</button>
       </div>
+      <div id="custTotalCount" style="background:var(--maroon);color:var(--yellow);border-radius:12px;padding:12px 18px;margin-bottom:12px;font-weight:900;font-size:1.05rem;display:inline-block"></div>
       <div id="custBulkBar" class="hidden" style="display:flex;gap:8px;align-items:center;margin-bottom:10px;background:#e6f7ec;border:1.5px solid var(--ok);border-radius:10px;padding:8px 12px">
         <b id="custBulkCount" style="color:var(--ok)"></b>
         <button class="mini ok" onclick="openBulkWhatsapp()">📢 إرسال رسالة واتساب للمختارين</button>
@@ -1524,7 +1525,7 @@
     box.appendChild(line);
   }
 
-  const APP_VERSION = '2026-09-22-34';
+  const APP_VERSION = '2026-09-22-36';
   // 🔄 فحص تلقائي للنسخة — يحل مشكلة "الصفحة ما بتاخد آخر تحديث" نهائيًا: كل شوي منقارن نسختنا
   // المحمّلة حاليًا مع ملف version.txt الحقيقي على السيرفر (بدون كاش أبدًا). لو مختلفة، معناته
   // في نسخة أحدث انرفعت، فمنعمل تحديث كامل للصفحة تلقائيًا بدون ما ننتظر حدا يسكر التبويب يدويًا.
@@ -4296,25 +4297,15 @@
       const overItems = cart.filter(l=>!l.item.exclude_employee_discount && parseFloat(l.item.price||0)>priceLimit);
       if(overItems.length && window.__empMealPriceApprovedFor !== empMealName){
         const namesStr = overItems.map(l=>l.item.name_ar+' ('+fmt(l.item.price)+' '+CURRENCY+')').join('، ');
-        const pin = prompt('⛔ الأصناف التالية سعرها أكتر من الحد المسموح بوجبة موظف ('+fmt(priceLimit)+' '+CURRENCY+'):\n'+namesStr+'\n\nممنوع بدون موافقة المالك.\nأدخلي الرقم السري تبع المالك للموافقة:');
+        const pin = prompt('⛔ الأصناف التالية سعرها أكتر من الحد المسموح بوجبة موظف ('+fmt(priceLimit)+' '+CURRENCY+'):\n'+namesStr+'\n\nممنوع بدون موافقة المالك.\nأدخلي رمز الموافقة:');
         if(pin===null){ unlockSubmit('saveOrder'); return; }
-        // 🔧 إصلاح: قائمة STAFF المحلية بجهاز الكاشير غالبًا محمّلة بأعمدة ناقصة (بدون pin/permissions)
-        // عشان خفة الأداء بالشاشات العادية — فمنسأل القاعدة مباشرة هون بدل ما نعتمد عليها، وإلا أي
-        // رقم (حتى الصحيح) كان رح يفشل دايمًا.
-        let ownerMatch = null;
-        try{
-          const { data: pinMatches } = await db.from('staff').select('id, full_name, role, role_id, permissions, is_active').eq('pin', String(pin).trim()).eq('is_active', true);
-          ownerMatch = (pinMatches||[]).find(s=>{
-            if(s.role==='admin') return true;
-            if(s.role==='custom' && s.permissions?.act_as_owner) return true;
-            if(s.role==='custom' && (window.CUSTOM_ROLES||[]).find(r=>r.id===s.role_id)?.permissions?.act_as_owner) return true;
-            return false;
-          });
-        }catch(e){ console.error('owner pin verify failed:', e); }
-        if(!ownerMatch){ toast('⛔ رقم سري غلط — ما تمّت الموافقة'); unlockSubmit('saveOrder'); return; }
+        // 🔐 رمز موافقة مستقل ومخصّص (مش رقم دخول أي موظف) — ثابت من شاشة الإعدادات، ما بيتأثر
+        // لو المالك غيّر رقم دخوله الشخصي، ومحدّد لهالغرض بالذات بس.
+        if(!SETTINGS.manager_approval_code){ toast('⚠️ ما في رمز موافقة محدّد بالإعدادات — روحي "⚙️ الإعدادات" وحطّي واحد أول'); unlockSubmit('saveOrder'); return; }
+        if(String(pin).trim() !== String(SETTINGS.manager_approval_code).trim()){ toast('⛔ رمز الموافقة غلط — ما تمّت الموافقة'); unlockSubmit('saveOrder'); return; }
         window.__empMealPriceApprovedFor = empMealName;
-        await logActivity('emp_meal_price_approve', 'موافقة '+ownerMatch.full_name+' على أصناف فوق الحد بوجبة '+empMealName+': '+namesStr);
-        toast('✓ تمت الموافقة من '+ownerMatch.full_name);
+        await logActivity('emp_meal_price_approve', 'موافقة على أصناف فوق الحد بوجبة '+empMealName+': '+namesStr);
+        toast('✓ تمت الموافقة');
       }
     }
 
@@ -5438,6 +5429,8 @@
     renderCustomers();
   }
   function renderCustomers(){
+    const totalEl = document.getElementById('custTotalCount');
+    if(totalEl) totalEl.textContent = '👥 إجمالي عدد العملاء: '+CUSTOMERS.length;
     const custSearch = document.getElementById('custSearch');
     const q = custSearch ? (custSearch.value||'').trim() : '';
     const minOrdersEl = document.getElementById('custMinOrders');
@@ -6237,7 +6230,11 @@
         </div>
         <div class="fld" style="margin-top:10px"><label>🍔 أعلى سعر صنف مسموح بوجبة موظف (بدون موافقتك)</label>
           <input type="number" id="f_empMealPriceLimit" min="0" step="0.25" value="${SETTINGS.emp_meal_price_limit ?? 2.5}" style="width:150px">
-          <div style="font-size:.76rem;color:var(--muted);font-weight:600;margin-top:4px">أي صنف سعره أعلى من هالرقم، الكاشير ما بيقدر يضيفه لوجبة موظف إلا بموافقتك — لازم تدخلي رقمك السري (PIN) لحظتها بالكاشير للموافقة.</div>
+          <div style="font-size:.76rem;color:var(--muted);font-weight:600;margin-top:4px">أي صنف سعره أعلى من هالرقم، الكاشير ما بيقدر يضيفه لوجبة موظف إلا بموافقتك.</div>
+        </div>
+        <div class="fld" style="margin-top:10px;background:#fff3cd;border-radius:10px;padding:12px 14px"><label>🔐 رمز الموافقة (منفصل تمامًا عن رقم دخولك الشخصي)</label>
+          <input type="text" id="f_approvalCode" inputmode="numeric" value="${esc(SETTINGS.manager_approval_code||'')}" placeholder="مثال: 9999" style="width:150px">
+          <div style="font-size:.76rem;color:var(--muted);font-weight:600;margin-top:4px">هاد الرمز يلي الكاشير بيطلبه للموافقة على أصناف الوجبات الغالية وسحوبات الدرج — ثابت وما بيتغيّر حتى لو غيّرتي رقم دخولك الشخصي، وتقدري تعدّليه من هون بس أي وقت.</div>
         </div>
         <div class="fld" style="margin-top:10px"><label>🕑 أقل فاصل زمني بين بريك وبريك (دقيقة)</label>
           <input type="number" id="f_breakCooldown" min="0" step="15" value="${SETTINGS.break_cooldown_minutes ?? 120}" style="width:150px">
@@ -14582,6 +14579,7 @@ window.__lastEmpMealsData = null;
       byJoinDate.forEach((c,idx)=>{ c.seq_no = idx+1; });
       TOP_CUST_DATA = TOP_CUST_ALL.slice(); // 🔧 كل العملاء افتراضيًا، مش أفضل ١٠٠ بس
       C.innerHTML = `
+        <div style="background:var(--maroon);color:var(--yellow);border-radius:12px;padding:12px 18px;margin-bottom:12px;font-weight:900;font-size:1.05rem;display:inline-block">👥 إجمالي عدد العملاء: ${TOP_CUST_ALL.length}</div>
         <div style="color:var(--muted);font-weight:700;font-size:.85rem;margin-bottom:10px">مرتبين حسب عدد الطلبات — استخدم الفلتر لترتيب حسب التقييم بدل هيك. الرقم التسلسلي # حسب أول يوم انضاف فيه العميل، مش حسب هالترتيب.</div>
         <input id="topCustSearch" placeholder="🔍 بحث بالاسم / الهاتف / العنوان (بكل العملاء)" oninput="searchTopCust(this.value)" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:10px">
         <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
@@ -16220,6 +16218,7 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
       hr_portal_show_advances: document.getElementById('f_hrShowAdvances')?.checked ?? true,
       break_limit_minutes: parseInt(document.getElementById('f_breakLimit')?.value) || 60,
       emp_meal_price_limit: parseFloat(document.getElementById('f_empMealPriceLimit')?.value) ?? 2.5,
+      manager_approval_code: document.getElementById('f_approvalCode')?.value.trim() || '',
       break_cooldown_minutes: parseInt(document.getElementById('f_breakCooldown')?.value ?? 120),
       drawer_pin_threshold: parseFloat(document.getElementById('f_drawerPinThreshold')?.value) ?? 10,
       hr_portal_show_meals: document.getElementById('f_hrShowMeals')?.checked ?? true,
