@@ -1524,7 +1524,7 @@
     box.appendChild(line);
   }
 
-  const APP_VERSION = '2026-09-22-33';
+  const APP_VERSION = '2026-09-22-34';
   // 🔄 فحص تلقائي للنسخة — يحل مشكلة "الصفحة ما بتاخد آخر تحديث" نهائيًا: كل شوي منقارن نسختنا
   // المحمّلة حاليًا مع ملف version.txt الحقيقي على السيرفر (بدون كاش أبدًا). لو مختلفة، معناته
   // في نسخة أحدث انرفعت، فمنعمل تحديث كامل للصفحة تلقائيًا بدون ما ننتظر حدا يسكر التبويب يدويًا.
@@ -14576,19 +14576,26 @@ window.__lastEmpMealsData = null;
         const r = ratingMap[c.id];
         return {...c, orders_count: orderCounts[c.id]||0, avgRating: r ? (r.sum/r.count) : null, ratingCount: r?.count||0};
       }).sort((a,b)=>(b.orders_count||0)-(a.orders_count||0));
-      TOP_CUST_DATA = TOP_CUST_ALL.slice(0,100);
+      // 🔢 رقم تسلسلي لكل عميل حسب أول يوم انضاف فيه (created_at) — عميل #1 هو أول عميل انضاف
+      // بالنظام من أول يوم، مش حسب الترتيب الحالي (عدد الطلبات)
+      const byJoinDate = TOP_CUST_ALL.slice().sort((a,b)=>new Date(a.created_at)-new Date(b.created_at));
+      byJoinDate.forEach((c,idx)=>{ c.seq_no = idx+1; });
+      TOP_CUST_DATA = TOP_CUST_ALL.slice(); // 🔧 كل العملاء افتراضيًا، مش أفضل ١٠٠ بس
       C.innerHTML = `
-        <div style="color:var(--muted);font-weight:700;font-size:.85rem;margin-bottom:10px">مرتبين حسب عدد الطلبات — استخدم الفلتر لترتيب حسب التقييم بدل هيك.</div>
-        <input id="topCustSearch" placeholder="🔍 بحث بالاسم / الهاتف / العنوان (بكل العملاء مش بس أفضل 100)" oninput="searchTopCust(this.value)" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:10px">
+        <div style="color:var(--muted);font-weight:700;font-size:.85rem;margin-bottom:10px">مرتبين حسب عدد الطلبات — استخدم الفلتر لترتيب حسب التقييم بدل هيك. الرقم التسلسلي # حسب أول يوم انضاف فيه العميل، مش حسب هالترتيب.</div>
+        <input id="topCustSearch" placeholder="🔍 بحث بالاسم / الهاتف / العنوان (بكل العملاء)" oninput="searchTopCust(this.value)" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:10px">
         <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
           <button class="mini ok" onclick="sortTopCust('orders')">🔢 الأكثر طلبات</button>
           <button class="mini edit" onclick="sortTopCust('rating')">⭐ الأفضل تقييم</button>
           <button class="mini ok" style="background:#0d6efd" onclick="filterTodayCustomers()">📅 عملاء اليوم بس (وحددهم للإرسال)</button>
-          <div style="display:inline-flex;gap:6px;align-items:center;background:#fff8e1;border-radius:10px;padding:4px 8px">
-            <input type="date" id="topCustDatePick" value="${localTodayStr()}" style="border:1.5px solid var(--line);border-radius:8px;padding:6px 8px">
-            <button class="mini ok" style="background:var(--maroon);color:var(--yellow)" onclick="filterCustomersByDate(document.getElementById('topCustDatePick').value)">📆 عملاء هاليوم بالتحديد</button>
+          <div style="display:inline-flex;gap:6px;align-items:center;background:#fff8e1;border-radius:10px;padding:4px 8px;flex-wrap:wrap">
+            <label style="font-weight:800;font-size:.8rem">من</label>
+            <input type="date" id="topCustFrom" style="border:1.5px solid var(--line);border-radius:8px;padding:6px 8px">
+            <label style="font-weight:800;font-size:.8rem">إلى</label>
+            <input type="date" id="topCustTo" value="${localTodayStr()}" style="border:1.5px solid var(--line);border-radius:8px;padding:6px 8px">
+            <button class="mini ok" style="background:var(--maroon);color:var(--yellow)" onclick="filterCustomersByRange(document.getElementById('topCustFrom').value, document.getElementById('topCustTo').value)">📆 فلترة الفترة (لرسالة دعائية)</button>
           </div>
-          <button class="mini" onclick="TOP_CUST_DATA=TOP_CUST_ALL.slice(0,100);document.getElementById('topCustTableWrap').innerHTML=renderTopCustRows(TOP_CUST_DATA)">↩️ إلغاء الفلتر</button>
+          <button class="mini" onclick="TOP_CUST_DATA=TOP_CUST_ALL.slice();document.getElementById('topCustTableWrap').innerHTML=renderTopCustRows(TOP_CUST_DATA)">↩️ إلغاء الفلتر (كل العملاء)</button>
         </div>
         <div id="topCustTableWrap">${renderTopCustRows(TOP_CUST_DATA)}</div>
         <div id="topCustBulkBar" class="hidden" style="margin-top:10px;background:#e6f7ec;border:1.5px solid var(--ok);border-radius:10px;padding:8px 12px">
@@ -14597,18 +14604,41 @@ window.__lastEmpMealsData = null;
         </div>`;
     }catch(e){ C.innerHTML = `<div class="alert-red">⚠️ ${esc(e.message||'خطأ')}</div>`; console.error(e); }
   }
+  // 📆 فلترة عملاء طلبوا خلال فترة (من-إلى) — مفيدة لتحديد جمهور رسالة دعائية محدّدة الفترة
+  async function filterCustomersByRange(fromDate, toDate){
+    if(!fromDate || !toDate){ toast('⚠️ حدّدي تاريخ البداية والنهاية'); return; }
+    try{
+      let all = []; let from = 0; const pageSize = 1000;
+      while(true){
+        const { data, error } = await db.from('orders').select('customer_id')
+          .gte('created_at', fromDate+'T00:00:00').lte('created_at', toDate+'T23:59:59')
+          .not('customer_id','is',null).neq('status','cancelled').range(from, from+pageSize-1);
+        if(error){ toast('✗ '+error.message); return; }
+        if(!data || !data.length) break;
+        all = all.concat(data);
+        if(data.length < pageSize) break;
+        from += pageSize;
+      }
+      const ids = new Set(all.map(o=>o.customer_id));
+      if(!ids.size){ toast('⚠️ ما في عملاء طلبوا بهاي الفترة'); return; }
+      TOP_CUST_DATA = TOP_CUST_ALL.filter(c=>ids.has(c.id));
+      document.getElementById('topCustTableWrap').innerHTML = renderTopCustRows(TOP_CUST_DATA);
+      toast('✓ '+ids.size+' عميل طلبوا بهاي الفترة');
+    }catch(e){ toast('✗ '+e.message); }
+  }
   function renderTopCustRows(list){
     return `<div class="tbl-wrap"><table class="tbl">
-      <tr><th></th><th>الاسم</th><th>الهاتف</th><th>العنوان</th><th>عدد الطلبات</th><th>متوسط التقييم</th><th></th></tr>
+      <tr><th></th><th>#</th><th>الاسم</th><th>الهاتف</th><th>العنوان</th><th>عدد الطلبات</th><th>متوسط التقييم</th><th></th></tr>
       ${list.map(c=>`<tr>
         <td><input type="checkbox" ${CUST_SELECTED.has(c.id)?'checked':''} onchange="toggleCustSelect('${c.id}',this.checked);updateCustBulkBarTop()" style="width:18px;height:18px"></td>
+        <td style="color:var(--muted);font-weight:800">${c.seq_no||'—'}</td>
         <td><b>${c.flagged?'🚩 ':''}${esc(c.name)}</b></td>
         <td dir="ltr" style="text-align:right">${esc(c.phone)}</td>
         <td style="font-size:.82rem;color:var(--muted)">${esc(c.address||'—')}</td>
         <td><b style="color:var(--red)">${c.orders_count||0}</b></td>
         <td>${c.avgRating?('⭐ '+c.avgRating.toFixed(1)+' ('+c.ratingCount+')'):'—'}</td>
         <td><button class="mini ok" onclick="sendVipMessage('${c.id}')">🎁 رسالة VIP</button></td>
-      </tr>`).join('')||'<tr><td colspan="7" class="empty-note">ما في نتائج</td></tr>'}
+      </tr>`).join('')||'<tr><td colspan="8" class="empty-note">ما في نتائج</td></tr>'}
     </table></div>`;
   }
   async function filterTodayCustomers(){
