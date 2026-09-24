@@ -376,6 +376,8 @@
     <div class="brand">S<em>J</em>S <span style="font-weight:600;font-size:.85rem">POS</span></div>
     <div id="shiftBadge" class="hidden" onclick="if(!currentShift)startShift()">🔴 لا يوجد شيفت مفتوح - اضغط لفتح</div>
     <button id="drawerBtn" class="hidden" onclick="openDrawerRequest()" style="background:var(--yellow);color:var(--maroon);border-radius:999px;padding:4px 12px;font-weight:900;font-size:.85rem">🔓 فتح الدرج</button>
+    <button id="menuReqBtn" class="hidden" onclick="openMenuRequestForm()" style="background:#0d6efd;color:#fff;border-radius:999px;padding:4px 12px;font-weight:900;font-size:.85rem">📋 طلب منيو</button>
+    <button id="menuReqPendingBtn" class="hidden" onclick="openPendingMenuRequestsPanel()" style="background:#7b2cbf;color:#fff;border-radius:999px;padding:4px 12px;font-weight:900;font-size:.85rem">🔔 طلبات منيو معلّقة<span id="menuReqPendingBadge"></span></button>
     <div id="overdueBadge" class="hidden">⏰ طلبات متأخرة!</div>
     <div id="readyBadge" class="hidden" style="background:var(--warn);color:#fff;border-radius:999px;padding:4px 12px;font-weight:900;font-size:.85rem;animation:blink 1s infinite">📦 طلبات جاهزة!</div>
     <div class="who"><span id="whoName"></span><br><span id="whoBranch"></span></div>
@@ -1332,6 +1334,7 @@
       spot_check: 'جرد عشوائي (فجائي) على أصناف مشكوك فيها',
       cross_branch_reports: 'رؤية كل الفروع (بحث الفواتير، سجل اليوم، التقارير) بدل فرعه بس',
       waste_manage: 'إدارة الإتلاف',
+      send_menu: '📋 طلب منيو للعميل (يحفظ رقمه ويرسل صور المنيو واتساب)',
     },
     '👑 صلاحيات خاصة (حساسة جدًا)': {
       act_as_owner: '🔑 كل صلاحيات المالك تلقائيًا (حزمة شاملة تغطي كل يلي فوق دفعة وحدة) — ما عدا "الأدوار" و"تصفير النظام"',
@@ -1339,8 +1342,8 @@
     },
   };
   const ROLE_DEFAULT_PERMS = {
-    cashier:    ['shift_open','shift_close','shift_report','drawer_open','order_create','order_takeaway','order_reprint','discount_code'],
-    callcenter: ['shift_open','shift_close','shift_report','order_create','order_takeaway','order_delivery','order_platform','order_edit','order_reprint','discount_code','customers_view','customers_edit'],
+    cashier:    ['shift_open','shift_close','shift_report','drawer_open','order_create','order_takeaway','order_reprint','discount_code','send_menu'],
+    callcenter: ['shift_open','shift_close','shift_report','order_create','order_takeaway','order_delivery','order_platform','order_edit','order_reprint','discount_code','customers_view','customers_edit','send_menu'],
     admin:      Object.values(PERMS).flatMap(g=>Object.keys(g)),
   };
   /* ================= الأدوار المخصصة (يعملها المالك) ================= */
@@ -1525,7 +1528,7 @@
     box.appendChild(line);
   }
 
-  const APP_VERSION = '2026-09-22-37';
+  const APP_VERSION = '2026-09-22-38';
   // 🔄 فحص تلقائي للنسخة — يحل مشكلة "الصفحة ما بتاخد آخر تحديث" نهائيًا: كل شوي منقارن نسختنا
   // المحمّلة حاليًا مع ملف version.txt الحقيقي على السيرفر (بدون كاش أبدًا). لو مختلفة، معناته
   // في نسخة أحدث انرفعت، فمنعمل تحديث كامل للصفحة تلقائيًا بدون ما ننتظر حدا يسكر التبويب يدويًا.
@@ -1694,6 +1697,7 @@
     setInterval(checkDevicesOffline, 60000);
     checkUnreadMessages();
     setInterval(checkUnreadMessages, 12000);
+    if(isCallCenter()){ showPendingMenuRequests(); setInterval(showPendingMenuRequests, 30000); }
     checkShift();
     if (shiftCheckInterval) clearInterval(shiftCheckInterval);
     shiftCheckInterval = setInterval(checkShift, 30000);
@@ -1969,6 +1973,10 @@
       const badge = document.getElementById('shiftBadge');
       const drawerBtn = document.getElementById('drawerBtn');
       if (drawerBtn) drawerBtn.classList.toggle('hidden', !currentShift || !perm('drawer_open'));
+      const menuReqBtn = document.getElementById('menuReqBtn');
+      if (menuReqBtn) menuReqBtn.classList.toggle('hidden', !perm('send_menu'));
+      const menuReqPendingBtn = document.getElementById('menuReqPendingBtn');
+      if (menuReqPendingBtn) menuReqPendingBtn.classList.toggle('hidden', !isCallCenter());
       if (badge) {
         if(currentShift){
           badge.classList.remove('hidden');
@@ -2484,6 +2492,75 @@
     setTimeout(()=>{ try{ box.remove(); }catch(e){} }, 60000);
   }
   /* ================= فتح الدرج — سحب نقدي بسبب، بانتظار موافقة المدير ================= */
+  /* ================= 📋 طلب منيو — حفظ رقم عميل + إرسال صور المنيو واتساب ================= */
+  function openMenuRequestForm(){
+    if(!perm('send_menu')){ toast('⛔ ما عندك صلاحية'); return; }
+    const photos = SETTINGS.menu_photo_urls ? JSON.parse(SETTINGS.menu_photo_urls) : [];
+    modal(`<h3>📋 طلب منيو</h3>
+      <div style="color:var(--muted);font-size:.82rem;font-weight:700;margin-bottom:10px">${photos.length?'':'⚠️ ما في صور منيو مرفوعة — كلّمي المالكة ترفعهم من ⚙️ الإعدادات أول.'}${isCallCenter()?'عندك واتساب هون — بيفتح فورًا لترسلي.':'جهازك مش عليه واتساب — رح ينرسل طلب معلّق للكول سنتر يرسلوه من عندهم.'}</div>
+      <div class="fld"><label>📱 رقم هاتف العميل *</label><input id="mr_phone" inputmode="tel" dir="ltr" placeholder="07XXXXXXXX"></div>
+      <div class="fld"><label>الاسم (اختياري)</label><input id="mr_name" placeholder="اسم العميل"></div>
+      <div class="m-act"><button class="save" onclick="submitMenuRequest()">إرسال ✓</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`);
+  }
+  async function submitMenuRequest(){
+    const phone = document.getElementById('mr_phone')?.value.trim();
+    const name = document.getElementById('mr_name')?.value.trim() || null;
+    if(!phone || phone.replace(/\D/g,'').length<8){ toast('⚠️ رقم الهاتف إجباري وصحيح'); return; }
+    try{
+      // 💾 نحفظ/نحدّث العميل بقائمة العملاء دايمًا — بيانات مهمة نحافظ عليها حتى لو ما طلب أكل بعدها
+      const digits = phone.replace(/\D/g,'');
+      const { data: existing } = await db.from('customers').select('id, name').eq('phone', digits).maybeSingle();
+      let custId;
+      if(existing){ custId = existing.id; if(name && !existing.name) await db.from('customers').update({name}).eq('id',existing.id); }
+      else { const { data: nc, error: ncErr } = await db.from('customers').insert({phone:digits, name}).select().single(); if(ncErr){ toast('✗ '+ncErr.message); return; } custId = nc.id; }
+
+      const photos = SETTINGS.menu_photo_urls ? JSON.parse(SETTINGS.menu_photo_urls) : [];
+      const msg = 'مرحبا'+(name?' '+name:'')+' 🙏\nهاد منيو *صابر جو سناك* 🍔:\n\n'+photos.join('\n')+'\n\nتقدر تطلب من عندنا مباشرة، تحت أمرك 💛';
+
+      if(isCallCenter()){
+        // 📱 عند الكول سنتر واتساب متاح — نفتحه فورًا
+        closeModal();
+        window.open('https://wa.me/'+toIntlPhone(digits)+'?text='+encodeURIComponent(msg), '_blank');
+        await logActivity('menu_request', 'إرسال منيو مباشر لـ'+digits);
+        toast('✓ فتح واتساب — أرسلي الرسالة');
+      } else {
+        // 🧾 الكاشير: ما عنده واتساب على جهازه — نسجّل طلب معلّق يشوفه الكول سنتر ويرسلوه من عندهم
+        const { error } = await db.from('menu_requests').insert({ customer_id: custId, phone: digits, name, status: 'pending', requested_by: ME.full_name||ME.username||'' });
+        if(error){ toast('✗ '+error.message); return; }
+        await logActivity('menu_request', 'طلب منيو معلّق للكول سنتر — '+digits);
+        closeModal();
+        toast('✓ انسجّل — رح يرسلهولها الكول سنتر');
+      }
+    }catch(e){ toast('✗ '+e.message); }
+  }
+  // 📋 شاشة صغيرة تظهر للكول سنتر بس — طلبات المنيو المعلّقة من الفروع، جاهزة للإرسال بضغطة وحدة
+  async function showPendingMenuRequests(){
+    if(!isCallCenter()){ return; }
+    try{
+      const { data, error } = await db.from('menu_requests').select('*').eq('status','pending').order('created_at',{ascending:true});
+      if(error || !data){ return; }
+      const badge = document.getElementById('menuReqPendingBadge');
+      if(badge) badge.textContent = data.length ? ' ('+data.length+')' : '';
+      window.__pendingMenuReqs = data;
+    }catch(e){}
+  }
+  function openPendingMenuRequestsPanel(){
+    const list = window.__pendingMenuReqs||[];
+    modal(`<h3>📋 طلبات منيو معلّقة (${list.length})</h3>
+      ${!list.length?'<div class="empty-note">ما في طلبات معلّقة حاليًا</div>':list.map(r=>`
+        <div style="background:#f7f2e9;border-radius:10px;padding:10px 14px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
+          <div><b>${esc(r.name||'—')}</b> — <span dir="ltr">${esc(r.phone)}</span><br><span style="font-size:.75rem;color:var(--muted)">طلبها: ${esc(r.requested_by||'—')}</span></div>
+          <button class="mini ok" onclick="sendPendingMenuRequest('${r.id}','${r.phone}','${esc(r.name||'')}')">📤 أرسل الآن</button>
+        </div>`).join('')}
+      <div class="m-act"><button class="cancel" onclick="closeModal()">إغلاق</button></div>`);
+  }
+  async function sendPendingMenuRequest(id, phone, name){
+    const photos = SETTINGS.menu_photo_urls ? JSON.parse(SETTINGS.menu_photo_urls) : [];
+    const msg = 'مرحبا'+(name?' '+name:'')+' 🙏\nهاد منيو *صابر جو سناك* 🍔:\n\n'+photos.join('\n')+'\n\nتقدر تطلب من عندنا مباشرة، تحت أمرك 💛';
+    window.open('https://wa.me/'+toIntlPhone(phone)+'?text='+encodeURIComponent(msg), '_blank');
+    await db.from('menu_requests').update({ status:'sent', sent_at: new Date().toISOString() }).eq('id', id);
+    toast('✓ اترسلت'); closeModal(); showPendingMenuRequests();
+  }
   async function openDrawerRequest(){
     if(!perm('drawer_open')){ toast('⛔ ما عندك صلاحية فتح الدرج'); return; }
     if(!currentShift){ toast('⚠️ لازم يكون عندك شيفت مفتوح'); return; }
@@ -6293,8 +6370,15 @@
           </select>
         </div>
         <div class="fld"><label>🖼️ شعار/صورة رأس الفاتورة</label>
-          <input type="file" id="f_logoFile" accept="image/*" onchange="resizeLogoImage(this)">
-          <div id="f_logoPrev" style="margin-top:6px">${SETTINGS.invoice_logo?`<img src="${SETTINGS.invoice_logo}" style="width:80px;height:80px;object-fit:contain;border:1px solid var(--line);border-radius:8px"> <button type="button" class="mini del" onclick="window.__logoImg='';document.getElementById('f_logoPrev').innerHTML='(انحذفت)'">حذف</button>`:''}</div>
+          <input type="file" id="f_logoFile" accept="image/*" onchange="uploadSettingsImage(this,'invoice_logo','f_logoPrev')">
+          <div id="f_logoPrev" style="margin-top:6px">${SETTINGS.invoice_logo?`<img src="${SETTINGS.invoice_logo}" style="width:80px;height:80px;object-fit:contain;border:1px solid var(--line);border-radius:8px"> <button type="button" class="mini del" onclick="db.from('settings').update({value:''}).eq('key','invoice_logo').then(()=>{SETTINGS.invoice_logo='';document.getElementById('f_logoPrev').innerHTML='(انحذفت)'})">حذف</button>`:''}</div>
+        </div>
+        <div class="fld" style="background:#eef6ff;border-radius:10px;padding:12px 14px">
+          <label>📸 صور المنيو (بترفعها مرة، وبتتبعت تلقائي لأي عميل بطلب المنيو)</label>
+          <input type="file" id="f_menuPhotoFile" accept="image/*" multiple onchange="uploadMenuPhotos(this)">
+          <div id="f_menuPhotosPrev" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+            ${(SETTINGS.menu_photo_urls?JSON.parse(SETTINGS.menu_photo_urls):[]).map((u,i)=>`<div style="position:relative"><img src="${u}" style="width:70px;height:70px;object-fit:cover;border-radius:8px;border:1px solid var(--line)"><button type="button" onclick="removeMenuPhoto(${i})" style="position:absolute;top:-6px;right:-6px;background:var(--red);color:#fff;border-radius:50%;width:20px;height:20px;font-size:.7rem">✕</button></div>`).join('')}
+          </div>
         </div>
         <div class="fld"><label>✍️ معلومات إضافية على الفاتورة (اختياري)</label>
           <input id="f_extraInfo" value="${esc(SETTINGS.invoice_extra_info||'')}" placeholder="مثال: الرقم الضريبي، سياسة الاستبدال..."></div>
@@ -16251,6 +16335,51 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
   }
 
 
+  // 📤 رفع صورة واحدة (شعار الفاتورة مثلًا) لمخزن Supabase Storage وحفظ رابطها بالإعدادات مباشرة
+  async function uploadSettingsImage(input, settingsKey, previewId){
+    const file = input.files?.[0]; if(!file) return;
+    const prev = document.getElementById(previewId);
+    if(prev) prev.innerHTML = '⏳ جاري الرفع...';
+    try{
+      const path = settingsKey+'_'+Date.now()+'_'+file.name.replace(/[^a-zA-Z0-9._-]/g,'');
+      const { error: upErr } = await db.storage.from('sjs-uploads').upload(path, file, { upsert:true });
+      if(upErr){ toast('✗ فشل الرفع: '+upErr.message); if(prev) prev.innerHTML=''; return; }
+      const { data: pub } = db.storage.from('sjs-uploads').getPublicUrl(path);
+      const url = pub?.publicUrl;
+      await db.from('settings').upsert({ key: settingsKey, value: url });
+      SETTINGS[settingsKey] = url;
+      if(prev) prev.innerHTML = `<img src="${url}" style="width:80px;height:80px;object-fit:contain;border:1px solid var(--line);border-radius:8px">`;
+      toast('✓ انرفعت');
+    }catch(e){ toast('✗ '+e.message); }
+  }
+  // 📸 رفع صور منيو متعددة دفعة وحدة — بتنحفظ روابطها كمصفوفة JSON بإعداد "menu_photo_urls"
+  async function uploadMenuPhotos(input){
+    const files = [...(input.files||[])]; if(!files.length) return;
+    toast('⏳ جاري رفع '+files.length+' صورة...');
+    try{
+      const existing = SETTINGS.menu_photo_urls ? JSON.parse(SETTINGS.menu_photo_urls) : [];
+      for(const file of files){
+        const path = 'menu_'+Date.now()+'_'+Math.random().toString(36).slice(2,8)+'_'+file.name.replace(/[^a-zA-Z0-9._-]/g,'');
+        const { error: upErr } = await db.storage.from('sjs-uploads').upload(path, file, { upsert:true });
+        if(upErr){ console.error('menu photo upload failed:', upErr); continue; }
+        const { data: pub } = db.storage.from('sjs-uploads').getPublicUrl(path);
+        if(pub?.publicUrl) existing.push(pub.publicUrl);
+      }
+      const jsonVal = JSON.stringify(existing);
+      await db.from('settings').upsert({ key:'menu_photo_urls', value: jsonVal });
+      SETTINGS.menu_photo_urls = jsonVal;
+      toast('✓ انرفعت الصور');
+      renderAdmin();
+    }catch(e){ toast('✗ '+e.message); }
+  }
+  async function removeMenuPhoto(idx){
+    const arr = SETTINGS.menu_photo_urls ? JSON.parse(SETTINGS.menu_photo_urls) : [];
+    arr.splice(idx,1);
+    const jsonVal = JSON.stringify(arr);
+    await db.from('settings').upsert({ key:'menu_photo_urls', value: jsonVal });
+    SETTINGS.menu_photo_urls = jsonVal;
+    toast('✓ اتحذفت'); renderAdmin();
+  }
   async function saveSettings(){
     if(!lockSubmit('saveSettings')) return;
     setTimeout(()=>unlockSubmit('saveSettings'), 15000);
