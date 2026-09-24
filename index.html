@@ -1528,7 +1528,7 @@
     box.appendChild(line);
   }
 
-  const APP_VERSION = '2026-09-22-39';
+  const APP_VERSION = '2026-09-22-42';
   // 🔄 فحص تلقائي للنسخة — يحل مشكلة "الصفحة ما بتاخد آخر تحديث" نهائيًا: كل شوي منقارن نسختنا
   // المحمّلة حاليًا مع ملف version.txt الحقيقي على السيرفر (بدون كاش أبدًا). لو مختلفة، معناته
   // في نسخة أحدث انرفعت، فمنعمل تحديث كامل للصفحة تلقائيًا بدون ما ننتظر حدا يسكر التبويب يدويًا.
@@ -1697,7 +1697,12 @@
     setInterval(checkDevicesOffline, 60000);
     checkUnreadMessages();
     setInterval(checkUnreadMessages, 12000);
-    if(isCallCenter()){ showPendingMenuRequests(); setInterval(showPendingMenuRequests, 30000); }
+    if(isCallCenter()){
+      // 🔔 نطلب إذن تنبيهات النظام بدري (لحظة الدخول)، مش وقت أول طلب — المتصفح بيحتاج وقتها
+      // إذن مسبق، وأحسن نطلبه بلحظة هادية بدل ما نستناه وقت أول طلب فعلي
+      try{ if('Notification' in window && Notification.permission==='default') Notification.requestPermission(); }catch(e){}
+      showPendingMenuRequests(); setInterval(showPendingMenuRequests, 30000);
+    }
     checkShift();
     if (shiftCheckInterval) clearInterval(shiftCheckInterval);
     shiftCheckInterval = setInterval(checkShift, 30000);
@@ -2515,7 +2520,7 @@
       else { const { data: nc, error: ncErr } = await db.from('customers').insert({phone:digits, name: name||'عميل'}).select().single(); if(ncErr){ toast('✗ '+ncErr.message); return; } custId = nc.id; }
 
       const photos = SETTINGS.menu_photo_urls ? JSON.parse(SETTINGS.menu_photo_urls) : [];
-      const msg = 'مرحبا'+(name?' '+name:'')+' 🙏\nهاد منيو *صابر جو سناك* 🍔:\n\n'+photos.join('\n')+'\n\nتقدر تطلب من عندنا مباشرة، تحت أمرك 💛';
+      const msg = (SETTINGS.menu_request_msg || 'مرحبا [الاسم] 🙏\nهاد منيو *صابر جو سناك* 🍔 (اضغطي كل رابط تشوفي صورته):').replace(/\[الاسم\]/g, name||'')+'\n\n'+photos.map((u,i)=>'📷 صورة '+(i+1)+'/'+photos.length+':\n'+u).join('\n\n')+'\n\nتقدر تطلب من عندنا مباشرة، تحت أمرك 💛';
 
       if(isCallCenter()){
         // 📱 عند الكول سنتر واتساب متاح — نفتحه فورًا
@@ -2538,16 +2543,31 @@
   function playMenuRequestSound(){
     try{
       const ctx = new (window.AudioContext||window.webkitAudioContext)();
-      // 🔔 نغمة مميّزة (٣ نبرات صاعدة سريعة) — مختلفة تمامًا عن صوت تنبيه الطلبات العادي
-      [880, 1046, 1318].forEach((freq, i)=>{
-        const o = ctx.createOscillator(), g = ctx.createGain();
-        o.type = 'sine'; o.frequency.value = freq;
-        g.gain.setValueAtTime(0.001, ctx.currentTime + i*0.14);
-        g.gain.linearRampToValueAtTime(0.22, ctx.currentTime + i*0.14 + 0.02);
-        g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i*0.14 + 0.2);
-        o.connect(g); g.connect(ctx.destination);
-        o.start(ctx.currentTime + i*0.14); o.stop(ctx.currentTime + i*0.14 + 0.22);
-      });
+      // 🔔🔔🔔 إنذار قوي ومزعج بقصد — بيتكرر ٤ مرات كل ثانية ونص، أعلى صوت ممكن (gain قريب من الأقصى)
+      // عشان ينتبهله حتى لو كان بتاب تاني (زي واتساب ويب) مش شايف نظامنا أصلًا
+      for(let rep=0; rep<4; rep++){
+        const base = rep*1.5;
+        [880, 1318, 880].forEach((freq, i)=>{
+          const o = ctx.createOscillator(), g = ctx.createGain();
+          o.type = 'square'; o.frequency.value = freq; // مربّعة بدل جيبية — أقوى وأزعج بكثير
+          g.gain.setValueAtTime(0.001, ctx.currentTime + base + i*0.13);
+          g.gain.linearRampToValueAtTime(0.55, ctx.currentTime + base + i*0.13 + 0.015);
+          g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + base + i*0.13 + 0.18);
+          o.connect(g); g.connect(ctx.destination);
+          o.start(ctx.currentTime + base + i*0.13); o.stop(ctx.currentTime + base + i*0.13 + 0.2);
+        });
+      }
+    }catch(e){}
+    // 🖥️ تنبيه نظام (Desktop Notification) — هاد بيطلع حتى لو التاب مش مفتوح قدامها (مثلًا شغّالة
+    // على واتساب ويب بتاب تاني)، لأنه المتصفح والنظام بيوريه فوق كل النوافذ مباشرة
+    try{
+      if('Notification' in window){
+        if(Notification.permission==='granted'){
+          new Notification('📋 طلب منيو جديد!', { body: 'في طلب منيو معلّق محتاج ترسليه — افتحي شاشة السستم', requireInteraction: true });
+        } else if(Notification.permission!=='denied'){
+          Notification.requestPermission();
+        }
+      }
     }catch(e){}
   }
   async function showPendingMenuRequests(){
@@ -2575,7 +2595,7 @@
   }
   async function sendPendingMenuRequest(id, phone, name){
     const photos = SETTINGS.menu_photo_urls ? JSON.parse(SETTINGS.menu_photo_urls) : [];
-    const msg = 'مرحبا'+(name?' '+name:'')+' 🙏\nهاد منيو *صابر جو سناك* 🍔:\n\n'+photos.join('\n')+'\n\nتقدر تطلب من عندنا مباشرة، تحت أمرك 💛';
+    const msg = (SETTINGS.menu_request_msg || 'مرحبا [الاسم] 🙏\nهاد منيو *صابر جو سناك* 🍔 (اضغطي كل رابط تشوفي صورته):').replace(/\[الاسم\]/g, name||'')+'\n\n'+photos.map((u,i)=>'📷 صورة '+(i+1)+'/'+photos.length+':\n'+u).join('\n\n')+'\n\nتقدر تطلب من عندنا مباشرة، تحت أمرك 💛';
     window.open('https://wa.me/'+toIntlPhone(phone)+'?text='+encodeURIComponent(msg), '_blank');
     await db.from('menu_requests').update({ status:'sent', sent_at: new Date().toISOString() }).eq('id', id);
     toast('✓ اترسلت'); closeModal(); showPendingMenuRequests();
@@ -6398,6 +6418,8 @@
           <div id="f_menuPhotosPrev" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
             ${(SETTINGS.menu_photo_urls?JSON.parse(SETTINGS.menu_photo_urls):[]).map((u,i)=>`<div style="position:relative"><img src="${u}" style="width:70px;height:70px;object-fit:cover;border-radius:8px;border:1px solid var(--line)"><button type="button" onclick="removeMenuPhoto(${i})" style="position:absolute;top:-6px;right:-6px;background:var(--red);color:#fff;border-radius:50%;width:20px;height:20px;font-size:.7rem">✕</button></div>`).join('')}
           </div>
+          <label style="margin-top:12px;display:block">💬 نص رسالة المنيو للعميل (استخدمي [الاسم] — روابط الصور بتنضاف تلقائيًا آخر الرسالة)</label>
+          <textarea id="f_menuMsg" rows="3" style="width:100%;border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;font-family:inherit">${esc(SETTINGS.menu_request_msg || 'مرحبا [الاسم] 🙏\nهاد منيو *صابر جو سناك* 🍔 (اضغطي كل رابط تشوفي صورته):')}</textarea>
         </div>
         <div class="fld"><label>✍️ معلومات إضافية على الفاتورة (اختياري)</label>
           <input id="f_extraInfo" value="${esc(SETTINGS.invoice_extra_info||'')}" placeholder="مثال: الرقم الضريبي، سياسة الاستبدال..."></div>
@@ -16377,17 +16399,23 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
     toast('⏳ جاري رفع '+files.length+' صورة...');
     try{
       const existing = SETTINGS.menu_photo_urls ? JSON.parse(SETTINGS.menu_photo_urls) : [];
+      let failCount = 0, lastErr = '';
       for(const file of files){
         const path = 'menu_'+Date.now()+'_'+Math.random().toString(36).slice(2,8)+'_'+file.name.replace(/[^a-zA-Z0-9._-]/g,'');
         const { error: upErr } = await db.storage.from('sjs-uploads').upload(path, file, { upsert:true });
-        if(upErr){ console.error('menu photo upload failed:', upErr); continue; }
+        if(upErr){ console.error('menu photo upload failed:', upErr); failCount++; lastErr = upErr.message; continue; }
         const { data: pub } = db.storage.from('sjs-uploads').getPublicUrl(path);
         if(pub?.publicUrl) existing.push(pub.publicUrl);
+      }
+      if(failCount === files.length){
+        // 🛡️ كل الملفات فشلت — ما لازم نطلع "نجح" كاذبة، ولا نحفظ شي بالإعدادات أصلًا
+        toast('✗ فشل رفع كل الصور — السبب الأرجح: مخزن "sjs-uploads" مش موجود بلوحة Supabase (Storage). السبب بالتفصيل: '+lastErr);
+        return;
       }
       const jsonVal = JSON.stringify(existing);
       await db.from('settings').upsert({ key:'menu_photo_urls', value: jsonVal });
       SETTINGS.menu_photo_urls = jsonVal;
-      toast('✓ انرفعت الصور');
+      toast(failCount ? ('⚠️ انرفعت بعض الصور، وفشلت '+failCount) : '✓ انرفعت الصور');
       renderAdmin();
     }catch(e){ toast('✗ '+e.message); }
   }
@@ -16431,6 +16459,7 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
       break_limit_minutes: parseInt(document.getElementById('f_breakLimit')?.value) || 60,
       emp_meal_price_limit: parseFloat(document.getElementById('f_empMealPriceLimit')?.value) ?? 2.5,
       manager_approval_code: document.getElementById('f_approvalCode')?.value.trim() || '',
+      menu_request_msg: document.getElementById('f_menuMsg')?.value || '',
       break_cooldown_minutes: parseInt(document.getElementById('f_breakCooldown')?.value ?? 120),
       drawer_pin_threshold: parseFloat(document.getElementById('f_drawerPinThreshold')?.value) ?? 10,
       hr_portal_show_meals: document.getElementById('f_hrShowMeals')?.checked ?? true,
