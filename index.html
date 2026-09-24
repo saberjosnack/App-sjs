@@ -1528,7 +1528,7 @@
     box.appendChild(line);
   }
 
-  const APP_VERSION = '2026-09-22-38';
+  const APP_VERSION = '2026-09-22-39';
   // 🔄 فحص تلقائي للنسخة — يحل مشكلة "الصفحة ما بتاخد آخر تحديث" نهائيًا: كل شوي منقارن نسختنا
   // المحمّلة حاليًا مع ملف version.txt الحقيقي على السيرفر (بدون كاش أبدًا). لو مختلفة، معناته
   // في نسخة أحدث انرفعت، فمنعمل تحديث كامل للصفحة تلقائيًا بدون ما ننتظر حدا يسكر التبويب يدويًا.
@@ -2512,7 +2512,7 @@
       const { data: existing } = await db.from('customers').select('id, name').eq('phone', digits).maybeSingle();
       let custId;
       if(existing){ custId = existing.id; if(name && !existing.name) await db.from('customers').update({name}).eq('id',existing.id); }
-      else { const { data: nc, error: ncErr } = await db.from('customers').insert({phone:digits, name}).select().single(); if(ncErr){ toast('✗ '+ncErr.message); return; } custId = nc.id; }
+      else { const { data: nc, error: ncErr } = await db.from('customers').insert({phone:digits, name: name||'عميل'}).select().single(); if(ncErr){ toast('✗ '+ncErr.message); return; } custId = nc.id; }
 
       const photos = SETTINGS.menu_photo_urls ? JSON.parse(SETTINGS.menu_photo_urls) : [];
       const msg = 'مرحبا'+(name?' '+name:'')+' 🙏\nهاد منيو *صابر جو سناك* 🍔:\n\n'+photos.join('\n')+'\n\nتقدر تطلب من عندنا مباشرة، تحت أمرك 💛';
@@ -2534,11 +2534,30 @@
     }catch(e){ toast('✗ '+e.message); }
   }
   // 📋 شاشة صغيرة تظهر للكول سنتر بس — طلبات المنيو المعلّقة من الفروع، جاهزة للإرسال بضغطة وحدة
+  let __lastMenuReqCount = null;
+  function playMenuRequestSound(){
+    try{
+      const ctx = new (window.AudioContext||window.webkitAudioContext)();
+      // 🔔 نغمة مميّزة (٣ نبرات صاعدة سريعة) — مختلفة تمامًا عن صوت تنبيه الطلبات العادي
+      [880, 1046, 1318].forEach((freq, i)=>{
+        const o = ctx.createOscillator(), g = ctx.createGain();
+        o.type = 'sine'; o.frequency.value = freq;
+        g.gain.setValueAtTime(0.001, ctx.currentTime + i*0.14);
+        g.gain.linearRampToValueAtTime(0.22, ctx.currentTime + i*0.14 + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i*0.14 + 0.2);
+        o.connect(g); g.connect(ctx.destination);
+        o.start(ctx.currentTime + i*0.14); o.stop(ctx.currentTime + i*0.14 + 0.22);
+      });
+    }catch(e){}
+  }
   async function showPendingMenuRequests(){
     if(!isCallCenter()){ return; }
     try{
       const { data, error } = await db.from('menu_requests').select('*').eq('status','pending').order('created_at',{ascending:true});
       if(error || !data){ return; }
+      // 🔔 نطلق الصوت بس لو العدد زاد عن آخر فحص (طلب جديد وصل فعليًا)، مش كل مرة نفحص فيها
+      if(__lastMenuReqCount!==null && data.length > __lastMenuReqCount) playMenuRequestSound();
+      __lastMenuReqCount = data.length;
       const badge = document.getElementById('menuReqPendingBadge');
       if(badge) badge.textContent = data.length ? ' ('+data.length+')' : '';
       window.__pendingMenuReqs = data;
