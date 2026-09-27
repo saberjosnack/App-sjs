@@ -1528,7 +1528,7 @@
     box.appendChild(line);
   }
 
-  const APP_VERSION = '2026-09-22-42';
+  const APP_VERSION = '2026-09-27-44';
   // 🔄 فحص تلقائي للنسخة — يحل مشكلة "الصفحة ما بتاخد آخر تحديث" نهائيًا: كل شوي منقارن نسختنا
   // المحمّلة حاليًا مع ملف version.txt الحقيقي على السيرفر (بدون كاش أبدًا). لو مختلفة، معناته
   // في نسخة أحدث انرفعت، فمنعمل تحديث كامل للصفحة تلقائيًا بدون ما ننتظر حدا يسكر التبويب يدويًا.
@@ -3034,7 +3034,7 @@
     const isBranchFree = ME.role==='admin' || ME.role==='callcenter';
     const branchId = isBranchFree ? (document.getElementById('branchSel')?.value || BRANCHES[0]?.id) : (ME.branch_id || document.getElementById('branchSel')?.value || BRANCHES[0]?.id);
     const ticketData = {
-      cart: cart.map(l=>({ itemId:l.item.id, name:l.item.name_ar, price:l.item.price, qty:l.qty, note:l.note||'', noteBy:l.noteBy||null })),
+      cart: cart.map(l=>({ itemId:l.item.id, name:l.item.name_ar, price:l.item.price, qty:l.qty, note:l.note||'', noteBy:l.noteBy||null, composition:l.composition||null, compositionDesc:l.compositionDesc||null })),
       orderType, payMethod, custPhone, custName, custAddr, delFee, orderNote,
       discount: document.getElementById('discInput')?.value||'', code: appliedCode?.code||''
     };
@@ -3089,7 +3089,12 @@
     const t = (window.__heldTickets||[]).find(x=>x.id===id); if(!t) return;
     const td = t.ticket_data||{};
     clearCart();
-    cart = (td.cart||[]).map(l=>({ item: { id:l.itemId, name_ar:l.name, price:l.price }, qty:l.qty, note:l.note||'', noteBy:l.noteBy||null }));
+    cart = (td.cart||[]).map(l=>{
+      // 🔧 نجيب الصنف الكامل من القائمة الحالية (فيه item_type وكل شي) بدل نسخة مصغّرة ناقصة —
+      // لو الصنف انحذف من وقتها، نرجع للنسخة المخزّنة كحل احتياطي بس (أفضل من ولا شي)
+      const fullItem = ITEMS.find(i=>i.id===l.itemId) || { id:l.itemId, name_ar:l.name, price:l.price };
+      return { item: fullItem, qty:l.qty, note:l.note||'', noteBy:l.noteBy||null, composition:l.composition||null, compositionDesc:l.compositionDesc||null };
+    });
     orderType = td.orderType||'takeaway';
     document.querySelectorAll('#otypeBar button').forEach(x=>x.classList.toggle('on', x.dataset.t===orderType));
     const delFieldsShow = orderType==='delivery';
@@ -4392,6 +4397,18 @@
     if(!lockSubmit('saveOrder')) return;
     setTimeout(()=>unlockSubmit('saveOrder'), 15000);
     if(!cart.length){ toast('⚠️ السلة فاضية'); return; }
+    // 🛡️ حماية دائمة: صنف مركّب له مجموعات اختيار (زي وجبة عائلية) لازم يوصل هون ومعه تركيبة
+    // محفوظة فعليًا — لو وصل فاضي لأي سبب (خلل عابر بالتطبيق)، منوقف الحفظ فورًا ونطلب من
+    // الكاشير يعيد اختيار المكونات، بدل ما يتسجّل طلب بدون خصم مخزون صحيح وبدون حساب ربح صحيح.
+    for(const l of cart){
+      if(l.item.item_type==='composite' && (!l.composition || !l.composition.length)){
+        const { data: hasGroups } = await db.from('composite_groups').select('id').eq('menu_item_id', l.item.id).limit(1);
+        if(hasGroups && hasGroups.length){
+          toast('⛔ "'+l.item.name_ar+'" ما إله تركيبة محفوظة! احذفيه من السلة وأضيفيه من جديد واختاري المكونات.');
+          unlockSubmit('saveOrder'); return;
+        }
+      }
+    }
     if(!currentShift && !isAdmin()){ toast('⚠️ يجب فتح شيفت أولاً'); return; }
     if(!perm(orderType==='delivery'?'order_delivery':'order_takeaway')){ toast('⛔ ما عندك صلاحية بيع '+(orderType==='delivery'?'التوصيل':'الاستلام')); return; }
     const platformValSel = document.getElementById('orderPlatform')?.value;
@@ -10731,6 +10748,10 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
     } else {
       toast('✓ انحفظت الفاتورة والمخزون اتحدث'+(isAllBranches?' بكل الفروع':''));
     }
+    // 🔄 تصفير كاش تكلفة الوصفات تلقائيًا — أسعار المكونات تغيّرت بهالفاتورة، فلازم أي تقرير ربح
+    // أو شاشة وصفة يعيد الحساب من جديد على السعر الجديد، بدون ما تحتاجي تضغطي "تحديث الأسعار" يدويًا
+    RECIPE_COST_MAP = null; INGREDIENT_COST_MAP = null;
+    await loadIngredients(); // نحدّث النسخة المحفوظة بالذاكرة (INGR) كمان مش بس القاعدة
     renderPurchases();
   }
 
