@@ -1528,7 +1528,7 @@
     box.appendChild(line);
   }
 
-  const APP_VERSION = '2026-09-27-44';
+  const APP_VERSION = '2026-09-27-45';
   // 🔄 فحص تلقائي للنسخة — يحل مشكلة "الصفحة ما بتاخد آخر تحديث" نهائيًا: كل شوي منقارن نسختنا
   // المحمّلة حاليًا مع ملف version.txt الحقيقي على السيرفر (بدون كاش أبدًا). لو مختلفة، معناته
   // في نسخة أحدث انرفعت، فمنعمل تحديث كامل للصفحة تلقائيًا بدون ما ننتظر حدا يسكر التبويب يدويًا.
@@ -3182,7 +3182,7 @@
       const delFee = document.getElementById('delFee');
       const custReq = document.getElementById('custReq');
       if (custAddr) custAddr.classList.toggle('hidden', !del);
-      if (delZone) delZone.classList.toggle('hidden', !del);
+      document.getElementById('delZone')?.classList.toggle('hidden', !del);
       if (delFee) delFee.classList.toggle('hidden', !del);
       if (custReq) custReq.textContent = del ? '(إجباري للتوصيل)' : '(اختياري)';
       renderCart();
@@ -5347,7 +5347,7 @@
     const delFee = document.getElementById('delFee');
     const custReq = document.getElementById('custReq');
     if (custAddr) custAddr.classList.toggle('hidden', !del);
-    if (delZone) delZone.classList.toggle('hidden', !del);
+    document.getElementById('delZone')?.classList.toggle('hidden', !del);
     if (delFee) delFee.classList.toggle('hidden', !del);
     if (custReq) custReq.textContent = del ? '(إجباري للتوصيل)' : '(اختياري)';
     if (del && delFee) delFee.value = o.delivery_fee||'';
@@ -5371,7 +5371,10 @@
     }
     cart = (o.order_items||[]).map(l=>{
       const item = ITEMS.find(i=>i.id===l.menu_item_id) || { id:l.menu_item_id, name_ar:l.item_name, price:+l.unit_price };
-      return { item: { ...item, price:+l.unit_price, name_ar:l.item_name }, qty:l.quantity, note:l.notes||'' };
+      // 🧩 نرجّع تركيبة الصنف المركّب المحفوظة على الطلب (كانت تنرمي وقت التعديل، فأي طلب مركّب
+      // يتعدّل ويتحفظ من جديد كان يطلع بدون تركيبة وبدون خصم مخزون صحيح لاختيارات الزبون).
+      // ما منرجّع compositionDesc لأن item_name أصلًا فيه وصف التركيبة، فما ينضاف مرتين.
+      return { item: { ...item, price:+l.unit_price, name_ar:l.item_name }, qty:l.quantity, note:l.notes||'', composition: l.composition||null };
     });
     const editBanner = document.getElementById('editBanner');
     const editNum = document.getElementById('editNum');
