@@ -1528,7 +1528,7 @@
     box.appendChild(line);
   }
 
-  const APP_VERSION = '2026-09-27-45';
+  const APP_VERSION = '2026-09-28-46';
   // 🔄 فحص تلقائي للنسخة — يحل مشكلة "الصفحة ما بتاخد آخر تحديث" نهائيًا: كل شوي منقارن نسختنا
   // المحمّلة حاليًا مع ملف version.txt الحقيقي على السيرفر (بدون كاش أبدًا). لو مختلفة، معناته
   // في نسخة أحدث انرفعت، فمنعمل تحديث كامل للصفحة تلقائيًا بدون ما ننتظر حدا يسكر التبويب يدويًا.
@@ -12627,6 +12627,14 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
   // عمّان، فأي جلسة عمل بدأت بين منتصف الليل والساعة 3 فجرًا (وارد كتير لأن آخر دوام 2 فجرًا) بتنقص
   // من الفلترة. هالفنكشن بتحول تاريخ محلي (YYYY-MM-DD) لحدود دقيقة بتوقيت عمّان الصحيح.
   function localDayStart(dateStr){ return dateStr+'T00:00:00+03:00'; }
+  // 🔧 حدود اليوم المالي لأي فترة رواتب/دوام — من بداية اليوم الأول الساعة FIN_START_H، لنهاية اليوم
+  // الأخير + يوم واحد الساعة FIN_END_H. هاي نفس الطريقة المستخدمة بفلتر التقارير، عشان حركة "مبارح
+  // بليل" (بين منتصف الليل وFIN_END_H) تضل محسوبة ضمن يومها المالي الصح، مش تنقطع بالغلط.
+  function hrFinRange(fromStr, toStr){
+    const from = new Date(fromStr+'T00:00:00'); from.setHours(FIN_START_H,0,0,0);
+    const to = new Date(toStr+'T00:00:00'); to.setDate(to.getDate()+1); to.setHours(FIN_END_H,0,0,0);
+    return { fromIso: from.toISOString(), toIso: to.toISOString() };
+  }
   function localDayEnd(dateStr){ return dateStr+'T23:59:59+03:00'; }
   // 🔧 مهم: نحسب "اليوم" و"أول الشهر" بتوقيت عمّان المحلي (+3)، مش UTC الخام — كان فيه خطأ هون
   // ممكن يخلي فلتر HR الافتراضي يبلش بتاريخ مختلف بيوم عن بوابة الموظف قرب منتصف الليل بالضبط
@@ -12700,27 +12708,35 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
       HR_FILTER.from = localMonthStartStr();
       HR_FILTER.to = localTodayStr();
     }
+    // 🔧 إصلاح: كان يحسب الوجبات/السلف/الخصومات... من منتصف الليل لمنتصف الليل بغض النظر عن إعداد
+    // "اليوم المالي" (مثلًا يبدأ 10ص وينتهي 3ف اليوم التالي) — فكانت تنقطع أي حركة مسجّلة بين
+    // منتصف الليل والساعة FIN_END_H (زي وجبة أو سلفة "مبارح بليل") لأنها تقنيًا بتاريخ اليوم التالي
+    // تقويميًا رغم إنها فعليًا لسا جزء من اليوم المالي السابق. هلأ منحسبها بنفس منطق اليوم المالي
+    // تمامًا (نفس الطريقة المستخدمة بفلتر التقارير — من FIN_START_H لليوم الأول لـFIN_END_H اليوم التالي بعد الأخير).
+    const hrFromD = new Date(HR_FILTER.from+'T00:00:00'); hrFromD.setHours(FIN_START_H,0,0,0);
+    const hrToD = new Date(HR_FILTER.to+'T00:00:00'); hrToD.setDate(hrToD.getDate()+1); hrToD.setHours(FIN_END_H,0,0,0);
+    const hrFromIso = hrFromD.toISOString(), hrToIso = hrToD.toISOString();
     const [empRes, attRes, advRes, ordRes, shiftAdjRes, tlRes, dedRes, rwdRes, brRes, closuresRes, staffPhoneRes] = await Promise.all([
       db.from('meal_names').select('*').order('name'), // 🔧 كل الموظفين (فعّال وغير فعّال) — كانوا يستبعدوا الغير فعّالين من الأساس فما كانوا يظهروا أبدًا حتى للتفعيل
       db.from('hr_attendance').select('employee_id, work_date, hours')
         .gte('work_date', HR_FILTER.from).lte('work_date', HR_FILTER.to),
       db.from('hr_advances').select('employee_id, amount, created_at, status')
-        .gte('created_at', localDayStart(HR_FILTER.from)).lte('created_at', localDayEnd(HR_FILTER.to)),
+        .gte('created_at', hrFromIso).lte('created_at', hrToIso),
       db.from('orders').select('employee_tab_name, employee_meal_id, total, status')
         .not('employee_tab_name','is',null)
-        .gte('created_at', localDayStart(HR_FILTER.from)).lte('created_at', localDayEnd(HR_FILTER.to)),
+        .gte('created_at', hrFromIso).lte('created_at', hrToIso),
       db.from('shift_adjustments').select('staff_id, staff_name, amount, status, created_at')
         .eq('status','approved')
-        .gte('created_at', localDayStart(HR_FILTER.from)).lte('created_at', localDayEnd(HR_FILTER.to)),
+        .gte('created_at', hrFromIso).lte('created_at', hrToIso),
       db.from('hr_time_logs').select('id, employee_id, clock_in, clock_out, reviewed_ok')
         .not('clock_out','is',null)
-        .gte('clock_in', localDayStart(HR_FILTER.from)).lte('clock_in', localDayEnd(HR_FILTER.to)),
+        .gte('clock_in', hrFromIso).lte('clock_in', hrToIso),
       db.from('employee_deductions').select('employee_id, amount, reason, created_at')
-        .gte('created_at', localDayStart(HR_FILTER.from)).lte('created_at', localDayEnd(HR_FILTER.to)),
+        .gte('created_at', hrFromIso).lte('created_at', hrToIso),
       db.from('employee_rewards').select('employee_id, amount, reason, created_at')
-        .gte('created_at', localDayStart(HR_FILTER.from)).lte('created_at', localDayEnd(HR_FILTER.to)),
+        .gte('created_at', hrFromIso).lte('created_at', hrToIso),
       db.from('hr_breaks').select('employee_id, started_at, ended_at').not('ended_at','is',null)
-        .gte('started_at', localDayStart(HR_FILTER.from)).lte('started_at', localDayEnd(HR_FILTER.to)),
+        .gte('started_at', hrFromIso).lte('started_at', hrToIso),
       db.from('hr_month_closures').select('employee_id, period_to').order('period_to',{ascending:false}),
       db.from('staff').select('phone, linked_hr_id').not('linked_hr_id','is',null).not('phone','is',null),
     ]);
@@ -13275,7 +13291,7 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
     modal(`<h3>☕ البريكات — ${esc(empName)}</h3><div id="hrBrBody" class="empty-note">... جاري التحميل</div>`);
     try{
       const { data, error } = await db.from('hr_breaks').select('*').eq('employee_id', empId)
-        .gte('started_at', localDayStart(HR_FILTER.from)).lte('started_at', localDayEnd(HR_FILTER.to))
+        .gte('started_at', hrFinRange(HR_FILTER.from,HR_FILTER.to).fromIso).lte('started_at', hrFinRange(HR_FILTER.from,HR_FILTER.to).toIso)
         .order('started_at',{ascending:false});
       const body = document.getElementById('hrBrBody'); if(!body) return;
       if(error){ body.innerHTML = `<div class="alert-red">⚠️ ${esc(error.message||'الجدول hr_breaks غير موجود — نفّذ SQL البريك أولاً')}</div>`; return; }
@@ -13491,7 +13507,7 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
     modal(`<h3>📋 كشف — ${esc(r.emp.name)}</h3><div id="hrStmtBody" class="empty-note">... جاري التحميل</div>`);
     // 🔧 نجيب تفاصيل كل خصم (مخالفة/شكوى/يدوي) بسببه — قبل كان بيظهر رقم إجمالي بس بدون تفاصيل
     const { data: dedList } = await db.from('employee_deductions').select('*').eq('employee_id', empId)
-      .gte('created_at', localDayStart(HR_FILTER.from)).lte('created_at', localDayEnd(HR_FILTER.to)).order('created_at',{ascending:false});
+      .gte('created_at', hrFinRange(HR_FILTER.from,HR_FILTER.to).fromIso).lte('created_at', hrFinRange(HR_FILTER.from,HR_FILTER.to).toIso).order('created_at',{ascending:false});
     const deds = dedList||[];
     const body = document.getElementById('hrStmtBody'); if(!body) return;
     body.innerHTML = `
@@ -13551,7 +13567,7 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
       // لازم نعلّمها "متسددة" (status=repaid) وإلا رح تضل تظهر "قائمة/غير مسددة" بكل شاشة كمان بعد القفل
       const { data: toRepay } = await db.from('hr_advances').select('id')
         .eq('employee_id', empId).eq('status','open')
-        .gte('created_at', localDayStart(HR_FILTER.from)).lte('created_at', localDayEnd(HR_FILTER.to));
+        .gte('created_at', hrFinRange(HR_FILTER.from,HR_FILTER.to).fromIso).lte('created_at', hrFinRange(HR_FILTER.from,HR_FILTER.to).toIso);
       if(toRepay && toRepay.length){
         await protectedWrite('hr_advances', 'update', { status:'repaid', repaid_at: new Date().toISOString() }, { ids: toRepay.map(x=>x.id) });
       }
@@ -13650,13 +13666,13 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
       db.from('hr_attendance').select('work_date, hours, note').eq('employee_id', empId)
         .gte('work_date', HR_FILTER.from).lte('work_date', HR_FILTER.to).order('work_date'),
       db.from('hr_advances').select('created_at, amount, account, note, status').eq('employee_id', empId)
-        .gte('created_at', localDayStart(HR_FILTER.from)).lte('created_at', localDayEnd(HR_FILTER.to)).order('created_at'),
+        .gte('created_at', hrFinRange(HR_FILTER.from,HR_FILTER.to).fromIso).lte('created_at', hrFinRange(HR_FILTER.from,HR_FILTER.to).toIso).order('created_at'),
       db.from('orders').select('created_at, order_number, total').or(`employee_meal_id.eq.${empId},employee_tab_name.eq."${r.emp.name}"`).neq('status','cancelled')
-        .gte('created_at', localDayStart(HR_FILTER.from)).lte('created_at', localDayEnd(HR_FILTER.to)).order('created_at'),
+        .gte('created_at', hrFinRange(HR_FILTER.from,HR_FILTER.to).fromIso).lte('created_at', hrFinRange(HR_FILTER.from,HR_FILTER.to).toIso).order('created_at'),
       db.from('shift_adjustments').select('created_at, amount, note, staff_id, staff_name').eq('status','approved')
-        .gte('created_at', localDayStart(HR_FILTER.from)).lte('created_at', localDayEnd(HR_FILTER.to)).order('created_at'),
+        .gte('created_at', hrFinRange(HR_FILTER.from,HR_FILTER.to).fromIso).lte('created_at', hrFinRange(HR_FILTER.from,HR_FILTER.to).toIso).order('created_at'),
       db.from('employee_deductions').select('created_at, amount, reason').eq('employee_id', empId)
-        .gte('created_at', localDayStart(HR_FILTER.from)).lte('created_at', localDayEnd(HR_FILTER.to)).order('created_at'),
+        .gte('created_at', hrFinRange(HR_FILTER.from,HR_FILTER.to).fromIso).lte('created_at', hrFinRange(HR_FILTER.from,HR_FILTER.to).toIso).order('created_at'),
     ]);
     const att = attRes.data||[], adv = advRes.data||[], meals = ordRes.data||[], deds = dedRes.data||[];
     const linkedStaffIds = STAFF.filter(s=>s.linked_hr_id===empId).map(s=>s.id);
