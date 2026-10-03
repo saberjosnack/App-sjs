@@ -1529,7 +1529,7 @@
     box.appendChild(line);
   }
 
-  const APP_VERSION = '2026-10-03-50';
+  const APP_VERSION = '2026-10-03-51';
   // 🔄 فحص تلقائي للنسخة — يحل مشكلة "الصفحة ما بتاخد آخر تحديث" نهائيًا: كل شوي منقارن نسختنا
   // المحمّلة حاليًا مع ملف version.txt الحقيقي على السيرفر (بدون كاش أبدًا). لو مختلفة، معناته
   // في نسخة أحدث انرفعت، فمنعمل تحديث كامل للصفحة تلقائيًا بدون ما ننتظر حدا يسكر التبويب يدويًا.
@@ -5155,8 +5155,9 @@
       <div class="tbl-wrap" style="margin-top:8px"><table class="tbl">
         <tr><td>المجموع الفرعي</td><td class="tl"><b>${fmt(o.subtotal)}</b></td></tr>
         ${+o.discount>0?`<tr><td>الخصم${o.discount_code?' ('+esc(o.discount_code)+')':''}</td><td class="tl" style="color:var(--warn)">− ${fmt(o.discount)}</td></tr>`:''}
-        ${o.order_type==='delivery'?`<tr><td>أجرة التوصيل</td><td class="tl">${fmt(o.delivery_fee)}</td></tr>`:''}
-        ${+o.free_delivery_amount>0?`<tr><td>🚚 توصيل مجاني (عرض)</td><td class="tl" style="color:var(--ok)">موفّر ${fmt(o.free_delivery_amount)}</td></tr>`:''}
+        ${o.order_type==='delivery' && +o.free_delivery_amount<=0?`<tr><td>أجرة التوصيل</td><td class="tl">${fmt(o.delivery_fee)}</td></tr>`:''}
+        ${+o.free_delivery_amount>0?`<tr><td>أجرة التوصيل (أصلية)</td><td class="tl" style="text-decoration:line-through;color:var(--muted)">${fmt(o.free_delivery_amount)}</td></tr>
+        <tr><td>🚚 توصيل مجاني (عرض)</td><td class="tl" style="color:var(--ok);font-weight:900">موفّرة عن العميل — تُخصم من المندوب</td></tr>`:''}
         <tr><td><b>الإجمالي</b></td><td class="tl"><b style="color:var(--red)">${fmt(o.total)} ${CURRENCY}</b></td></tr>
       </table></div>
       ${isAdmin() ? `
@@ -15886,6 +15887,12 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
     const feeInput = document.getElementById('delFee');
     const btn = document.getElementById('freeDeliveryBtn');
     if(!feeInput || !btn) return;
+    // 🛡️ لازم يكون سعر التوصيل العادي محدّد قبل ما نفعّل العرض — وإلا ما رح نعرف قد إيش أجرة
+    // المندوب الحقيقية، وبتتسجّل صفر بالغلط بدل الرقم الصحيح
+    if(!window.__freeDeliveryActive && (!feeInput.value || parseFloat(feeInput.value)<=0)){
+      toast('⚠️ حدّدي سعر التوصيل العادي أول (اختاري المنطقة أو اكتبيه يدويًا)، وبعدين فعّلي العرض');
+      return;
+    }
     window.__freeDeliveryActive = !window.__freeDeliveryActive;
     if(window.__freeDeliveryActive){
       feeInput.dataset.prevValue = feeInput.value; // نحتفظ بالسعر الأصلي لو ألغت العرض بعدين
