@@ -1529,7 +1529,7 @@
     box.appendChild(line);
   }
 
-  const APP_VERSION = '2026-10-03-51';
+  const APP_VERSION = '2026-10-03-52';
   // 🔄 فحص تلقائي للنسخة — يحل مشكلة "الصفحة ما بتاخد آخر تحديث" نهائيًا: كل شوي منقارن نسختنا
   // المحمّلة حاليًا مع ملف version.txt الحقيقي على السيرفر (بدون كاش أبدًا). لو مختلفة، معناته
   // في نسخة أحدث انرفعت، فمنعمل تحديث كامل للصفحة تلقائيًا بدون ما ننتظر حدا يسكر التبويب يدويًا.
@@ -2168,7 +2168,7 @@
   async function doEndShift(countedValue, countedCard, countedCliq, ccSkip){
     try {
       const { data: orders } = await db.from('orders')
-        .select('total, subtotal, discount, delivery_fee, payment_method, order_type, status, split_details, cancel_reason, employee_tab_name, platform_id, order_items(item_name, quantity, unit_price)')
+        .select('total, subtotal, discount, delivery_fee, free_delivery_amount, payment_method, order_type, status, split_details, cancel_reason, employee_tab_name, platform_id, order_items(item_name, quantity, unit_price)')
         .eq('shift_id', currentShift.id);
       const all = orders || [];
       const cancelled = all.filter(o=>o.status==='cancelled');
@@ -2179,7 +2179,8 @@
       // 💰 المبيعات الحقيقية = بدون الذمم وبدون أجور التوصيل (يلي بتروح للسائق مش إلنا) — كاش/كرت/كليك بس
       const sum = k => ok.reduce((a,o)=>{
         const delFee = o.order_type==='delivery' ? parseFloat(o.delivery_fee||0) : 0;
-        return a + (k==='total' ? Math.max(0, parseFloat(o.total||0)-delFee) : parseFloat(o[k]||0));
+        const freeDel = parseFloat(o.free_delivery_amount||0);
+        return a + (k==='total' ? Math.max(0, parseFloat(o.total||0)-delFee-freeDel) : parseFloat(o[k]||0));
       }, 0);
       // أكثر الأصناف مبيعًا بهاد الشيفت
       const itemTally = {};
@@ -2195,14 +2196,18 @@
       const byPay = {};
       ok.forEach(o=>{
         const delFee = o.order_type==='delivery' ? parseFloat(o.delivery_fee||0) : 0;
+        // 🚚 توصيل مجاني: المندوب بياخد أجرته من قيمة الطلب نفسها، فالكاش الحقيقي يلي بيرجع للدرج
+        // أقل من الإجمالي بمقدار هالمبلغ — لازم ننزله من حساب المتوقع، وإلا يطلع فرق كاش دايم.
+        const freeDel = parseFloat(o.free_delivery_amount||0);
         if(o.payment_method==='split' && o.split_details){
           const d = o.split_details;
           let amt1 = parseFloat(d.amt1||0), amt2 = parseFloat(d.amt2||0);
           if(delFee>0){ if(d.m1==='cash') amt1=Math.max(0,amt1-delFee); else if(d.m2==='cash') amt2=Math.max(0,amt2-delFee); }
+          if(freeDel>0){ if(d.m1==='cash') amt1=Math.max(0,amt1-freeDel); else if(d.m2==='cash') amt2=Math.max(0,amt2-freeDel); }
           byPay[d.m1] = (byPay[d.m1]||0) + amt1;
           byPay[d.m2] = (byPay[d.m2]||0) + amt2;
         } else {
-          byPay[o.payment_method] = (byPay[o.payment_method]||0) + Math.max(0, parseFloat(o.total||0) - delFee);
+          byPay[o.payment_method] = (byPay[o.payment_method]||0) + Math.max(0, parseFloat(o.total||0) - delFee - freeDel);
         }
       });
       const opening = parseFloat(currentShift.opening_balance||0);
@@ -7529,7 +7534,7 @@
   async function reprintShift(id){
     const sh = SH_LIST.find(x=>x.id===id); if(!sh) return;
     const { data: orders } = await db.from('orders')
-      .select('total, subtotal, discount, delivery_fee, payment_method, order_type, status, split_details, cancel_reason, employee_tab_name, platform_id, order_items(item_name, quantity, unit_price)')
+      .select('total, subtotal, discount, delivery_fee, free_delivery_amount, payment_method, order_type, status, split_details, cancel_reason, employee_tab_name, platform_id, order_items(item_name, quantity, unit_price)')
       .eq('shift_id', sh.id);
     const all = orders||[];
     const cancelledOrders = all.filter(o=>o.status==='cancelled');
@@ -7538,17 +7543,20 @@
     const ok = all.filter(o=>o.status!=='cancelled' && !o.employee_tab_name && !o.platform_id);
     const sum = k => ok.reduce((a,o)=>{
       const delFee = o.order_type==='delivery' ? parseFloat(o.delivery_fee||0) : 0;
-      return a + (k==='total' ? Math.max(0, parseFloat(o.total||0)-delFee) : parseFloat(o[k]||0));
+      const freeDel = parseFloat(o.free_delivery_amount||0);
+      return a + (k==='total' ? Math.max(0, parseFloat(o.total||0)-delFee-freeDel) : parseFloat(o[k]||0));
     }, 0);
     const byPay = {}; ok.forEach(o=>{
       const delFee = o.order_type==='delivery' ? parseFloat(o.delivery_fee||0) : 0;
+      const freeDel = parseFloat(o.free_delivery_amount||0);
       if(o.payment_method==='split' && o.split_details){
         const d = o.split_details;
         let amt1 = parseFloat(d.amt1||0), amt2 = parseFloat(d.amt2||0);
         if(delFee>0){ if(d.m1==='cash') amt1=Math.max(0,amt1-delFee); else if(d.m2==='cash') amt2=Math.max(0,amt2-delFee); }
+        if(freeDel>0){ if(d.m1==='cash') amt1=Math.max(0,amt1-freeDel); else if(d.m2==='cash') amt2=Math.max(0,amt2-freeDel); }
         byPay[d.m1]=(byPay[d.m1]||0)+amt1; byPay[d.m2]=(byPay[d.m2]||0)+amt2;
       } else {
-        byPay[o.payment_method]=(byPay[o.payment_method]||0)+Math.max(0, parseFloat(o.total||0)-delFee);
+        byPay[o.payment_method]=(byPay[o.payment_method]||0)+Math.max(0, parseFloat(o.total||0)-delFee-freeDel);
       }
     });
     const itemTally = {};
@@ -9320,7 +9328,7 @@
       {
         let rf = 0; const rp = 1000;
         while(true){
-          let q = db.from('orders').select('id, order_number, total, subtotal, discount, delivery_fee, payment_method, order_type, status, split_details, employee_tab_name, platform_id, branch_id, created_at, order_items(item_name, quantity, unit_price), branches(name_ar)')
+          let q = db.from('orders').select('id, order_number, total, subtotal, discount, delivery_fee, free_delivery_amount, payment_method, order_type, status, split_details, employee_tab_name, platform_id, branch_id, created_at, order_items(item_name, quantity, unit_price), branches(name_ar)')
             .gte('created_at', localDateTime(from,fromTime)).lte('created_at', localDateTime(to,toTime)).range(rf, rf+rp-1);
           if(branchId) q = q.eq('branch_id', branchId);
           const { data: rd, error: re } = await q;
@@ -9453,14 +9461,17 @@
     const tally = {};
     ok.forEach(o=>{
       const delFee = o.order_type==='delivery' ? parseFloat(o.delivery_fee||0) : 0;
+      const freeDel = parseFloat(o.free_delivery_amount||0);
       if(o.payment_method==='split' && o.split_details){
         const d = o.split_details;
         let amt1 = parseFloat(d.amt1||0), amt2 = parseFloat(d.amt2||0);
+        if(delFee>0){ if(d.m1==='cash') amt1=Math.max(0,amt1-delFee); else if(d.m2==='cash') amt2=Math.max(0,amt2-delFee); }
+        if(freeDel>0){ if(d.m1==='cash') amt1=Math.max(0,amt1-freeDel); else if(d.m2==='cash') amt2=Math.max(0,amt2-freeDel); }
         tally[d.m1] = (tally[d.m1]||0) + amt1;
         tally[d.m2] = (tally[d.m2]||0) + amt2;
       } else {
         const k = o.payment_method||'غير محدد';
-        tally[k] = (tally[k]||0) + Math.max(0, parseFloat(o.total||0)-delFee);
+        tally[k] = (tally[k]||0) + Math.max(0, parseFloat(o.total||0)-delFee-freeDel);
       }
     });
     const PAY_AR = {cash:'💵 كاش', card:'💳 كرت', cliq:'📱 كليك'};
@@ -9630,8 +9641,15 @@
       const tally = {};
       d.rows.forEach(o=>{
         const delFee = o.order_type==='delivery' ? parseFloat(o.delivery_fee||0) : 0;
-        if(o.payment_method==='split' && o.split_details){ const s=o.split_details; tally[s.m1]=(tally[s.m1]||0)+parseFloat(s.amt1||0); tally[s.m2]=(tally[s.m2]||0)+parseFloat(s.amt2||0); }
-        else { const k=o.payment_method||'غير محدد'; tally[k]=(tally[k]||0)+Math.max(0,parseFloat(o.total||0)-delFee); }
+        const freeDel = parseFloat(o.free_delivery_amount||0);
+        if(o.payment_method==='split' && o.split_details){
+          const s=o.split_details;
+          let amt1=parseFloat(s.amt1||0), amt2=parseFloat(s.amt2||0);
+          if(delFee>0){ if(s.m1==='cash') amt1=Math.max(0,amt1-delFee); else if(s.m2==='cash') amt2=Math.max(0,amt2-delFee); }
+          if(freeDel>0){ if(s.m1==='cash') amt1=Math.max(0,amt1-freeDel); else if(s.m2==='cash') amt2=Math.max(0,amt2-freeDel); }
+          tally[s.m1]=(tally[s.m1]||0)+amt1; tally[s.m2]=(tally[s.m2]||0)+amt2;
+        }
+        else { const k=o.payment_method||'غير محدد'; tally[k]=(tally[k]||0)+Math.max(0,parseFloat(o.total||0)-delFee-freeDel); }
       });
       const PAY_AR = {cash:'كاش', card:'كرت', cliq:'كليك'};
       const rows = Object.entries(tally).sort((a,b)=>b[1]-a[1]);
