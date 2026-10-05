@@ -1529,7 +1529,7 @@
     box.appendChild(line);
   }
 
-  const APP_VERSION = '2026-10-03-52';
+  const APP_VERSION = '2026-10-06-53';
   // 🔄 فحص تلقائي للنسخة — يحل مشكلة "الصفحة ما بتاخد آخر تحديث" نهائيًا: كل شوي منقارن نسختنا
   // المحمّلة حاليًا مع ملف version.txt الحقيقي على السيرفر (بدون كاش أبدًا). لو مختلفة، معناته
   // في نسخة أحدث انرفعت، فمنعمل تحديث كامل للصفحة تلقائيًا بدون ما ننتظر حدا يسكر التبويب يدويًا.
@@ -3631,7 +3631,7 @@
               <span>الإجمالي</span>
               <span>${t.total.toFixed(2)} ${CURRENCY}</span>
             </div>
-            ${ord.order_type==='delivery' ? `<div style="display:flex;justify-content:space-between;background:#FDE507;border-radius:6px;padding:4px 8px;margin-top:6px;font-weight:900"><span>🛵 المطلوب من المندوب</span><span>${(t.sub-t.disc-(+ord.free_delivery_amount||0)).toFixed(2)} ${CURRENCY}</span></div>${(+ord.free_delivery_amount>0)?`<div style="background:#c0392b;color:#fff;border-radius:6px;padding:4px 8px;margin-top:4px;font-weight:900;text-align:center">🚚 توصيل مجاني — أجرتك (${fmt(ord.free_delivery_amount)}) اتخصمت من قيمة الطلب، احتفظ فيها عادي</div>`:''}` : ''}
+            ${ord.order_type==='delivery' ? `<div style="display:flex;justify-content:space-between;background:#FDE507;border-radius:6px;padding:4px 8px;margin-top:6px;font-weight:900"><span>🛵 المطلوب من المندوب</span><span>${(t.sub-t.disc-(+ord.free_delivery_amount||0)).toFixed(2)} ${CURRENCY}</span></div>${(+ord.free_delivery_amount>0)?`<div style="background:#c0392b;color:#fff;border-radius:6px;padding:4px 8px;margin-top:4px;font-weight:900;text-align:center">🚚 عرض توصيل — المطعم غطّى ${fmt(ord.free_delivery_amount)} من أجرتك، اتخصمت من قيمة الطلب، احتفظ فيها</div>`:''}` : ''}
           </div>
           ${ord.notes?`<div style="background:#fff8e1;border-radius:8px;padding:6px 10px;margin-top:6px;font-size:12px">📝 ${esc(ord.notes)}</div>`:''}
           <div style="text-align:center;padding-top:8px;border-top:1px dashed #ccc;font-size:12px;color:#999">
@@ -3669,7 +3669,7 @@
             <div style="display:flex;justify-content:space-between;font-weight:900;font-size:14px;border-top:1px solid #000;padding-top:4px">
               الإجمالي: ${t.total.toFixed(2)} ${CURRENCY}
             </div>
-            ${ord.order_type==='delivery' ? `<div style="display:flex;justify-content:space-between;font-weight:900;border:1px dashed #000;padding:3px;margin-top:4px">🛵 المطلوب من المندوب: ${(t.sub-t.disc-(+ord.free_delivery_amount||0)).toFixed(2)} ${CURRENCY}</div>${(+ord.free_delivery_amount>0)?`<div style="font-weight:900;text-align:center;border:2px solid #000;padding:3px;margin-top:3px">🚚 توصيل مجاني — أجرتك (${fmt(ord.free_delivery_amount)}) اتخصمت من قيمة الطلب</div>`:''}` : ''}
+            ${ord.order_type==='delivery' ? `<div style="display:flex;justify-content:space-between;font-weight:900;border:1px dashed #000;padding:3px;margin-top:4px">🛵 المطلوب من المندوب: ${(t.sub-t.disc-(+ord.free_delivery_amount||0)).toFixed(2)} ${CURRENCY}</div>${(+ord.free_delivery_amount>0)?`<div style="font-weight:900;text-align:center;border:2px solid #000;padding:3px;margin-top:3px">🚚 عرض توصيل — المطعم غطّى ${fmt(ord.free_delivery_amount)} من أجرتك، اتخصمت من قيمة الطلب</div>`:''}` : ''}
           </div>
           ${ord.notes?`<div style="font-size:12px;border-top:1px dashed #000;padding-top:4px;margin-top:4px">📝 ${esc(ord.notes)}</div>`:''}
           <div style="text-align:center;font-size:10px;border-top:1px dashed #000;padding-top:6px;margin-top:6px">
@@ -3763,8 +3763,12 @@
       if (cust.name)  text += `عميل: ${cust.name}\n`;
       if (cust.phone) text += `هاتف: ${cust.phone}\n`;
       if (cust.addr)  text += `عنوان: ${cust.addr}\n`;
-      if (t.del > 0)  text += `توصيل المنطقة: ${t.del.toFixed(2)} ${CURRENCY}\n`;
-      if (+ord.free_delivery_amount > 0) text += `🚚 توصيل مجاني (عرض) — موفّر: ${fmt(ord.free_delivery_amount)} ${CURRENCY}\n`;
+      if (+ord.free_delivery_amount > 0) {
+        // 🚚 عرض توصيل: الأجرة الكاملة = اللي غطّاه المطعم + اللي دفعه الزبون (الفرق فوق الحد)
+        text += `🚚 أجرة التوصيل: ${(+ord.free_delivery_amount + t.del).toFixed(2)} ${CURRENCY}\n`;
+        text += `   يغطّيها المطعم (عرض): ${fmt(ord.free_delivery_amount)} ${CURRENCY}\n`;
+        text += `   يدفعها العميل: ${t.del.toFixed(2)} ${CURRENCY}\n`;
+      } else if (t.del > 0) text += `توصيل المنطقة: ${t.del.toFixed(2)} ${CURRENCY}\n`;
     }
     if (ord.employee_tab_name) {
       text += '─'.repeat(32) + '\n';
@@ -3787,14 +3791,16 @@
       text += `خصم`.padEnd(24) + `-${t.disc.toFixed(2)}\n`;
       text += `الصافي بعد الخصم`.padEnd(24) + `${(t.sub-t.disc).toFixed(2)}\n`;
     }
-    if (t.del > 0) text += `توصيل`.padEnd(24) + `${t.del.toFixed(2)}\n`;
-    if (+ord.free_delivery_amount > 0) text += `🚚 توصيل مجاني — موفّر`.padEnd(24) + `${fmt(ord.free_delivery_amount)}\n`;
+    if (+ord.free_delivery_amount > 0) {
+      text += `أجرة التوصيل`.padEnd(24) + `${(+ord.free_delivery_amount + t.del).toFixed(2)}\n`;
+      text += `🚚 يغطّيها المطعم (عرض)`.padEnd(24) + `-${fmt(ord.free_delivery_amount)}\n`;
+    } else if (t.del > 0) text += `توصيل`.padEnd(24) + `${t.del.toFixed(2)}\n`;
     text += '═'.repeat(32) + '\n';
     text += `الإجمالي`.padEnd(24) + `${t.total.toFixed(2)} ${CURRENCY}\n`;
     if (ord.order_type === 'delivery') {
       text += '═'.repeat(32) + '\n';
       text += `🛵 المطلوب من المندوب: ${(t.sub-t.disc-(+ord.free_delivery_amount||0)).toFixed(2)} ${CURRENCY}\n`;
-      if (+ord.free_delivery_amount > 0) text += `🚚 توصيل مجاني — أجرتك (${fmt(ord.free_delivery_amount)}) اتخصمت من قيمة الطلب\n`;
+      if (+ord.free_delivery_amount > 0) text += `🚚 عرض توصيل — المطعم غطّى ${fmt(ord.free_delivery_amount)} من أجرتك، اتخصمت من قيمة الطلب\n`;
     }
     if (ord.notes) {
       text += '─'.repeat(32) + '\n';
@@ -4546,7 +4552,7 @@
         notes: ((orderNote ? orderNote.value.trim() : '') + (window.__freeDeliveryActive ? ' 🚚 [عرض توصيل مجاني]' : '')).trim() || null,
         // 💰 المبلغ الأصلي يلي كان المفروض يتدفع أجرة توصيل، قبل ما نشيله بالعرض — لازم نحتفظ فيه
         // بالضبط عشان نحاسب المندوب عليه لاحقًا، حتى لو العميل ما دفعه
-        free_delivery_amount: window.__freeDeliveryActive ? (parseFloat(document.getElementById('delFee')?.dataset.prevValue)||0) : 0,
+        free_delivery_amount: window.__freeDeliveryActive ? freeDeliveryCovered(parseFloat(document.getElementById('delFee')?.dataset.prevValue)||0) : 0,
         discount_code: appliedCode ? appliedCode.code : null,
         platform_id: document.getElementById('orderPlatform')?.value || null,
         channel: orderChannel || null,
@@ -5161,8 +5167,9 @@
         <tr><td>المجموع الفرعي</td><td class="tl"><b>${fmt(o.subtotal)}</b></td></tr>
         ${+o.discount>0?`<tr><td>الخصم${o.discount_code?' ('+esc(o.discount_code)+')':''}</td><td class="tl" style="color:var(--warn)">− ${fmt(o.discount)}</td></tr>`:''}
         ${o.order_type==='delivery' && +o.free_delivery_amount<=0?`<tr><td>أجرة التوصيل</td><td class="tl">${fmt(o.delivery_fee)}</td></tr>`:''}
-        ${+o.free_delivery_amount>0?`<tr><td>أجرة التوصيل (أصلية)</td><td class="tl" style="text-decoration:line-through;color:var(--muted)">${fmt(o.free_delivery_amount)}</td></tr>
-        <tr><td>🚚 توصيل مجاني (عرض)</td><td class="tl" style="color:var(--ok);font-weight:900">موفّرة عن العميل — تُخصم من المندوب</td></tr>`:''}
+        ${+o.free_delivery_amount>0?`<tr><td>أجرة التوصيل (كاملة)</td><td class="tl">${fmt(+o.free_delivery_amount + +o.delivery_fee)}</td></tr>
+        <tr><td>🚚 يغطّيها المطعم (عرض)</td><td class="tl" style="color:var(--ok);font-weight:900">− ${fmt(o.free_delivery_amount)}</td></tr>
+        <tr><td>يدفعها العميل (الفرق)</td><td class="tl">${fmt(o.delivery_fee)}</td></tr>`:''}
         <tr><td><b>الإجمالي</b></td><td class="tl"><b style="color:var(--red)">${fmt(o.total)} ${CURRENCY}</b></td></tr>
       </table></div>
       ${isAdmin() ? `
@@ -5378,6 +5385,15 @@
     document.getElementById('freeDeliveryBtn')?.classList.toggle('hidden', !del || !isCallCenter() || SETTINGS.free_delivery_offer!=='1');
     if (custReq) custReq.textContent = del ? '(إجباري للتوصيل)' : '(اختياري)';
     if (del && delFee) delFee.value = o.delivery_fee||'';
+    // 🚚 لو الطلب كان عليه عرض توصيل، نرجّع حالته (الأجرة الكاملة + الزر) — وإلا بيضيع العرض بصمت وقت الحفظ
+    window.__freeDeliveryActive = false;
+    if (del && delFee && +o.free_delivery_amount > 0) {
+      window.__freeDeliveryActive = true;
+      delFee.dataset.prevValue = String((+o.free_delivery_amount) + (+o.delivery_fee||0));
+      delFee.readOnly = true;
+      const fdb = document.getElementById('freeDeliveryBtn');
+      if (fdb) { fdb.textContent = '✓ توصيل مجاني (حد '+fmt(freeDeliveryCap())+') — إلغاء العرض'; fdb.style.background = 'var(--red)'; }
+    }
     payMethod = o.payment_method||'cash';
     document.querySelectorAll('#payBar button').forEach(x=>x.classList.toggle('on', x.dataset.p===payMethod));
     const orderNote = document.getElementById('orderNote');
@@ -6339,7 +6355,11 @@
         <h3>🔧 إعدادات النظام</h3>
         <div class="fld" style="background:#e6f7ec;border-radius:10px;padding:12px 14px">
           <label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="f_freeDelivery" ${SETTINGS.free_delivery_offer==='1'?'checked':''}> 🚚 تفعيل عرض "توصيل مجاني" (بيطلع زر للكول سنتر بس بشاشة الطلب)</label>
-          <div style="font-size:.76rem;color:var(--muted);font-weight:600;margin-top:4px">لمّا تشيلي الإشارة، الزر بيختفي فورًا من عند الكول سنتر — مش محتاجة ترفعي ملف من جديد.</div>
+          <div style="margin-top:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <label style="font-weight:800;margin:0">أقصى مبلغ بيغطّيه المطعم من أجرة التوصيل (د.أ):</label>
+            <input type="number" id="f_freeDeliveryCap" min="0" step="0.25" value="${SETTINGS.free_delivery_cap ?? 2}" style="width:100px">
+          </div>
+          <div style="font-size:.76rem;color:var(--muted);font-weight:600;margin-top:4px">لو أجرة التوصيل أكبر من هالمبلغ، الزبون بيدفع الفرق وبيطلع مكتوب بالفاتورة. لمّا تشيلي الإشارة، الزر بيختفي فورًا من عند الكول سنتر — مش محتاجة ترفعي ملف من جديد.</div>
         </div>
         <div class="fld"><label>📱 رقم واتساب التوصيل</label><input id="f_wanum" inputmode="tel" value="${esc(SETTINGS.delivery_whatsapp||'')}"></div>
         <div class="fld" style="background:#eafbea;border-radius:10px;padding:10px 12px">
@@ -15898,9 +15918,16 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
     });
     return best;
   }
-  // 🚚 توصيل مجاني — الكول سنتر بس (والمالك) يقدروا يفعّلوه لطلب معيّن. بيصفّر أجرة التوصيل ويقفل
-  // الحقل عشان ما يتعدّل بالغلط بعدها، ويسجّل ملاحظة على الطلب إنه العرض اتطبّق (للمراجعة لاحقًا).
+  // 🚚 توصيل مجاني (لحد معيّن) — الكول سنتر بس (والمالك) يقدروا يفعّلوه لطلب معيّن. المطعم بيغطّي أجرة
+  // التوصيل لحد "حد التغطية" (من الإعدادات، افتراضيًا ٢ دينار)، وأي زيادة فوقه الزبون بيدفعها هو.
+  // مثال: أجرة ٣.٥٠ وحد ٢ → المطعم بيغطّي ٢.٠٠، الزبون بيدفع ١.٥٠.
   window.__freeDeliveryActive = false;
+  function freeDeliveryCap(){
+    const v = parseFloat(SETTINGS.free_delivery_cap);
+    return isNaN(v) || v < 0 ? 2 : v;
+  }
+  function freeDeliveryCovered(fullFee){ return Math.min(Math.max(0, fullFee||0), freeDeliveryCap()); }
+  function freeDeliveryCustomerPays(fullFee){ return Math.max(0, (fullFee||0) - freeDeliveryCap()); }
   function toggleFreeDelivery(){
     const feeInput = document.getElementById('delFee');
     const btn = document.getElementById('freeDeliveryBtn');
@@ -15913,12 +15940,16 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
     }
     window.__freeDeliveryActive = !window.__freeDeliveryActive;
     if(window.__freeDeliveryActive){
-      feeInput.dataset.prevValue = feeInput.value; // نحتفظ بالسعر الأصلي لو ألغت العرض بعدين
-      feeInput.value = '0';
+      const full = parseFloat(feeInput.value)||0;
+      feeInput.dataset.prevValue = String(full); // الأجرة الأصلية الكاملة (للمندوب وللتراجع)
+      const pays = freeDeliveryCustomerPays(full);
+      feeInput.value = String(pays); // اللي الزبون بيدفعه فعليًا (الفرق فوق الحد، أو صفر)
       feeInput.readOnly = true;
-      btn.textContent = '✓ التوصيل مجاني — إلغاء العرض';
+      btn.textContent = '✓ توصيل مجاني (حد '+fmt(freeDeliveryCap())+') — إلغاء العرض';
       btn.style.background = 'var(--red)';
-      toast('✓ اتفعّل التوصيل المجاني لهالطلب');
+      toast(pays>0
+        ? '✓ المطعم بيغطّي '+fmt(freeDeliveryCovered(full))+' والزبون بيدفع الفرق '+fmt(pays)
+        : '✓ اتفعّل التوصيل المجاني — المطعم بيغطّي '+fmt(full));
     } else {
       feeInput.value = feeInput.dataset.prevValue || '';
       feeInput.readOnly = false;
@@ -15938,7 +15969,17 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
     const match = DELIVERY_ZONES.find(z=>z.area_name===typed)
       || DELIVERY_ZONES.find(z=>z.area_name.includes(typed))
       || findClosestZone(typed);
-    if(match){ feeInput.value = match.delivery_price; renderCart(); }
+    if(match){
+      if(window.__freeDeliveryActive){
+        // العرض مفعّل: المنطقة اتغيّرت → الأجرة الأصلية الجديدة، وحصة الزبون من جديد حسب الحد
+        const full = parseFloat(match.delivery_price)||0;
+        feeInput.dataset.prevValue = String(full);
+        feeInput.value = String(freeDeliveryCustomerPays(full));
+      } else {
+        feeInput.value = match.delivery_price;
+      }
+      renderCart();
+    }
   }
   async function renderPlatforms(){
     const C = document.getElementById('admContent');
@@ -16605,6 +16646,7 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
       emp_meal_price_limit: parseFloat(document.getElementById('f_empMealPriceLimit')?.value) ?? 2.5,
       manager_approval_code: document.getElementById('f_approvalCode')?.value.trim() || '',
       free_delivery_offer: document.getElementById('f_freeDelivery')?.checked ? '1' : '0',
+      free_delivery_cap: String(parseFloat(document.getElementById('f_freeDeliveryCap')?.value) >= 0 ? parseFloat(document.getElementById('f_freeDeliveryCap').value) : 2),
       menu_request_msg: document.getElementById('f_menuMsg')?.value || '',
       break_cooldown_minutes: parseInt(document.getElementById('f_breakCooldown')?.value ?? 120),
       drawer_pin_threshold: parseFloat(document.getElementById('f_drawerPinThreshold')?.value) ?? 10,
