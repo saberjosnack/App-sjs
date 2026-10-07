@@ -1529,7 +1529,7 @@
     box.appendChild(line);
   }
 
-  const APP_VERSION = '2026-10-06-53';
+  const APP_VERSION = '2026-10-08-54';
   // 🔄 فحص تلقائي للنسخة — يحل مشكلة "الصفحة ما بتاخد آخر تحديث" نهائيًا: كل شوي منقارن نسختنا
   // المحمّلة حاليًا مع ملف version.txt الحقيقي على السيرفر (بدون كاش أبدًا). لو مختلفة، معناته
   // في نسخة أحدث انرفعت، فمنعمل تحديث كامل للصفحة تلقائيًا بدون ما ننتظر حدا يسكر التبويب يدويًا.
@@ -3474,7 +3474,15 @@
     const discountableSub = cart.reduce((s,l)=>s + (l.item.exclude_employee_discount ? 0 : l.item.price*l.qty), 0);
     let disc = 0, lbl = '';
     const isEmpMeal = document.getElementById('empMealChk')?.checked;
-    if(isEmpMeal){
+    let empCode = false;
+    if(isEmpMeal && appliedCode && !appliedCode.isVip){
+      // 🎟️ كود خصم مطبّق يدويًا على وجبة موظف: بياخد مكان خصم الموظف التلقائي (مش بينجمعوا مع بعض)،
+      // وبينطبق على إجمالي الفاتورة زي أي كود عادي، والباقي بعد الخصم هو اللي بيتسجّل بذمّة الموظف.
+      // كود VIP التلقائي (من بيانات العميل) ما بينطبق هون — هو لخصم زبون، مش موظف.
+      disc = appliedCode.kind==='percent' ? sub*appliedCode.value/100 : +appliedCode.value;
+      lbl = '('+appliedCode.code+' — وجبة موظف، بدل خصم الموظف)';
+      empCode = true;
+    } else if(isEmpMeal){
       const sel = document.getElementById('empMealName');
       const opt = sel?.selectedOptions[0];
       const discPct = opt ? parseFloat(opt.dataset.disc||20) : 20;
@@ -3506,7 +3514,7 @@
     disc = Math.min(disc, sub);
     const delFee = document.getElementById('delFee');
     const del = orderType==='delivery' ? (delFee ? parseFloat(delFee.value)||0 : 0) : 0;
-    return { sub, disc, lbl, del, total: Math.max(sub - disc + del, 0) };
+    return { sub, disc, lbl, del, empCode, total: Math.max(sub - disc + del, 0) };
   }
   function openCart(){ /* لا شي — السلة ثابتة دايمًا ظاهرة بشاشة الكاشير */ }
   function closeCart(){ /* لا شي — السلة ثابتة دايمًا ظاهرة بشاشة الكاشير */ }
@@ -4472,7 +4480,7 @@
     const t = totals();
     // 🍽️ وجبة موظف بخصم: بس أول وجبة بنفس اليوم تاخد الخصم — أي وجبة تانية بنفس اليوم لنفس الموظف
     // تنحسب كاملة بدون خصم (بس تضل مسجّلة بذمّته زي العادة).
-    if(empMealName){
+    if(empMealName && !t.empCode){ // لو الخصم جاي من كود، شروط وقت/مرة وحدة باليوم تخص خصم الموظف بس — ما بتلغي الكود
       const empRec2 = MEAL_NAMES_DATA.find(n=>n.name===empMealName);
       if(empRec2){
         // 🕙 خصم وجبة الموظف بس بين 10 صباحًا و3 فجرًا — أي طلب برّه هالوقت يُحسب كامل بدون خصم
@@ -4553,7 +4561,7 @@
         // 💰 المبلغ الأصلي يلي كان المفروض يتدفع أجرة توصيل، قبل ما نشيله بالعرض — لازم نحتفظ فيه
         // بالضبط عشان نحاسب المندوب عليه لاحقًا، حتى لو العميل ما دفعه
         free_delivery_amount: window.__freeDeliveryActive ? freeDeliveryCovered(parseFloat(document.getElementById('delFee')?.dataset.prevValue)||0) : 0,
-        discount_code: appliedCode ? appliedCode.code : null,
+        discount_code: (appliedCode && !(empMealName && appliedCode.isVip)) ? appliedCode.code : null,
         platform_id: document.getElementById('orderPlatform')?.value || null,
         channel: orderChannel || null,
         employee_tab_name: empMealName || null,
@@ -4619,7 +4627,7 @@
       if(e2) throw e2;
 
       // 🎁 خصم VIP استُخدم الآن — نوقفه عشان ما ينطبق تاني بطلب جاي (لمرة وحدة فقط)
-      if(appliedCode && appliedCode.isVip && customer_id){
+      if(appliedCode && appliedCode.isVip && customer_id && !empMealName){
         try{ await db.from('customers').update({ vip_discount_sent_at: null }).eq('id', customer_id); }
         catch(e){ console.error('clear vip discount failed:', e); }
       }
@@ -5945,6 +5953,7 @@
       'الخصومات: '+fmt(discounts)+' '+CURRENCY+'\n'+
       'صافي المبيعات: '+fmt(netItemsSales)+' '+CURRENCY+'\n'+
       'وجبات الموظفين (مستبعدة من فوق): '+mealsOrders.length+' ('+fmt(mealsTotal)+')\n'+
+      'أجور توصيل يتحمّلها المطعم: '+allOk.filter(o=>parseFloat(o.free_delivery_amount||0)>0).length+' ('+fmt(allOk.reduce((a,o)=>a+parseFloat(o.free_delivery_amount||0),0))+')\n'+
       'عدد الطلبات: '+ok.length+'\n'+
       'متوسط الفاتورة: '+fmt(avgOrder)+' '+CURRENCY+'\n'+
       'طلبات ملغاة: '+cancelled.length+'\n'+
@@ -5972,6 +5981,8 @@
     // (مدعومة/مخفّضة للموظف) فبتتحسب لحالها بس، ما تدخل بحساب الإجمالي أو الصافي إطلاقًا
     const mealsOrders=allOk.filter(o=>o.employee_tab_name);
     const mealsTotal=mealsOrders.reduce((a,o)=>a+parseFloat(o.total||0),0);
+    const freeDelOrders=allOk.filter(o=>parseFloat(o.free_delivery_amount||0)>0);
+    const freeDelTotal=freeDelOrders.reduce((a,o)=>a+parseFloat(o.free_delivery_amount||0),0);
     const ok=allOk.filter(o=>!o.employee_tab_name);
     const itemsSales=ok.reduce((a,o)=>a+parseFloat(o.subtotal||0),0); // مبيعات الأصناف بس (قبل الخصم والتوصيل) — بدون الوجبات
     const discounts=ok.reduce((a,o)=>a+parseFloat(o.discount||0),0);
@@ -5996,6 +6007,7 @@
       </div>
       <div class="day-head" style="margin-bottom:10px">
         <div class="stat" style="border:1.5px solid var(--muted)">🍽️ وجبات الموظفين (مستبعدة من كل الأرقام فوق)<b>${mealsOrders.length} <small>(${fmt(mealsTotal)})</small></b></div>
+        <div class="stat" style="border:1.5px solid var(--ok)">🚚 أجور توصيل يتحمّلها المطعم<b>${freeDelOrders.length} <small>(${fmt(freeDelTotal)})</small></b></div>
       </div>
       ${Object.keys(byBranch).length>1?`<div class="day-head" style="margin-bottom:10px">
         ${Object.entries(byBranch).map(([b,v])=>`<div class="stat">🏪 ${esc(b)}<b>${fmt(v)} ${CURRENCY}</b></div>`).join('')}
@@ -17380,7 +17392,7 @@ try {
     const y0 = new Date(t0.getTime() - 86400000);
     // طلبات الفترة + أمس (حتى نفس الساعة)
     const [today, yest, cancels, shifts30] = await Promise.all([
-      db.from('orders').select('total, subtotal, discount, delivery_fee, branch_id, status, order_type, employee_tab_name, platform_id').gte('created_at', t0.toISOString()).lte('created_at', tEnd.toISOString()),
+      db.from('orders').select('total, subtotal, discount, delivery_fee, free_delivery_amount, branch_id, status, order_type, employee_tab_name, platform_id').gte('created_at', t0.toISOString()).lte('created_at', tEnd.toISOString()),
       db.from('orders').select('total, subtotal, discount, delivery_fee, created_at, status, employee_tab_name, platform_id').gte('created_at', y0.toISOString()).lt('created_at', t0.toISOString()),
       db.from('orders').select('cancel_reason').eq('status','cancelled').not('cancel_reason','is',null).gte('created_at', new Date(Date.now()-30*86400000).toISOString()),
       db.from('cash_shifts').select('opening_balance, closing_balance, expected_balance, status, staff(full_name)').eq('status','closed').gte('start_time', new Date(Date.now()-30*86400000).toISOString()),
@@ -17392,6 +17404,10 @@ try {
     const mealsTodaySum = mealsToday.reduce((a,o)=>a+parseFloat(o.total||0),0);
     const platformToday = (today.data||[]).filter(o=>o.status!=='cancelled' && o.platform_id);
     const platformTodaySum = platformToday.reduce((a,o)=>a+parseFloat(o.total||0),0);
+    // 🚚 أجور توصيل بيتحمّلها المطعم (عرض التوصيل المجاني) — مبلغ بيطلع من قيمة الطلب للمندوب
+    const freeDelToday = (today.data||[]).filter(o=>o.status!=='cancelled' && parseFloat(o.free_delivery_amount||0)>0);
+    const freeDelTodaySum = freeDelToday.reduce((a,o)=>a+parseFloat(o.free_delivery_amount||0),0);
+    const cancelledToday = (today.data||[]).filter(o=>o.status==='cancelled').length;
     const sameHour = (yest.data||[]).filter(o=>o.status!=='cancelled' && !o.employee_tab_name && !o.platform_id && (new Date(o.created_at).getTime() - y0.getTime()) <= (now.getTime() - t0.getTime()));
     // 🚗 نفس تعريف "صافي المبيعات" المستخدم بشاشة المبيعات بالضبط — بدون أجور التوصيل، عشان الرقمين يتطابقوا دايمًا
     const sum = a=>a.reduce((x,o)=>x+(parseFloat(o.subtotal||0)-parseFloat(o.discount||0)),0);
@@ -17418,7 +17434,8 @@ try {
       <div class="stat">عدد الطلبات<b>${T.length}</b></div>
       <div class="stat">الخصومات اليوم<b style="color:var(--warn)">${fmt(tDiscSum)} ${CURRENCY}</b></div>
       ${hasCosts?`<div class="stat">ربح اليوم التقريبي<b>${fmt(profit)} ${CURRENCY}</b></div>`:''}
-      <div class="stat">ملغي اليوم<b>${(today.data||[]).length - T.length}</b></div>
+      <div class="stat">ملغي اليوم<b>${cancelledToday}</b></div>
+      <div class="stat" style="border:1.5px solid var(--ok)">🚚 أجور توصيل يتحمّلها المطعم<b>${freeDelToday.length} <small>(${fmt(freeDelTodaySum)})</small></b></div>
       <div class="stat" style="border:1.5px solid var(--muted)">🍽️ وجبات الموظفين (مستبعدة)<b>${mealsToday.length} <small>(${fmt(mealsTodaySum)})</small></b></div>
       <div class="stat" style="border:1.5px solid var(--muted)">📱 طلبات التطبيقات (مستبعدة)<b>${platformToday.length} <small>(${fmt(platformTodaySum)})</small></b></div>`;
 
