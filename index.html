@@ -1529,7 +1529,7 @@
     box.appendChild(line);
   }
 
-  const APP_VERSION = '2026-10-08-54';
+  const APP_VERSION = '2026-10-12-01';
   // 🔄 فحص تلقائي للنسخة — يحل مشكلة "الصفحة ما بتاخد آخر تحديث" نهائيًا: كل شوي منقارن نسختنا
   // المحمّلة حاليًا مع ملف version.txt الحقيقي على السيرفر (بدون كاش أبدًا). لو مختلفة، معناته
   // في نسخة أحدث انرفعت، فمنعمل تحديث كامل للصفحة تلقائيًا بدون ما ننتظر حدا يسكر التبويب يدويًا.
@@ -3042,7 +3042,14 @@
     const ticketData = {
       cart: cart.map(l=>({ itemId:l.item.id, name:l.item.name_ar, price:l.item.price, qty:l.qty, note:l.note||'', noteBy:l.noteBy||null, composition:l.composition||null, compositionDesc:l.compositionDesc||null })),
       orderType, payMethod, custPhone, custName, custAddr, delFee, orderNote,
-      discount: document.getElementById('discInput')?.value||'', code: appliedCode?.code||''
+      discount: document.getElementById('discInput')?.value||'', code: appliedCode?.code||'',
+      // 🔧 كانت تضيع: المنصة، قناة الطلب، الفرع، المنطقة، وحالة التوصيل المجاني
+      platform: document.getElementById('orderPlatform')?.value||'',
+      channel: document.getElementById('orderChannel')?.value||'',
+      branchSel: document.getElementById('branchSel')?.value||'',
+      zone: document.getElementById('delZone')?.value||'',
+      freeDelivery: window.__freeDeliveryActive ? { active:true, prev: document.getElementById('delFee')?.dataset.prevValue||'' } : null,
+      split: payMethod==='split' ? { m1: document.getElementById('split_m1')?.value||'cash', amt1: document.getElementById('split_amt1')?.value||'', m2: document.getElementById('split_m2')?.value||'cliq' } : null
     };
     try{
       await db.from('held_tickets').insert({
@@ -3107,7 +3114,7 @@
     document.getElementById('custAddr')?.classList.toggle('hidden', !delFieldsShow);
     document.getElementById('delZone')?.classList.toggle('hidden', !delFieldsShow);
     document.getElementById('delFee')?.classList.toggle('hidden', !delFieldsShow);
-    document.getElementById('freeDeliveryBtn')?.classList.toggle('hidden', !delFieldsShow || !isCallCenter() || SETTINGS.free_delivery_offer!=='1');
+    document.getElementById('freeDeliveryBtn')?.classList.toggle('hidden', !delFieldsShow || !canFreeDelivery() || SETTINGS.free_delivery_offer!=='1');
     if(document.getElementById('custPhone')) document.getElementById('custPhone').value = td.custPhone||'';
     if(document.getElementById('custName')) document.getElementById('custName').value = td.custName||'';
     if(document.getElementById('custAddr')) document.getElementById('custAddr').value = td.custAddr||'';
@@ -3116,6 +3123,24 @@
     if(document.getElementById('discInput')) document.getElementById('discInput').value = td.discount||'';
     payMethod = td.payMethod||'cash';
     document.querySelectorAll('#payBar button').forEach(x=>x.classList.toggle('on', x.dataset.p===payMethod));
+    try{
+      if(td.branchSel && document.getElementById('branchSel')) document.getElementById('branchSel').value = td.branchSel;
+      if(td.channel && document.getElementById('orderChannel')) document.getElementById('orderChannel').value = td.channel;
+      if(document.getElementById('delZone')) document.getElementById('delZone').value = td.zone||'';
+      if(td.platform && document.getElementById('orderPlatform')){ document.getElementById('orderPlatform').value = td.platform; onPlatformChange(); payMethod = td.payMethod||payMethod; }
+      if(td.code && document.getElementById('codeInput')){ document.getElementById('codeInput').value = td.code; await applyCode(); }
+      if(td.split){
+        if(typeof toggleSplitPay==='function') toggleSplitPay();
+        document.getElementById('split_m1').value = td.split.m1; document.getElementById('split_amt1').value = td.split.amt1; document.getElementById('split_m2').value = td.split.m2;
+        document.querySelectorAll('#payBar button').forEach(x=>x.classList.toggle('on', x.dataset.p==='split')); payMethod='split';
+      }
+      if(td.freeDelivery && td.freeDelivery.active){
+        const fi=document.getElementById('delFee'), fb=document.getElementById('freeDeliveryBtn');
+        window.__freeDeliveryActive = true;
+        if(fi){ fi.dataset.prevValue = td.freeDelivery.prev; fi.readOnly = true; }
+        if(fb){ fb.textContent = '✓ توصيل مجاني (حد '+fmt(freeDeliveryCap())+') — إلغاء العرض'; fb.style.background='var(--red)'; }
+      }
+    }catch(e){ console.error('resume extras failed:', e); }
     await db.from('held_tickets').delete().eq('id', id);
     closeModal();
     renderCart();
@@ -3196,7 +3221,7 @@
       if (custAddr) custAddr.classList.toggle('hidden', !del);
       document.getElementById('delZone')?.classList.toggle('hidden', !del);
       if (delFee) delFee.classList.toggle('hidden', !del);
-      document.getElementById('freeDeliveryBtn')?.classList.toggle('hidden', !del || !isCallCenter() || SETTINGS.free_delivery_offer!=='1');
+      document.getElementById('freeDeliveryBtn')?.classList.toggle('hidden', !del || !canFreeDelivery() || SETTINGS.free_delivery_offer!=='1');
       if (custReq) custReq.textContent = del ? '(إجباري للتوصيل)' : '(اختياري)';
       renderCart();
     });
@@ -4586,8 +4611,14 @@
 
       let ord;
       if(editingOrder){
+        // 🔧 عند التعديل ما منكتب فوق: اللي أنشأ الطلب، شيفته الأصلي، وجبة الموظف، القناة
+        const keep = { ...rec };
+        delete keep.created_by; delete keep.created_by_name;
+        if(editingOrder.shift_id) delete keep.shift_id;
+        if(!keep.employee_tab_name && editingOrder.employee_tab_name){ keep.employee_tab_name = editingOrder.employee_tab_name; keep.employee_meal_id = editingOrder.employee_meal_id||null; }
+        if(!keep.channel && editingOrder.channel) keep.channel = editingOrder.channel;
         const { data, error } = await db.from('orders')
-          .update({...rec, updated_at: new Date().toISOString()})
+          .update({...keep, updated_at: new Date().toISOString()})
           .eq('id', editingOrder.id)
           .select()
           .single();
@@ -5390,7 +5421,7 @@
     if (custAddr) custAddr.classList.toggle('hidden', !del);
     document.getElementById('delZone')?.classList.toggle('hidden', !del);
     if (delFee) delFee.classList.toggle('hidden', !del);
-    document.getElementById('freeDeliveryBtn')?.classList.toggle('hidden', !del || !isCallCenter() || SETTINGS.free_delivery_offer!=='1');
+    document.getElementById('freeDeliveryBtn')?.classList.toggle('hidden', !del || !canFreeDelivery() || SETTINGS.free_delivery_offer!=='1');
     if (custReq) custReq.textContent = del ? '(إجباري للتوصيل)' : '(اختياري)';
     if (del && delFee) delFee.value = o.delivery_fee||'';
     // 🚚 لو الطلب كان عليه عرض توصيل، نرجّع حالته (الأجرة الكاملة + الزر) — وإلا بيضيع العرض بصمت وقت الحفظ
@@ -5404,6 +5435,21 @@
     }
     payMethod = o.payment_method||'cash';
     document.querySelectorAll('#payBar button').forEach(x=>x.classList.toggle('on', x.dataset.p===payMethod));
+    // 🔧 تفاصيل كانت تضيع وقت التعديل: العنوان، الفرع، قناة الطلب، المنصة، الدفع المقطوع
+    try{
+      if(document.getElementById('custAddr')) document.getElementById('custAddr').value = o.customers?.address||'';
+      const bs=document.getElementById('branchSel'); if(bs && o.branch_id) bs.value = o.branch_id;
+      const ch=document.getElementById('orderChannel'); if(ch && o.channel) ch.value = o.channel;
+      const pl=document.getElementById('orderPlatform');
+      if(pl && o.platform_id){ pl.value = o.platform_id; onPlatformChange(); payMethod = o.payment_method||payMethod; }
+      if(o.payment_method==='split' && o.split_details){
+        if(typeof toggleSplitPay==='function') toggleSplitPay();
+        document.getElementById('split_m1').value = o.split_details.m1||'cash';
+        document.getElementById('split_amt1').value = o.split_details.amt1||'';
+        document.getElementById('split_m2').value = o.split_details.m2||'cliq';
+        document.querySelectorAll('#payBar button').forEach(x=>x.classList.toggle('on', x.dataset.p==='split'));
+      }
+    }catch(e){ console.error('edit restore extras failed:', e); }
     const orderNote = document.getElementById('orderNote');
     if (orderNote) orderNote.value = o.notes||'';
     const discInput = document.getElementById('discInput');
@@ -11335,7 +11381,7 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
       const range=getRepRange();
       const dateStr=document.getElementById('repDateLabel')?.textContent||'';
       const [ord,exp,pur,openShifts]=await Promise.all([
-        db.from('orders').select('total,subtotal,discount,delivery_fee,payment_method,status,order_type,branch_id,employee_tab_name').gte('created_at',range.from).lte('created_at',range.to),
+        db.from('orders').select('total,subtotal,discount,delivery_fee,free_delivery_amount,payment_method,status,order_type,branch_id,employee_tab_name').gte('created_at',range.from).lte('created_at',range.to),
         db.from('expenses').select('amount,category,branch_id,shift_id').gte('created_at',(range.from||'').split('T')[0]||range.from).lte('created_at',(range.to||'').split('T')[0]||range.to),
         db.from('purchases').select('total,branch_id').gte('purchase_date',(range.from||'').split('T')[0]||range.from).lte('purchase_date',(range.to||'').split('T')[0]||range.to),
         db.from('cash_shifts').select('id,branch_id,opening_balance,start_time,staff(full_name)').eq('status','open'),
@@ -11355,7 +11401,9 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
       const expTotal=expAll.reduce((a,x)=>a+parseFloat(x.amount||0),0);
       const purTotal=(pur.data||[]).reduce((a,x)=>a+parseFloat(x.total||0),0);
       const adsCost=expBycat['إعلانات وتسويق']||0;
-      const totalCosts=expTotal+purTotal;
+      const freeDelCost=ok.reduce((a,o)=>a+parseFloat(o.free_delivery_amount||0),0); // 🚚 توصيل مجاني يتحمّله المطعم
+      const freeDelCount=ok.filter(o=>parseFloat(o.free_delivery_amount||0)>0).length;
+      const totalCosts=expTotal+purTotal+freeDelCost;
       const netProfit=sales-totalCosts;
       const margin=sales>0?Math.round(netProfit/sales*100):0;
 
@@ -11412,6 +11460,7 @@ ${wasteSorted.map(r=>r[0]+' — '+r[1].toFixed(2)+' د.أ').join('\\n')||'لا �
             <tr style="background:#fff0f0"><td colspan="2" style="font-weight:900;color:var(--red);padding:10px">💸 التكاليف والمصاريف</td></tr>
             <tr><td>مشتريات (بضاعة)</td><td class="tl" style="color:var(--red)">− ${fmt(purTotal)}</td></tr>
             ${Object.entries(expBycat).map(([k,v])=>`<tr><td>${esc(k)}</td><td class="tl" style="color:var(--red)">− ${fmt(v)}</td></tr>`).join('')}
+            ${freeDelCost>0?`<tr><td>🚚 توصيل مجاني يتحمّله المطعم (${freeDelCount} طلب)</td><td class="tl" style="color:var(--red)">− ${fmt(freeDelCost)}</td></tr>`:''}
             <tr style="font-weight:900;background:#fff0f0"><td>إجمالي التكاليف</td><td class="tl" style="color:var(--red)"><b>− ${fmt(totalCosts)}</b></td></tr>
             <tr style="background:${netProfit>=0?'#f0faf4':'#fff0f0'}"><td colspan="2"></td></tr>
             <tr style="font-size:1.2rem;font-weight:900;background:${netProfit>=0?'#f0faf4':'#fff0f0'}">
@@ -15934,6 +15983,7 @@ const totalCost = WASTE_DATA.reduce((a,w)=>a+(w.quantity*(w.ingredients?.unit_co
   // التوصيل لحد "حد التغطية" (من الإعدادات، افتراضيًا ٢ دينار)، وأي زيادة فوقه الزبون بيدفعها هو.
   // مثال: أجرة ٣.٥٠ وحد ٢ → المطعم بيغطّي ٢.٠٠، الزبون بيدفع ١.٥٠.
   window.__freeDeliveryActive = false;
+  function canFreeDelivery(){ return isCallCenter() || ME.role==='admin' || (typeof isAdmin==='function' && isAdmin()); }
   function freeDeliveryCap(){
     const v = parseFloat(SETTINGS.free_delivery_cap);
     return isNaN(v) || v < 0 ? 2 : v;
