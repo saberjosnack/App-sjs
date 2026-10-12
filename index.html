@@ -1529,7 +1529,7 @@
     box.appendChild(line);
   }
 
-  const APP_VERSION = '2026-10-12-01';
+  const APP_VERSION = '2026-10-13-01';
   // 🔄 فحص تلقائي للنسخة — يحل مشكلة "الصفحة ما بتاخد آخر تحديث" نهائيًا: كل شوي منقارن نسختنا
   // المحمّلة حاليًا مع ملف version.txt الحقيقي على السيرفر (بدون كاش أبدًا). لو مختلفة، معناته
   // في نسخة أحدث انرفعت، فمنعمل تحديث كامل للصفحة تلقائيًا بدون ما ننتظر حدا يسكر التبويب يدويًا.
@@ -1713,7 +1713,7 @@
     setInterval(checkStillActiveAndSynced, 90000);
     // 🔄 السستم كله يضل لايف — تحديث خلفي صامت كل دقيقة ونص للأصناف/الأسعار/التوفر/التصنيفات/
     // الفروع/الإعدادات/الصلاحيات، بدون ما حدا يحتاج يعمل تحديث صفحة أو أي إجراء يدوي إطلاقًا.
-    setInterval(silentDataRefresh, 90000);
+    setInterval(()=>{ if(!window.__itemSortMode) silentDataRefresh(); }, 30000);
     // 🕐 هابي أور / خصومات مجدولة — كل 15 ثانية بتعيد الجلب من القاعدة وتفحص الوقت محليًا، وتحدّث
     // الشاشة تلقائيًا لحظة ما يبلش/يخلص وقته أو لما المالك يوقفه يدويًا من جهاز تاني (act من زر
     // "إيقاف عام") — خلال 15 ثانية كحد أقصى على كل الأجهزة، بدون أي تحديث صفحة يدوي من الكاشير.
@@ -2837,10 +2837,51 @@
     const hasCats = CATS.length > 0 && ITEMS.some(i=>i.category);
     const catBar = document.getElementById('catBar');
     if (!catBar) return;
-    catBar.innerHTML = !hasCats ? '' :
+    const _canSort = (typeof canAccessAdminTab==='function') && ME && canAccessAdminTab('items');
+    const _sortBtn = _canSort ? `<button onclick="toggleItemSortMode()" style="${window.__itemSortMode?'background:#2e7d32;color:#fff':'background:#fff3cd'}">${window.__itemSortMode?'✓ تم الترتيب':'↕️ ترتيب الأصناف'}</button>` : '';
+    catBar.innerHTML = !hasCats ? _sortBtn :
       `<button class="${activeCat==='__all__'?'on':''}" onclick="pickCat('__all__')">الكل</button>` +
       CATS.filter(c=>ITEMS.some(i=>i.category===c.name_ar)).map(c=>
-        `<button class="${c.name_ar===activeCat?'on':''}" onclick="pickCat('${esc(c.name_ar)}')">${esc(c.name_ar)}</button>`).join('');
+        `<button class="${c.name_ar===activeCat?'on':''}" onclick="pickCat('${esc(c.name_ar)}')">${esc(c.name_ar)}</button>`).join('') + _sortBtn;
+  }
+  // ↕️ ترتيب الأصناف بالسحب والإفلات — بيتحفظ فورًا وبيوصل للموظفين بالتحديث التلقائي
+  window.__itemSortMode = false;
+  function toggleItemSortMode(){
+    window.__itemSortMode = !window.__itemSortMode;
+    if(window.__itemSortMode) toast('↕️ اسحب الصنف وحطه بمكانه — بيتحفظ تلقائي');
+    renderCats(); renderItems();
+  }
+  let __dragId = null;
+  function itemDragStart(e,id){ __dragId = id; try{ e.dataTransfer.effectAllowed='move'; e.dataTransfer.setData('text/plain', id); }catch(_){} e.currentTarget.style.opacity='.4'; }
+  function itemDragEnd(e){ e.currentTarget.style.opacity=''; }
+  function itemDragOver(e){ e.preventDefault(); e.currentTarget.style.outline='2px dashed var(--red)'; }
+  function itemDragLeave(e){ e.currentTarget.style.outline=''; }
+  async function itemDrop(e,targetId){
+    e.preventDefault(); e.currentTarget.style.outline='';
+    const srcId = __dragId; __dragId = null;
+    if(!srcId || srcId===targetId) return;
+    // الترتيب الكلي الحالي (مرتب بالـ sort_order ثم بالترتيب الحالي)
+    const global = ITEMS.map((i,idx)=>({i,idx})).sort((a,b)=>((a.i.sort_order||0)-(b.i.sort_order||0))||(a.idx-b.idx)).map(x=>x.i);
+    const q = (document.getElementById('itemSearch')?.value||'').trim();
+    let visible = global.filter(i=>i.is_available && (q ? (i.name_ar||'').includes(q) : (activeCat==='__all__' || i.category===activeCat)));
+    const from = visible.findIndex(i=>i.id===srcId), to = visible.findIndex(i=>i.id===targetId);
+    if(from<0 || to<0) return;
+    const [mv] = visible.splice(from,1); visible.splice(to,0,mv);
+    const slots = global.map((i,idx)=>idx).filter(idx=>visible.some(v=>v.id===global[idx].id)); // مواقع الأصناف الظاهرة بالترتيب الكلي
+    const newGlobal = global.slice();
+    slots.forEach((pos,k)=>{ newGlobal[pos] = visible[k]; });
+    const changes = [];
+    newGlobal.forEach((it,idx)=>{ const so=(idx+1)*10; if((it.sort_order||0)!==so){ it.sort_order=so; changes.push(it); } });
+    ITEMS = newGlobal;
+    renderItems();
+    try{
+      for(let k=0;k<changes.length;k+=15){
+        const chunk = changes.slice(k,k+15);
+        const res = await Promise.all(chunk.map(it=>db.from('menu_items').update({sort_order:it.sort_order}).eq('id',it.id)));
+        const bad = res.find(x=>x.error); if(bad) throw bad.error;
+      }
+      toast('✓ انحفظ الترتيب');
+    }catch(err){ console.error(err); toast('✗ فشل حفظ الترتيب: '+(err.message||err)); }
   }
   function pickCat(n){ activeCat = n; renderCats(); renderItems(); }
   function renderItems(){
@@ -2851,7 +2892,7 @@
     const grid = document.getElementById('itemsGrid');
     if (!grid) return;
     grid.innerHTML = list.length ? list.map(i=>
-      `<div class="item-card" onclick="addToCart('${i.id}')" style="position:relative">
+      `<div class="item-card" ${window.__itemSortMode?`draggable="true" ondragstart="itemDragStart(event,'${i.id}')" ondragend="itemDragEnd(event)" ondragover="itemDragOver(event)" ondragleave="itemDragLeave(event)" ondrop="itemDrop(event,'${i.id}')"`:`onclick="addToCart('${i.id}')"`} style="position:relative;${window.__itemSortMode?'cursor:grab':''}">
         ${i.item_type==='composite'?'<span style="position:absolute;top:4px;right:4px;background:#7b2cbf;color:#fff;border-radius:999px;padding:1px 7px;font-size:.7rem;font-weight:900;z-index:2">🧩 مركّب</span>':''}
         ${i.image_url?`<img src="${i.image_url}" class="item-img">`:''}
         <div class="nm">${esc(i.name_ar)}</div><div class="pr">${fmt(i.price)} ${CURRENCY}</div>
@@ -6326,7 +6367,18 @@
       try {
         const {data}=await db.from('menu_items').select('*').order('sort_order');
         ITEMS=data||[];
-        C.innerHTML=`<button class="add-btn" onclick="itemForm()">＋ إضافة صنف</button><button class="mini ok" style="background:#1D6F42;margin-bottom:10px" onclick="exportItemsExcel()">📥 تصدير Excel</button><button class="mini ok" style="background:#e91e8c;margin-bottom:10px" onclick="findDuplicateItems()">🔀 دمج الأصناف المكررة</button><div class="tbl-wrap"><table class="tbl"><tr><th>الصنف</th><th>التصنيف</th><th>السعر</th><th>الحالة</th><th></th></tr>${ITEMS.map(i=>`<tr class="${i.is_available?'':'off'}"><td>${esc(i.name_ar)}${i.item_type==='composite'?' 🧩':''}</td><td>${esc(i.category||'—')}</td><td>${fmt(i.price)}</td><td>${i.is_available?'✅ ظاهر':'🚫 مخفي'}</td><td style="white-space:nowrap"><button class="mini edit" onclick="itemForm('${i.id}')">تعديل</button><button class="mini tog" onclick="toggleItem('${i.id}',${!i.is_available})">${i.is_available?'إخفاء (أرشفة)':'إظهار'}</button><button class="mini del" onclick="deleteMenuItem('${i.id}','${esc(i.name_ar)}')">حذف نهائي</button></td></tr>`).join('')||'<tr><td colspan="5" class="empty-note">ما في أصناف</td></tr>'}</table></div>`;
+        const fcat = window.__admItemCat || '__all__';
+        const shown = ITEMS.filter(i=> fcat==='__all__' ? true : fcat==='__none__' ? !i.category : i.category===fcat);
+        const catNames = [...new Set([...(CATS||[]).map(c=>c.name_ar), ...ITEMS.map(i=>i.category).filter(Boolean)])];
+        const chip=(v,l)=>`<button class="mini ${fcat===v?'ok':''}" style="margin:2px;${fcat===v?'':'background:#eee;color:#333'}" onclick="window.__admItemCat='${v.replace(/'/g,"\\'")}';renderAdmin()">${l}</button>`;
+        C.innerHTML=`<button class="add-btn" onclick="itemForm()">＋ إضافة صنف</button><button class="mini ok" style="background:#6a1b9a;margin-bottom:10px" onclick="quickAddCategory()">＋ تصنيف جديد</button><button class="mini ok" style="background:#1D6F42;margin-bottom:10px" onclick="exportItemsExcel()">📥 تصدير Excel</button><button class="mini ok" style="background:#e91e8c;margin-bottom:10px" onclick="findDuplicateItems()">🔀 دمج الأصناف المكررة</button>
+          <div style="margin:6px 0">${chip('__all__','الكل ('+ITEMS.length+')')}${catNames.map(n=>chip(n,esc(n)+' ('+ITEMS.filter(i=>i.category===n).length+')')).join('')}${chip('__none__','بدون تصنيف ('+ITEMS.filter(i=>!i.category).length+')')}</div>
+          <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;background:var(--cream);border:1px solid var(--line);border-radius:10px;padding:8px;margin-bottom:8px">
+            <label style="font-weight:800"><input type="checkbox" id="itemChkAll" onchange="document.querySelectorAll('.itemChk').forEach(c=>c.checked=this.checked)"> تحديد الكل</label>
+            <select id="bulkCatSel" style="padding:6px;border-radius:8px;border:1.5px solid var(--line)"><option value="">— نقل المحدّد إلى تصنيف —</option>${catNames.map(n=>`<option>${esc(n)}</option>`).join('')}<option value="__none__">بدون تصنيف</option></select>
+            <button class="mini ok" onclick="bulkMoveItems()">نقل</button>
+          </div>
+          <div class="tbl-wrap"><table class="tbl"><tr><th></th><th>الصنف</th><th>التصنيف</th><th>السعر</th><th>الحالة</th><th></th></tr>${shown.map(i=>`<tr class="${i.is_available?'':'off'}"><td><input type="checkbox" class="itemChk" value="${i.id}"></td><td>${esc(i.name_ar)}${i.item_type==='composite'?' 🧩':''}</td><td>${esc(i.category||'—')}</td><td>${fmt(i.price)}</td><td>${i.is_available?'✅ ظاهر':'🚫 مخفي'}</td><td style="white-space:nowrap"><button class="mini edit" onclick="itemForm('${i.id}')">تعديل</button><button class="mini tog" onclick="toggleItem('${i.id}',${!i.is_available})">${i.is_available?'إخفاء (أرشفة)':'إظهار'}</button><button class="mini del" onclick="deleteMenuItem('${i.id}','${esc(i.name_ar)}')">حذف نهائي</button></td></tr>`).join('')||'<tr><td colspan="6" class="empty-note">ما في أصناف</td></tr>'}</table></div>`;
       } catch(e) { console.error(e); }
     }
     if(admView==='cats'){
@@ -16808,7 +16860,31 @@ try {
     } catch(e) { console.error(e); }
   }
   async function toggleCode(id,v){ try { const r=await db.from('discount_codes').update({is_active:v}).eq('id',id); if(r.error){toast('✗ '+r.error.message);console.error(r.error);return;} toast(v?'✓ فعال':'✓ موقوف'); renderAdmin(); } catch(e) { toast('✗ '+e.message); console.error(e); } }
-  function itemForm(id){ const it=ITEMS.find(x=>x.id===id)||{}; modal(`<h3>${id?'تعديل صنف':'صنف جديد'}</h3><div class="fld"><label>اسم الصنف</label><input id="f_nm" value="${esc(it.name_ar||'')}"></div><div class="fld"><label>السعر</label><input id="f_pr" inputmode="decimal" value="${it.price??''}"></div><div class="fld"><label>التكلفة (اختياري — لحساب الأرباح)</label><input id="f_cost" inputmode="decimal" value="${it.cost??''}"></div><div class="fld"><label class="chk"><input type="checkbox" id="f_noEmpDisc" ${it.exclude_employee_discount?'checked':''}> استبعاد هاد الصنف من خصم وجبة الموظف (بيتحسب سعر كامل حتى بطلب "وجبة موظف")</label></div><div class="fld"><label>صورة الصنف (اختياري)</label><input type="file" id="f_img" accept="image/*" onchange="resizeItemImage(this)"><div id="f_imgPrev" style="margin-top:6px">${it.image_url?`<img src="${it.image_url}" style="width:76px;height:76px;object-fit:cover;border-radius:10px;border:1px solid var(--line)"> <button type="button" class="mini del" onclick="window.__itemImg='';document.getElementById('f_imgPrev').innerHTML='(انحذفت)'">حذف</button>`:''}</div></div><div class="fld"><label>التصنيف</label><select id="f_cat"><option value="">— بدون —</option>${CATS.map(c=>`<option ${c.name_ar===it.category?'selected':''}>${esc(c.name_ar)}</option>`).join('')}</select></div><div class="fld"><label>الترتيب</label><input id="f_so" inputmode="numeric" value="${it.sort_order??0}"></div><div class="fld"><label>🧩 نوع الصنف</label><select id="f_type"><option value="simple" ${(!it.item_type||it.item_type==='simple')?'selected':''}>عادي</option><option value="composite" ${it.item_type==='composite'?'selected':''}>مركّب (وجبة عائلية بمكونات قابلة للاختيار)</option></select>
+  async function quickAddCategory(afterSelectId){
+    const name = (prompt('اسم التصنيف الجديد:')||'').trim();
+    if(!name) return null;
+    if(CATS.some(c=>c.name_ar===name)){ toast('⚠️ التصنيف موجود أصلًا'); return name; }
+    const maxSo = Math.max(0,...CATS.map(c=>c.sort_order||0));
+    const { error } = await db.from('categories').insert({ name_ar:name, sort_order:maxSo+1, is_active:true });
+    if(error){ toast('✗ فشل: '+error.message); return null; }
+    await bootData(); toast('✓ انضاف التصنيف');
+    if(afterSelectId){
+      const sel=document.getElementById(afterSelectId);
+      if(sel){ sel.innerHTML='<option value="">— بدون —</option>'+CATS.map(c=>`<option ${c.name_ar===name?'selected':''}>${esc(c.name_ar)}</option>`).join(''); }
+    } else renderAdmin();
+    return name;
+  }
+  async function bulkMoveItems(){
+    const ids=[...document.querySelectorAll('.itemChk:checked')].map(c=>c.value);
+    const v=document.getElementById('bulkCatSel')?.value;
+    if(!ids.length){ toast('⚠️ حددي أصناف أول'); return; }
+    if(!v){ toast('⚠️ اختاري التصنيف'); return; }
+    const cat = v==='__none__' ? null : v;
+    const { error } = await db.from('menu_items').update({category:cat}).in('id', ids);
+    if(error){ toast('✗ فشل: '+error.message); return; }
+    toast('✓ انتقل '+ids.length+' صنف'); await bootData(); renderAdmin();
+  }
+  function itemForm(id){ const it=ITEMS.find(x=>x.id===id)||{}; modal(`<h3>${id?'تعديل صنف':'صنف جديد'}</h3><div class="fld"><label>اسم الصنف</label><input id="f_nm" value="${esc(it.name_ar||'')}"></div><div class="fld"><label>السعر</label><input id="f_pr" inputmode="decimal" value="${it.price??''}"></div><div class="fld"><label>التكلفة (اختياري — لحساب الأرباح)</label><input id="f_cost" inputmode="decimal" value="${it.cost??''}"></div><div class="fld"><label class="chk"><input type="checkbox" id="f_noEmpDisc" ${it.exclude_employee_discount?'checked':''}> استبعاد هاد الصنف من خصم وجبة الموظف (بيتحسب سعر كامل حتى بطلب "وجبة موظف")</label></div><div class="fld"><label>صورة الصنف (اختياري)</label><input type="file" id="f_img" accept="image/*" onchange="resizeItemImage(this)"><div id="f_imgPrev" style="margin-top:6px">${it.image_url?`<img src="${it.image_url}" style="width:76px;height:76px;object-fit:cover;border-radius:10px;border:1px solid var(--line)"> <button type="button" class="mini del" onclick="window.__itemImg='';document.getElementById('f_imgPrev').innerHTML='(انحذفت)'">حذف</button>`:''}</div></div><div class="fld"><label>التصنيف</label><div style="display:flex;gap:6px"><select id="f_cat" style="flex:1"><option value="">— بدون —</option>${CATS.map(c=>`<option ${c.name_ar===it.category?'selected':''}>${esc(c.name_ar)}</option>`).join('')}</select><button type="button" class="mini ok" onclick="quickAddCategory('f_cat')">＋ تصنيف</button></div></div><div class="fld"><label>الترتيب</label><input id="f_so" inputmode="numeric" value="${it.sort_order??0}"></div><div class="fld"><label>🧩 نوع الصنف</label><select id="f_type"><option value="simple" ${(!it.item_type||it.item_type==='simple')?'selected':''}>عادي</option><option value="composite" ${it.item_type==='composite'?'selected':''}>مركّب (وجبة عائلية بمكونات قابلة للاختيار)</option></select>
       ${id?`<div style="margin-top:6px"><button type="button" class="mini ok" onclick="openCompositeManagerSafely('${id}','${esc(it.name_ar||'')}')">🧩 إدارة تركيبة الوجبة</button></div>`:'<div style="font-size:.78rem;color:var(--muted);margin-top:4px">احفظ الصنف الأول، وبعدين افتحه من جديد لتضيف تركيبته</div>'}</div><div class="m-act"><button class="save" onclick="saveItem('${id||''}')">حفظ</button><button class="cancel" onclick="closeModal()">إلغاء</button></div>`); }
   // 🔒 يحفظ نوع الصنف "مركّب" فورًا قبل ما يفتح شاشة التركيبة — عشان ما يصير إنه يضيف مكونات
   // بس ينسى يحفظ نموذج الصنف نفسه، فيضل الصنف "عادي" بقاعدة البيانات وما يشتغل صح بالكاشير
